@@ -9,24 +9,29 @@ domain model (`Movement`), the API the Svelte frontend talks to, and the
 balance calculation (ledger-service deliberately doesn't compute balances).
 
 Backend layout follows Clean Architecture (see `CleanExampleGo` for the
-reference pattern this was modeled on):
+reference pattern this was modeled on) with the **domain** layer owning both
+the entity and the repository contract:
 
 ```
-domain/entities          Movement entity (business rules)
-application/dto          data contracts between layers
-application/repositories MovementRepository interface — the swap point
-application/usecases     CreateMovement, GetMovement, ListMovements
-infrastructure/ledgerservice  implements MovementRepository via ledger-service HTTP API
-interfaces/api            /movements HTTP handlers + router (what the Svelte app calls)
-interfaces/dto             API request/response shapes
-pkg/errors, pkg/logger    shared utilities
-cmd/api/main.go           wiring/entrypoint
-web/                      SvelteKit frontend
+domain/entities            Movement entity (business rules)
+domain/repositories         MovementRepository interface — the swap point
+application/usecases        CreateMovement, GetMovement, ListMovements (work in domain entities)
+infrastructure/ledgerservice implements MovementRepository via ledger-service HTTP API
+  /entities                 internal wire structs matching ledger-service's JSON, with ToEntity()
+interfaces/api               /movements HTTP handlers + router (what the Svelte app calls)
+interfaces/dto                API request/response shapes
+pkg/errors, pkg/logger       shared utilities
+cmd/api/main.go              wiring/entrypoint
+web/                         SvelteKit frontend
 ```
 
-The only place that knows about ledger-service is `infrastructure/ledgerservice`.
-When financial-tracker gets its own database, a new
-`infrastructure/postgresql.MovementRepository` implementing the same interface
+Every constructor (`NewMovementRepository`, `NewCreateMovement`, `NewMovementHandler`,
+...) returns its interface type, not the concrete struct — that's what lets
+each layer depend on a contract instead of an implementation.
+
+The only place that knows about ledger-service's JSON shape is
+`infrastructure/ledgerservice`. When financial-tracker gets its own database,
+a new `infrastructure/postgresql` package implementing `domain/repositories.MovementRepository`
 drops in with a two-line change in `cmd/api/main.go` — no usecase or handler
 changes required.
 

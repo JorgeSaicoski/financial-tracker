@@ -6,7 +6,7 @@ import (
 	"github.com/JorgeSaicoski/financial-tracker/interfaces/api/handlers"
 )
 
-func NewRouter(movementHandler *handlers.MovementHandler) http.Handler {
+func NewRouter(movementHandler handlers.MovementHandler) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("POST /movements", movementHandler.CreateMovement)

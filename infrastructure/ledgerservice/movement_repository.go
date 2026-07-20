@@ -5,64 +5,58 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/JorgeSaicoski/financial-tracker/application/dto"
+	"github.com/JorgeSaicoski/financial-tracker/domain/entities"
+	"github.com/JorgeSaicoski/financial-tracker/domain/repositories"
+	wire "github.com/JorgeSaicoski/financial-tracker/infrastructure/ledgerservice/entities"
 	apperrors "github.com/JorgeSaicoski/financial-tracker/pkg/errors"
 )
 
-// MovementRepository implements application/repositories.MovementRepository
-// by delegating every operation to ledger-service. This is the only
+// movementRepository implements domain/repositories.MovementRepository by
+// delegating every operation to ledger-service. This is the only
 // persistence backend financial-tracker has today; a Postgres-backed
 // implementation can later satisfy the same interface without any change
 // to usecases or handlers.
-type MovementRepository struct {
+type movementRepository struct {
 	client *Client
 }
 
-func NewMovementRepository(client *Client) *MovementRepository {
-	return &MovementRepository{client: client}
+// NewMovementRepository returns the domain interface type, not the
+// concrete struct, so callers depend only on the contract.
+func NewMovementRepository(client *Client) repositories.MovementRepository {
+	return &movementRepository{client: client}
 }
 
-func (r *MovementRepository) Create(ctx context.Context, input dto.CreateMovementInput) (dto.MovementOutput, error) {
-	tx, err := r.client.CreateTransaction(ctx, transactionRequest{
-		UserID:   input.UserID,
-		Amount:   input.Amount,
-		Currency: input.Currency,
+func (r *movementRepository) Create(ctx context.Context, movement *entities.Movement) (*entities.Movement, error) {
+	tx, err := r.client.CreateTransaction(ctx, wire.TransactionRequest{
+		UserID:   movement.UserID,
+		Amount:   movement.Amount,
+		Currency: movement.Currency,
 	})
 	if err != nil {
-		return dto.MovementOutput{}, mapError(err)
+		return nil, mapError(err)
 	}
-	return toMovementOutput(tx), nil
+	return tx.ToEntity(), nil
 }
 
-func (r *MovementRepository) GetByID(ctx context.Context, id string) (dto.MovementOutput, error) {
+func (r *movementRepository) GetByID(ctx context.Context, id string) (*entities.Movement, error) {
 	tx, err := r.client.GetTransaction(ctx, id)
 	if err != nil {
-		return dto.MovementOutput{}, mapError(err)
+		return nil, mapError(err)
 	}
-	return toMovementOutput(tx), nil
+	return tx.ToEntity(), nil
 }
 
-func (r *MovementRepository) ListByUser(ctx context.Context, userID string, currency *string, limit, offset int) ([]dto.MovementOutput, error) {
+func (r *movementRepository) ListByUser(ctx context.Context, userID string, currency *string, limit, offset int) ([]*entities.Movement, error) {
 	txs, err := r.client.ListTransactions(ctx, userID, currency, limit, offset)
 	if err != nil {
 		return nil, mapError(err)
 	}
 
-	out := make([]dto.MovementOutput, 0, len(txs))
+	out := make([]*entities.Movement, 0, len(txs))
 	for _, tx := range txs {
-		out = append(out, toMovementOutput(tx))
+		out = append(out, tx.ToEntity())
 	}
 	return out, nil
-}
-
-func toMovementOutput(tx transaction) dto.MovementOutput {
-	return dto.MovementOutput{
-		ID:        tx.ID,
-		UserID:    tx.UserID,
-		Amount:    tx.Amount,
-		Currency:  tx.Currency,
-		Timestamp: tx.Timestamp,
-	}
 }
 
 // mapError translates ledger-service's HTTP status codes into

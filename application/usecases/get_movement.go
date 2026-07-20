@@ -3,22 +3,27 @@ package usecases
 import (
 	"context"
 
-	"github.com/JorgeSaicoski/financial-tracker/application/dto"
-	"github.com/JorgeSaicoski/financial-tracker/application/repositories"
+	"github.com/JorgeSaicoski/financial-tracker/domain/entities"
+	"github.com/JorgeSaicoski/financial-tracker/domain/repositories"
 	apperrors "github.com/JorgeSaicoski/financial-tracker/pkg/errors"
 )
 
-type GetMovement struct {
+type GetMovementUseCase interface {
+	Execute(ctx context.Context, id string) (*entities.Movement, error)
+}
+
+type getMovementUseCase struct {
 	repo repositories.MovementRepository
 }
 
-func NewGetMovement(repo repositories.MovementRepository) *GetMovement {
-	return &GetMovement{repo: repo}
+// NewGetMovement returns interface type for dependency injection.
+func NewGetMovement(repo repositories.MovementRepository) GetMovementUseCase {
+	return &getMovementUseCase{repo: repo}
 }
 
-func (uc *GetMovement) Execute(ctx context.Context, id string) (dto.MovementOutput, error) {
+func (uc *getMovementUseCase) Execute(ctx context.Context, id string) (*entities.Movement, error) {
 	if id == "" {
-		return dto.MovementOutput{}, apperrors.ErrInvalidInput
+		return nil, apperrors.ErrInvalidInput
 	}
 
 	return uc.repo.GetByID(ctx, id)

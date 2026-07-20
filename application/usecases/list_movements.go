@@ -3,32 +3,42 @@ package usecases
 import (
 	"context"
 
-	"github.com/JorgeSaicoski/financial-tracker/application/dto"
-	"github.com/JorgeSaicoski/financial-tracker/application/repositories"
+	"github.com/JorgeSaicoski/financial-tracker/domain/entities"
+	"github.com/JorgeSaicoski/financial-tracker/domain/repositories"
 	apperrors "github.com/JorgeSaicoski/financial-tracker/pkg/errors"
 )
 
-// ListMovements also computes the running balance (sum of amounts) for the
-// filtered set, since ledger-service deliberately leaves that to consumers.
-type ListMovements struct {
+// ListMovementsResult also carries the computed balance, since
+// ledger-service deliberately leaves that calculation to consumers.
+type ListMovementsResult struct {
+	Movements []*entities.Movement
+	Balance   int64
+}
+
+type ListMovementsUseCase interface {
+	Execute(ctx context.Context, userID string, currency *string, limit, offset int) (ListMovementsResult, error)
+}
+
+type listMovementsUseCase struct {
 	repo repositories.MovementRepository
 }
 
-func NewListMovements(repo repositories.MovementRepository) *ListMovements {
-	return &ListMovements{repo: repo}
+// NewListMovements returns interface type for dependency injection.
+func NewListMovements(repo repositories.MovementRepository) ListMovementsUseCase {
+	return &listMovementsUseCase{repo: repo}
 }
 
-func (uc *ListMovements) Execute(ctx context.Context, input dto.ListMovementsInput) (dto.ListMovementsOutput, error) {
-	if input.UserID == "" {
-		return dto.ListMovementsOutput{}, apperrors.ErrInvalidInput
+func (uc *listMovementsUseCase) Execute(ctx context.Context, userID string, currency *string, limit, offset int) (ListMovementsResult, error) {
+	if userID == "" {
+		return ListMovementsResult{}, apperrors.ErrInvalidInput
 	}
-	if input.Limit < 0 || input.Offset < 0 {
-		return dto.ListMovementsOutput{}, apperrors.ErrInvalidInput
+	if limit < 0 || offset < 0 {
+		return ListMovementsResult{}, apperrors.ErrInvalidInput
 	}
 
-	movements, err := uc.repo.ListByUser(ctx, input.UserID, input.Currency, input.Limit, input.Offset)
+	movements, err := uc.repo.ListByUser(ctx, userID, currency, limit, offset)
 	if err != nil {
-		return dto.ListMovementsOutput{}, err
+		return ListMovementsResult{}, err
 	}
 
 	var balance int64
@@ -36,5 +46,5 @@ func (uc *ListMovements) Execute(ctx context.Context, input dto.ListMovementsInp
 		balance += m.Amount
 	}
 
-	return dto.ListMovementsOutput{Movements: movements, Balance: balance}, nil
+	return ListMovementsResult{Movements: movements, Balance: balance}, nil
 }

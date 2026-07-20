@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"strconv"
 
-	appdto "github.com/JorgeSaicoski/financial-tracker/application/dto"
 	"github.com/JorgeSaicoski/financial-tracker/application/usecases"
+	"github.com/JorgeSaicoski/financial-tracker/domain/entities"
 	interfacedto "github.com/JorgeSaicoski/financial-tracker/interfaces/dto"
 	apperrors "github.com/JorgeSaicoski/financial-tracker/pkg/errors"
 	"github.com/JorgeSaicoski/financial-tracker/pkg/logger"
@@ -15,25 +15,32 @@ import (
 
 // MovementHandler exposes financial-tracker's own /movements API. It never
 // talks to ledger-service directly - it only calls usecases, which depend
-// on the MovementRepository interface.
-type MovementHandler struct {
-	createMovement  *usecases.CreateMovement
-	getMovement     *usecases.GetMovement
-	listMovements   *usecases.ListMovements
+// on the domain MovementRepository interface.
+type MovementHandler interface {
+	CreateMovement(w http.ResponseWriter, r *http.Request)
+	GetMovement(w http.ResponseWriter, r *http.Request)
+	ListMovements(w http.ResponseWriter, r *http.Request)
+}
+
+type movementHandler struct {
+	createMovement  usecases.CreateMovementUseCase
+	getMovement     usecases.GetMovementUseCase
+	listMovements   usecases.ListMovementsUseCase
 	defaultUserID   string
 	defaultCurrency string
 	log             logger.Logger
 }
 
+// NewMovementHandler returns interface type for dependency injection.
 func NewMovementHandler(
-	createMovement *usecases.CreateMovement,
-	getMovement *usecases.GetMovement,
-	listMovements *usecases.ListMovements,
+	createMovement usecases.CreateMovementUseCase,
+	getMovement usecases.GetMovementUseCase,
+	listMovements usecases.ListMovementsUseCase,
 	defaultUserID string,
 	defaultCurrency string,
 	log logger.Logger,
-) *MovementHandler {
-	return &MovementHandler{
+) MovementHandler {
+	return &movementHandler{
 		createMovement:  createMovement,
 		getMovement:     getMovement,
 		listMovements:   listMovements,
@@ -44,7 +51,7 @@ func NewMovementHandler(
 }
 
 // CreateMovement handles POST /movements
-func (h *MovementHandler) CreateMovement(w http.ResponseWriter, r *http.Request) {
+func (h *movementHandler) CreateMovement(w http.ResponseWriter, r *http.Request) {
 	var req interfacedto.CreateMovementRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		h.writeError(w, http.StatusBadRequest, "invalid request body")
@@ -60,11 +67,7 @@ func (h *MovementHandler) CreateMovement(w http.ResponseWriter, r *http.Request)
 		currency = h.defaultCurrency
 	}
 
-	movement, err := h.createMovement.Execute(r.Context(), appdto.CreateMovementInput{
-		UserID:   userID,
-		Amount:   req.Amount,
-		Currency: currency,
-	})
+	movement, err := h.createMovement.Execute(r.Context(), userID, req.Amount, currency)
 	if err != nil {
 		h.writeUsecaseError(w, "create movement", err)
 		return
@@ -74,7 +77,7 @@ func (h *MovementHandler) CreateMovement(w http.ResponseWriter, r *http.Request)
 }
 
 // GetMovement handles GET /movements?id=X
-func (h *MovementHandler) GetMovement(w http.ResponseWriter, r *http.Request) {
+func (h *movementHandler) GetMovement(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("id")
 
 	movement, err := h.getMovement.Execute(r.Context(), id)
@@ -87,7 +90,7 @@ func (h *MovementHandler) GetMovement(w http.ResponseWriter, r *http.Request) {
 }
 
 // ListMovements handles GET /movements?user_id=X&currency=Y&limit=&offset=
-func (h *MovementHandler) ListMovements(w http.ResponseWriter, r *http.Request) {
+func (h *movementHandler) ListMovements(w http.ResponseWriter, r *http.Request) {
 	userID := r.URL.Query().Get("user_id")
 	if userID == "" {
 		userID = h.defaultUserID
@@ -110,12 +113,7 @@ func (h *MovementHandler) ListMovements(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	result, err := h.listMovements.Execute(r.Context(), appdto.ListMovementsInput{
-		UserID:   userID,
-		Currency: currency,
-		Limit:    limit,
-		Offset:   offset,
-	})
+	result, err := h.listMovements.Execute(r.Context(), userID, currency, limit, offset)
 	if err != nil {
 		h.writeUsecaseError(w, "list movements", err)
 		return
@@ -146,7 +144,7 @@ func parseNonNegativeIntParam(r *http.Request, name string) (int, error) {
 
 var errInvalidParam = errors.New("invalid parameter")
 
-func toMovementResponse(m appdto.MovementOutput) interfacedto.MovementResponse {
+func toMovementResponse(m *entities.Movement) interfacedto.MovementResponse {
 	return interfacedto.MovementResponse{
 		ID:        m.ID,
 		UserID:    m.UserID,
@@ -156,7 +154,7 @@ func toMovementResponse(m appdto.MovementOutput) interfacedto.MovementResponse {
 	}
 }
 
-func (h *MovementHandler) writeUsecaseError(w http.ResponseWriter, action string, err error) {
+func (h *movementHandler) writeUsecaseError(w http.ResponseWriter, action string, err error) {
 	switch {
 	case errors.Is(err, apperrors.ErrInvalidInput):
 		h.writeError(w, http.StatusBadRequest, err.Error())
@@ -168,7 +166,7 @@ func (h *MovementHandler) writeUsecaseError(w http.ResponseWriter, action string
 	}
 }
 
-func (h *MovementHandler) writeJSON(w http.ResponseWriter, status int, data interface{}) {
+func (h *movementHandler) writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(data); err != nil {
@@ -176,7 +174,7 @@ func (h *MovementHandler) writeJSON(w http.ResponseWriter, status int, data inte
 	}
 }
 
-func (h *MovementHandler) writeError(w http.ResponseWriter, status int, message string) {
+func (h *movementHandler) writeError(w http.ResponseWriter, status int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(interfacedto.ErrorResponse{Error: message}); err != nil {
