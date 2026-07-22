@@ -33,6 +33,7 @@ type MovementHandler interface {
 	CancelCreditCardPurchase(w http.ResponseWriter, r *http.Request)
 	Sync(w http.ResponseWriter, r *http.Request)
 	ListCategories(w http.ResponseWriter, r *http.Request)
+	Cashflow(w http.ResponseWriter, r *http.Request)
 }
 
 type movementHandler struct {
@@ -42,6 +43,7 @@ type movementHandler struct {
 	listMovements  usecases.ListMovementsUseCase
 	cancelMovement usecases.CancelMovementUseCase
 	cancelPurchase usecases.CancelCreditCardPurchaseUseCase
+	getCashflow    usecases.GetCashflowUseCase
 	syncRunner     SyncRunner
 
 	defaultUserID   string
@@ -57,6 +59,7 @@ func NewMovementHandler(
 	listMovements usecases.ListMovementsUseCase,
 	cancelMovement usecases.CancelMovementUseCase,
 	cancelPurchase usecases.CancelCreditCardPurchaseUseCase,
+	getCashflow usecases.GetCashflowUseCase,
 	syncRunner SyncRunner,
 	defaultUserID string,
 	defaultCurrency string,
@@ -69,6 +72,7 @@ func NewMovementHandler(
 		listMovements:   listMovements,
 		cancelMovement:  cancelMovement,
 		cancelPurchase:  cancelPurchase,
+		getCashflow:     getCashflow,
 		syncRunner:      syncRunner,
 		defaultUserID:   defaultUserID,
 		defaultCurrency: defaultCurrency,
@@ -95,9 +99,21 @@ func (h *movementHandler) CreateMovement(w http.ResponseWriter, r *http.Request)
 		currency = h.defaultCurrency
 	}
 
+	var accountID *string
+	if req.AccountID != "" {
+		accountID = &req.AccountID
+	}
+
 	if req.Installments > 1 {
 		if entities.PaymentMethod(req.PaymentMethod) != entities.PaymentMethodCreditCard {
 			h.writeError(w, http.StatusBadRequest, "installments require payment_method \"credit_card\"")
+			return
+		}
+		if accountID != nil {
+			// Installments describe future credit-card bills, not money
+			// already sitting in an account; supporting that needs a
+			// card-account concept this MVP doesn't have yet.
+			h.writeError(w, http.StatusBadRequest, "installment purchases can't be assigned to an account yet")
 			return
 		}
 		purchase, movements, err := h.createPurchase.Execute(r.Context(), usecases.CreateCreditCardPurchaseInput{
@@ -123,6 +139,7 @@ func (h *movementHandler) CreateMovement(w http.ResponseWriter, r *http.Request)
 		Description:   req.Description,
 		Category:      entities.Category(req.Category),
 		PaymentMethod: entities.PaymentMethod(req.PaymentMethod),
+		AccountID:     accountID,
 	})
 	if err != nil {
 		h.writeUsecaseError(w, "create movement", err)
@@ -145,7 +162,8 @@ func (h *movementHandler) GetMovement(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusOK, toMovementResponse(movement))
 }
 
-// ListMovements handles GET /movements?user_id=X&currency=Y&limit=&offset=
+// ListMovements handles GET /movements?user_id=X&currency=Y&from=&to=&limit=&offset=
+// from/to accept RFC 3339 or YYYY-MM-DD (to is inclusive when date-only).
 func (h *movementHandler) ListMovements(w http.ResponseWriter, r *http.Request) {
 	userID := r.URL.Query().Get("user_id")
 	if userID == "" {
@@ -155,6 +173,17 @@ func (h *movementHandler) ListMovements(w http.ResponseWriter, r *http.Request) 
 	var currency *string
 	if c := r.URL.Query().Get("currency"); c != "" {
 		currency = &c
+	}
+
+	from, err := parseTimeParam(r, "from", false)
+	if err != nil {
+		h.writeError(w, http.StatusBadRequest, "invalid from (want YYYY-MM-DD or RFC 3339)")
+		return
+	}
+	to, err := parseTimeParam(r, "to", true)
+	if err != nil {
+		h.writeError(w, http.StatusBadRequest, "invalid to (want YYYY-MM-DD or RFC 3339)")
+		return
 	}
 
 	limit, err := parseNonNegativeIntParam(r, "limit")
@@ -169,7 +198,7 @@ func (h *movementHandler) ListMovements(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	result, err := h.listMovements.Execute(r.Context(), userID, currency, limit, offset)
+	result, err := h.listMovements.Execute(r.Context(), userID, currency, from, to, limit, offset)
 	if err != nil {
 		h.writeUsecaseError(w, "list movements", err)
 		return
@@ -234,6 +263,52 @@ func (h *movementHandler) Sync(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// Cashflow handles GET /cashflow?from=&to=: money in / money out / net
+// over the interval, per currency and per account. from/to accept
+// RFC 3339 or YYYY-MM-DD (to is inclusive when date-only).
+func (h *movementHandler) Cashflow(w http.ResponseWriter, r *http.Request) {
+	userID := r.URL.Query().Get("user_id")
+	if userID == "" {
+		userID = h.defaultUserID
+	}
+
+	from, err := parseTimeParam(r, "from", false)
+	if err != nil || from == nil {
+		h.writeError(w, http.StatusBadRequest, "from is required (YYYY-MM-DD or RFC 3339)")
+		return
+	}
+	to, err := parseTimeParam(r, "to", true)
+	if err != nil || to == nil {
+		h.writeError(w, http.StatusBadRequest, "to is required (YYYY-MM-DD or RFC 3339)")
+		return
+	}
+
+	result, err := h.getCashflow.Execute(r.Context(), userID, *from, *to)
+	if err != nil {
+		h.writeUsecaseError(w, "get cashflow", err)
+		return
+	}
+
+	resp := interfacedto.CashflowResponse{
+		From:      result.From,
+		To:        result.To,
+		Totals:    make([]interfacedto.CurrencyFlowDTO, 0, len(result.Totals)),
+		ByAccount: make([]interfacedto.AccountFlowDTO, 0, len(result.ByAccount)),
+	}
+	for _, t := range result.Totals {
+		resp.Totals = append(resp.Totals, interfacedto.CurrencyFlowDTO{
+			Currency: t.Currency, In: t.In, Out: t.Out, Net: t.Net,
+		})
+	}
+	for _, f := range result.ByAccount {
+		resp.ByAccount = append(resp.ByAccount, interfacedto.AccountFlowDTO{
+			AccountID: f.AccountID, Name: f.Name, Currency: f.Currency,
+			In: f.In, Out: f.Out, Net: f.Net,
+		})
+	}
+	h.writeJSON(w, http.StatusOK, resp)
+}
+
 // ListCategories handles GET /categories so the frontend never hardcodes
 // the fixed category/payment-method lists.
 func (h *movementHandler) ListCategories(w http.ResponseWriter, _ *http.Request) {
@@ -277,6 +352,9 @@ func toMovementResponse(m *entities.Movement) interfacedto.MovementResponse {
 		Status:        string(m.Status),
 		SyncStatus:    string(m.SyncStatus),
 		Timestamp:     m.Timestamp,
+	}
+	if m.AccountID != nil {
+		resp.AccountID = *m.AccountID
 	}
 	if m.LedgerTransactionID != nil {
 		resp.LedgerTransactionID = *m.LedgerTransactionID
@@ -332,17 +410,9 @@ func (h *movementHandler) writeUsecaseError(w http.ResponseWriter, action string
 }
 
 func (h *movementHandler) writeJSON(w http.ResponseWriter, status int, data interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(data); err != nil {
-		h.log.Error("failed to encode JSON response: %v", err)
-	}
+	writeJSON(h.log, w, status, data)
 }
 
 func (h *movementHandler) writeError(w http.ResponseWriter, status int, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(interfacedto.ErrorResponse{Error: message}); err != nil {
-		h.log.Error("failed to encode error response: %v", err)
-	}
+	writeError(h.log, w, status, message)
 }

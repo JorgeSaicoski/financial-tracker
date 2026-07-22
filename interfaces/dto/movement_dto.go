@@ -16,6 +16,7 @@ type CreateMovementRequest struct {
 	Category      string `json:"category,omitempty"`
 	PaymentMethod string `json:"payment_method,omitempty"`
 	Installments  int    `json:"installments,omitempty"`
+	AccountID     string `json:"account_id,omitempty"`
 }
 
 type MovementResponse struct {
@@ -30,6 +31,7 @@ type MovementResponse struct {
 	SyncStatus    string    `json:"sync_status"`
 	Timestamp     time.Time `json:"timestamp"`
 
+	AccountID            string `json:"account_id,omitempty"`
 	LedgerTransactionID  string `json:"ledger_transaction_id,omitempty"`
 	CreditCardPurchaseID string `json:"credit_card_purchase_id,omitempty"`
 	InstallmentNumber    int    `json:"installment_number,omitempty"`

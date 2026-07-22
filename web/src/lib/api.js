@@ -25,10 +25,61 @@ export function getCategories() {
 	return request('/categories');
 }
 
-export function createMovement({ amount, currency, description, category, payment_method, installments }) {
+export function getCurrencies() {
+	return request('/currencies');
+}
+
+export function addCurrency(code) {
+	return request('/currencies', {
+		method: 'POST',
+		body: JSON.stringify({ code })
+	});
+}
+
+export function listAccounts() {
+	return request('/accounts');
+}
+
+export function createAccount({ name, type, currency }) {
+	return request('/accounts', {
+		method: 'POST',
+		body: JSON.stringify({ name, type, currency })
+	});
+}
+
+// balance is in the smallest currency unit, like movement amounts.
+export function reportAccountBalance(id, balance) {
+	return request(`/accounts/${id}/balance`, {
+		method: 'POST',
+		body: JSON.stringify({ balance })
+	});
+}
+
+// from/to as YYYY-MM-DD; to is inclusive.
+export function getCashflow(from, to) {
+	return request(`/cashflow?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+}
+
+export function createMovement({
+	amount,
+	currency,
+	description,
+	category,
+	payment_method,
+	installments,
+	account_id
+}) {
 	return request('/movements', {
 		method: 'POST',
-		body: JSON.stringify({ amount, currency, description, category, payment_method, installments })
+		body: JSON.stringify({
+			amount,
+			currency,
+			description,
+			category,
+			payment_method,
+			installments,
+			account_id
+		})
 	});
 }
 

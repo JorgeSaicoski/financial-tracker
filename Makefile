@@ -1,4 +1,4 @@
-.PHONY: help up down restart build rebuild logs test clean update ps run
+.PHONY: help up down restart build rebuild logs test clean update ps run remove-db
 
 # Detect container runtime with full paths
 CONTAINER_CMD := $(shell command -v /usr/bin/podman 2> /dev/null || command -v /usr/local/bin/podman 2> /dev/null || command -v podman 2> /dev/null || command -v /usr/bin/docker 2> /dev/null || command -v docker 2> /dev/null)
@@ -15,6 +15,7 @@ help:
 	@echo "  make logs        - View service logs"
 	@echo "  make run         - Run the API locally (go run, no containers - needs ledger-service running separately)"
 	@echo "  make test        - Run Go tests"
+	@echo "  make remove-db   - Delete all databases (financial-tracker + ledger-service) for a fresh start"
 	@echo "  make clean       - Clean up containers, volumes, and build artifacts"
 	@echo "  make update      - Update Go dependencies"
 	@echo "  make ps          - List running containers"
@@ -52,6 +53,13 @@ run:
 # Run Go tests
 test:
 	go test -v ./...
+
+# Delete all databases: financial-tracker's local SQLite volume AND
+# ledger-service's postgres volume. Everything is recreated empty (and
+# migrations re-run) on the next make up.
+remove-db:
+	$(COMPOSE_CMD) down --volumes
+	@echo "Databases removed (financial-tracker + ledger-service). Run 'make up' to start fresh."
 
 # Clean up
 clean:

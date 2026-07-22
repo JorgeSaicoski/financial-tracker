@@ -16,8 +16,15 @@ type MovementRepository interface {
 	// stored row.
 	Create(ctx context.Context, movement *entities.Movement) (*entities.Movement, error)
 	GetByID(ctx context.Context, id string) (*entities.Movement, error)
-	ListByUser(ctx context.Context, userID string, currency *string, limit, offset int) ([]*entities.Movement, error)
+	// ListByUser filters by optional currency and optional [from, to)
+	// time interval on the movement's effective timestamp.
+	ListByUser(ctx context.Context, userID string, currency *string, from, to *time.Time, limit, offset int) ([]*entities.Movement, error)
 	ListByCreditCardPurchase(ctx context.Context, purchaseID string) ([]*entities.Movement, error)
+
+	// NetByAccount sums active movements of one account over (after,
+	// until] — after exclusive so a snapshot taken at time T doesn't
+	// double-count a movement stamped exactly T. Nil bounds mean open.
+	NetByAccount(ctx context.Context, accountID string, after, until *time.Time) (int64, error)
 
 	// ListPendingSync returns active movements not yet synced to
 	// ledger-service that are due (timestamp <= now) and were not

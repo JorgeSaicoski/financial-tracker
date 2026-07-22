@@ -47,17 +47,25 @@ func main() {
 
 	movementRepo := sqlite.NewMovementRepository(db)
 	purchaseRepo := sqlite.NewCreditCardPurchaseRepository(db)
+	accountRepo := sqlite.NewAccountRepository(db)
+	currencyRepo := sqlite.NewCurrencyRepository(db)
 
 	ledgerClient := ledgerservice.NewClient(ledgerServiceURL)
 	ledgerGateway := ledgerservice.NewLedgerGateway(ledgerClient)
 	syncService := syncapp.NewService(movementRepo, ledgerGateway, log, retryCooldown)
 
-	createMovement := usecases.NewCreateMovement(movementRepo)
+	createMovement := usecases.NewCreateMovement(movementRepo, accountRepo)
 	createPurchase := usecases.NewCreateCreditCardPurchase(purchaseRepo)
 	getMovement := usecases.NewGetMovement(movementRepo)
 	listMovements := usecases.NewListMovements(movementRepo)
 	cancelMovement := usecases.NewCancelMovement(movementRepo, syncService)
 	cancelPurchase := usecases.NewCancelCreditCardPurchase(purchaseRepo, movementRepo, syncService)
+	getCashflow := usecases.NewGetCashflow(movementRepo, accountRepo)
+	createAccount := usecases.NewCreateAccount(accountRepo, currencyRepo)
+	listAccounts := usecases.NewListAccounts(accountRepo, movementRepo)
+	reportBalance := usecases.NewReportAccountBalance(accountRepo, movementRepo)
+	listCurrencies := usecases.NewListCurrencies(currencyRepo)
+	addCurrency := usecases.NewAddCurrency(currencyRepo)
 
 	movementHandler := handlers.NewMovementHandler(
 		createMovement,
@@ -66,13 +74,16 @@ func main() {
 		listMovements,
 		cancelMovement,
 		cancelPurchase,
+		getCashflow,
 		syncService,
 		defaultUserID,
 		defaultCurrency,
 		log,
 	)
+	accountHandler := handlers.NewAccountHandler(createAccount, listAccounts, reportBalance, defaultUserID, log)
+	currencyHandler := handlers.NewCurrencyHandler(listCurrencies, addCurrency, log)
 
-	router := api.NewRouter(movementHandler)
+	router := api.NewRouter(movementHandler, accountHandler, currencyHandler)
 
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
@@ -80,7 +91,7 @@ func main() {
 
 	addr := ":" + port
 	log.Info("financial-tracker API listening on %s (db %s, syncing to ledger-service at %s every %s)", addr, dbPath, ledgerServiceURL, syncInterval)
-	log.Info("endpoints: POST /movements | GET /movements | POST /movements/{id}/cancel | POST /credit-card-purchases/{id}/cancel | POST /sync | GET /categories")
+	log.Info("endpoints: POST /movements | GET /movements | POST /movements/{id}/cancel | POST /credit-card-purchases/{id}/cancel | POST /sync | GET /categories | GET /cashflow | GET|POST /accounts | POST /accounts/{id}/balance | GET|POST /currencies")
 
 	if err := http.ListenAndServe(addr, router); err != nil {
 		log.Error("server failed: %v", err)

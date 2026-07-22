@@ -161,7 +161,7 @@ func TestCancelledMovementsNetToZeroInBalance(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := list.Execute(context.Background(), "u1", nil, 0, 0)
+	result, err := list.Execute(context.Background(), "u1", nil, nil, nil, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -2,6 +2,11 @@
 
 Personal finance tracker. Records every movement (income/expense) a user makes.
 
+> Contributing? **[CONTRIBUTING.md](CONTRIBUTING.md)** walks through adding a
+> feature end-to-end (migration → repository → usecase → handler → route →
+> frontend), changing an existing route, and the bug-fix workflow — each with
+> a real example from this codebase.
+
 **Current architecture:** financial-tracker is local-first. Movements are
 written to its own SQLite database (the source of truth), so creating,
 listing, and cancelling movements works even when
@@ -19,19 +24,39 @@ is just voided locally, while one that already synced gets a compensating
 reversal movement (ledger-service never deletes — corrections are new
 transactions), which the sync then pushes.
 
+Beyond movements, the tracker knows about:
+
+- **Currencies** — a user-extendable registry (`usd`/`brl` seeded, add
+  `btc` or anything else via `POST /currencies`) backing the frontend
+  dropdown. Movements store the code as plain text.
+- **Accounts** — the places money sits (bank, investment, crypto wallet,
+  cash, other), each holding exactly one currency. Movements can be
+  assigned to an account. The user periodically *reports* what an account
+  really holds (`POST /accounts/{id}/balance`); the API then derives an
+  `estimated_balance` (last report + movements since) and, once two
+  reports exist, the account's **return**: the balance change the
+  movements don't explain — interest/yield we couldn't know up front.
+- **Cashflow** — `GET /cashflow?from&to`: money in vs money out over an
+  interval, grouped per currency (usd and btc are never summed together)
+  and per account.
+
 Backend layout follows Clean Architecture (see `CleanExampleGo` for the
 reference pattern this was modeled on) with the **domain** layer owning both
 the entities and the repository contracts:
 
 ```
-domain/entities              Movement, CreditCardPurchase, fixed Category/PaymentMethod lists
-domain/repositories          MovementRepository + CreditCardPurchaseRepository interfaces — the swap points
+domain/entities              Movement, CreditCardPurchase, Account (+snapshots),
+                             fixed Category/PaymentMethod/AccountType lists
+domain/repositories          MovementRepository, CreditCardPurchaseRepository,
+                             AccountRepository, CurrencyRepository interfaces — the swap points
 application/usecases         CreateMovement, CreateCreditCardPurchase, GetMovement,
                              ListMovements (computes balance), CancelMovement,
-                             CancelCreditCardPurchase
+                             CancelCreditCardPurchase, CreateAccount, ListAccounts
+                             (computes balances/returns), ReportAccountBalance,
+                             GetCashflow, ListCurrencies, AddCurrency
 application/sync             SyncService: pushes pending movements to ledger-service via a
                              LedgerGateway port (background ticker + manual trigger)
-infrastructure/sqlite        implements both repositories on the local SQLite DB (source of truth)
+infrastructure/sqlite        implements the repositories on the local SQLite DB (source of truth)
 infrastructure/ledgerservice HTTP client for ledger-service + LedgerGateway adapter
   /entities                  internal wire structs matching ledger-service's JSON
 interfaces/api               HTTP handlers + router (what the Svelte app calls)
@@ -78,13 +103,19 @@ implements.
 
 | Method | Path | Purpose |
 |---|---|---|
-| `POST` | `/movements` | Create a movement. Body: `{amount, currency?, user_id?, description?, category?, payment_method?, installments?}`. With `payment_method="credit_card"` and `installments > 1`, splits into monthly installments and returns the purchase + its movements. |
+| `POST` | `/movements` | Create a movement. Body: `{amount, currency?, user_id?, description?, category?, payment_method?, installments?, account_id?}`. With `payment_method="credit_card"` and `installments > 1`, splits into monthly installments and returns the purchase + its movements (no `account_id` allowed in that case). An `account_id`'s currency must match the movement's. |
 | `GET` | `/movements?id={uuid}` | Fetch one movement. |
-| `GET` | `/movements?user_id={uuid}&currency=&limit=&offset=` | List movements + computed `balance` (voided rows excluded from the balance). Each row carries `status` and `sync_status`. |
+| `GET` | `/movements?user_id={uuid}&currency=&from=&to=&limit=&offset=` | List movements + computed `balance` (voided rows excluded from the balance). `from`/`to` take `YYYY-MM-DD` or RFC 3339 (`to` is inclusive when date-only). Each row carries `status` and `sync_status`. |
 | `POST` | `/movements/{id}/cancel` | Cancel one movement (void or reversal — see semantics above). Returns the movement and, if created, the reversal. |
 | `POST` | `/credit-card-purchases/{id}/cancel` | Cancel a whole installment purchase. Returns which installments were voided vs reversed. |
 | `POST` | `/sync` | Run one sync pass against ledger-service now. Returns `{synced, failed}`. |
 | `GET` | `/categories` | The fixed category and payment-method lists. |
+| `GET` | `/cashflow?from=&to=&user_id=` | Money in / out / net over the interval, per currency (`totals`) and per account (`by_account`, unassigned movements in their own bucket). `from`/`to` required. |
+| `GET` | `/accounts` | All accounts with `estimated_balance`, latest `reported_balance`/`reported_at`, `movements_since_report` and `last_return` (+ the valid `account_types`). |
+| `POST` | `/accounts` | Create an account. Body: `{name, type?, currency?, user_id?}`. Currency must be registered; duplicate names (case-insensitive) are rejected. |
+| `POST` | `/accounts/{id}/balance` | Report the account's real current balance: `{balance}` (smallest unit). Returns the updated account view, including the newly computed `last_return` when a previous report exists. |
+| `GET` | `/currencies` | Registered currency codes. |
+| `POST` | `/currencies` | Register a code: `{code}` (2–10 lowercase alphanumerics). Idempotent; returns the updated list. |
 
 `amount` is an integer in the smallest currency unit (cents), negative for
 expenses, positive for income, and cannot be zero. Splitting an amount too
@@ -99,11 +130,17 @@ Requires `../ledger-service` to exist as a sibling checkout — `docker-compose.
 builds it straight from that source rather than duplicating its Dockerfile.
 
 ```bash
-make up      # builds and starts postgres, ledger-service, financial-tracker api, web
-make logs    # follow logs
-make down    # stop and remove everything
-make ps      # see what's running
+make up         # builds and starts postgres, ledger-service, financial-tracker api, web
+make logs       # follow logs
+make down       # stop and remove everything (data volumes survive)
+make restart    # down + up
+make rebuild    # down + build images + up — REQUIRED after changing Go code (see CONTRIBUTING.md)
+make remove-db  # wipe ALL databases (tracker SQLite + ledger postgres) for a fresh start
+make ps         # see what's running
 ```
+
+A copy of these targets also lives in the parent directory's `Makefile`
+(one level up), delegating here — so `make up` works from either place.
 
 This brings up:
 - `postgres` + `ledger-service` on `:8080` (ledger-service's own DB)

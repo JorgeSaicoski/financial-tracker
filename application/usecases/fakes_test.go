@@ -3,11 +3,40 @@ package usecases
 import (
 	"context"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/JorgeSaicoski/financial-tracker/domain/entities"
 	apperrors "github.com/JorgeSaicoski/financial-tracker/pkg/errors"
 )
+
+// fakeCurrencyRepo is an in-memory CurrencyRepository. Add is idempotent,
+// matching the real SQLite implementation's INSERT OR IGNORE.
+type fakeCurrencyRepo struct {
+	codes map[string]bool
+}
+
+func newFakeCurrencyRepo(seed ...string) *fakeCurrencyRepo {
+	f := &fakeCurrencyRepo{codes: map[string]bool{}}
+	for _, c := range seed {
+		f.codes[c] = true
+	}
+	return f
+}
+
+func (f *fakeCurrencyRepo) List(_ context.Context) ([]string, error) {
+	out := make([]string, 0, len(f.codes))
+	for c := range f.codes {
+		out = append(out, c)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+func (f *fakeCurrencyRepo) Add(_ context.Context, code string) error {
+	f.codes[code] = true
+	return nil
+}
 
 // fakeMovementRepo is an in-memory MovementRepository mirroring the
 // semantics the SQLite implementation guarantees (see its own tests).
@@ -43,7 +72,7 @@ func (f *fakeMovementRepo) GetByID(_ context.Context, id string) (*entities.Move
 	return &cp, nil
 }
 
-func (f *fakeMovementRepo) ListByUser(_ context.Context, userID string, currency *string, _, _ int) ([]*entities.Movement, error) {
+func (f *fakeMovementRepo) ListByUser(_ context.Context, userID string, currency *string, from, to *time.Time, _, _ int) ([]*entities.Movement, error) {
 	var out []*entities.Movement
 	for _, m := range f.byID {
 		if m.UserID != userID {
@@ -52,10 +81,33 @@ func (f *fakeMovementRepo) ListByUser(_ context.Context, userID string, currency
 		if currency != nil && m.Currency != *currency {
 			continue
 		}
+		if from != nil && m.Timestamp.Before(*from) {
+			continue
+		}
+		if to != nil && !m.Timestamp.Before(*to) {
+			continue
+		}
 		cp := *m
 		out = append(out, &cp)
 	}
 	return out, nil
+}
+
+func (f *fakeMovementRepo) NetByAccount(_ context.Context, accountID string, after, until *time.Time) (int64, error) {
+	var net int64
+	for _, m := range f.byID {
+		if m.AccountID == nil || *m.AccountID != accountID || m.Status != entities.MovementStatusActive {
+			continue
+		}
+		if after != nil && !m.Timestamp.After(*after) {
+			continue
+		}
+		if until != nil && m.Timestamp.After(*until) {
+			continue
+		}
+		net += m.Amount
+	}
+	return net, nil
 }
 
 func (f *fakeMovementRepo) ListByCreditCardPurchase(_ context.Context, purchaseID string) ([]*entities.Movement, error) {
@@ -182,3 +234,67 @@ type fakeSyncTrigger struct {
 }
 
 func (f *fakeSyncTrigger) TriggerAsync() { f.calls++ }
+
+// fakeAccountRepo is an in-memory AccountRepository.
+type fakeAccountRepo struct {
+	byID      map[string]*entities.Account
+	snapshots map[string][]*entities.AccountSnapshot
+	nextID    int
+}
+
+func newFakeAccountRepo() *fakeAccountRepo {
+	return &fakeAccountRepo{
+		byID:      map[string]*entities.Account{},
+		snapshots: map[string][]*entities.AccountSnapshot{},
+	}
+}
+
+func (f *fakeAccountRepo) Create(_ context.Context, account *entities.Account) (*entities.Account, error) {
+	if account.ID == "" {
+		f.nextID++
+		account.ID = fmt.Sprintf("a-%d", f.nextID)
+	}
+	cp := *account
+	f.byID[account.ID] = &cp
+	return account, nil
+}
+
+func (f *fakeAccountRepo) GetByID(_ context.Context, id string) (*entities.Account, error) {
+	a, ok := f.byID[id]
+	if !ok {
+		return nil, apperrors.ErrNotFound
+	}
+	cp := *a
+	return &cp, nil
+}
+
+func (f *fakeAccountRepo) ListByUser(_ context.Context, userID string) ([]*entities.Account, error) {
+	var out []*entities.Account
+	for _, a := range f.byID {
+		if a.UserID != userID {
+			continue
+		}
+		cp := *a
+		out = append(out, &cp)
+	}
+	return out, nil
+}
+
+func (f *fakeAccountRepo) AddSnapshot(_ context.Context, snapshot *entities.AccountSnapshot) (*entities.AccountSnapshot, error) {
+	if snapshot.ID == "" {
+		f.nextID++
+		snapshot.ID = fmt.Sprintf("s-%d", f.nextID)
+	}
+	cp := *snapshot
+	f.snapshots[snapshot.AccountID] = append(f.snapshots[snapshot.AccountID], &cp)
+	return snapshot, nil
+}
+
+func (f *fakeAccountRepo) LatestSnapshots(_ context.Context, accountID string, n int) ([]*entities.AccountSnapshot, error) {
+	snaps := append([]*entities.AccountSnapshot(nil), f.snapshots[accountID]...)
+	sort.Slice(snaps, func(i, j int) bool { return snaps[i].Timestamp.After(snaps[j].Timestamp) })
+	if len(snaps) > n {
+		snaps = snaps[:n]
+	}
+	return snaps, nil
+}

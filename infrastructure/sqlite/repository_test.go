@@ -89,7 +89,7 @@ func TestMovementListByUser(t *testing.T) {
 		}
 	}
 
-	all, err := repo.ListByUser(ctx, "00000000-0000-0000-0000-000000000001", nil, 0, 0)
+	all, err := repo.ListByUser(ctx, "00000000-0000-0000-0000-000000000001", nil, nil, nil, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestMovementListByUser(t *testing.T) {
 	}
 
 	brl := "brl"
-	filtered, err := repo.ListByUser(ctx, "00000000-0000-0000-0000-000000000001", &brl, 0, 0)
+	filtered, err := repo.ListByUser(ctx, "00000000-0000-0000-0000-000000000001", &brl, nil, nil, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +110,7 @@ func TestMovementListByUser(t *testing.T) {
 		t.Errorf("currency filter: got %d rows", len(filtered))
 	}
 
-	page, err := repo.ListByUser(ctx, "00000000-0000-0000-0000-000000000001", nil, 1, 1)
+	page, err := repo.ListByUser(ctx, "00000000-0000-0000-0000-000000000001", nil, nil, nil, 1, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +214,7 @@ func TestCreateReversalLinksAtomically(t *testing.T) {
 	if _, err := repo.CreateReversal(ctx, makeReversal()); !errors.Is(err, apperrors.ErrConflict) {
 		t.Errorf("second reversal: want ErrConflict, got %v", err)
 	}
-	rows, _ := repo.ListByUser(ctx, original.UserID, nil, 0, 0)
+	rows, _ := repo.ListByUser(ctx, original.UserID, nil, nil, nil, 0, 0)
 	if len(rows) != 2 {
 		t.Errorf("expected 2 rows after failed second reversal, got %d", len(rows))
 	}

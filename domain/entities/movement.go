@@ -17,6 +17,11 @@ type Movement struct {
 	Category      Category
 	PaymentMethod PaymentMethod
 
+	// AccountID links the movement to the account the money moved
+	// in/out of (nil when the user didn't say). Local-only: it is not
+	// part of what syncs to ledger-service.
+	AccountID *string
+
 	// Set only when the movement is one installment of a credit-card
 	// purchase that was split (installments > 1).
 	CreditCardPurchaseID *string

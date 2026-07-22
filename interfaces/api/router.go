@@ -6,7 +6,11 @@ import (
 	"github.com/JorgeSaicoski/financial-tracker/interfaces/api/handlers"
 )
 
-func NewRouter(movementHandler handlers.MovementHandler) http.Handler {
+func NewRouter(
+	movementHandler handlers.MovementHandler,
+	accountHandler handlers.AccountHandler,
+	currencyHandler handlers.CurrencyHandler,
+) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("POST /movements", movementHandler.CreateMovement)
@@ -21,6 +25,14 @@ func NewRouter(movementHandler handlers.MovementHandler) http.Handler {
 	mux.HandleFunc("POST /credit-card-purchases/{id}/cancel", movementHandler.CancelCreditCardPurchase)
 	mux.HandleFunc("POST /sync", movementHandler.Sync)
 	mux.HandleFunc("GET /categories", movementHandler.ListCategories)
+	mux.HandleFunc("GET /cashflow", movementHandler.Cashflow)
+
+	mux.HandleFunc("GET /accounts", accountHandler.ListAccounts)
+	mux.HandleFunc("POST /accounts", accountHandler.CreateAccount)
+	mux.HandleFunc("POST /accounts/{id}/balance", accountHandler.ReportBalance)
+
+	mux.HandleFunc("GET /currencies", currencyHandler.ListCurrencies)
+	mux.HandleFunc("POST /currencies", currencyHandler.AddCurrency)
 
 	return withCORS(mux)
 }

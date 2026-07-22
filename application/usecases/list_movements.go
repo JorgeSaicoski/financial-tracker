@@ -2,6 +2,7 @@ package usecases
 
 import (
 	"context"
+	"time"
 
 	"github.com/JorgeSaicoski/financial-tracker/domain/entities"
 	"github.com/JorgeSaicoski/financial-tracker/domain/repositories"
@@ -16,7 +17,7 @@ type ListMovementsResult struct {
 }
 
 type ListMovementsUseCase interface {
-	Execute(ctx context.Context, userID string, currency *string, limit, offset int) (ListMovementsResult, error)
+	Execute(ctx context.Context, userID string, currency *string, from, to *time.Time, limit, offset int) (ListMovementsResult, error)
 }
 
 type listMovementsUseCase struct {
@@ -28,15 +29,18 @@ func NewListMovements(repo repositories.MovementRepository) ListMovementsUseCase
 	return &listMovementsUseCase{repo: repo}
 }
 
-func (uc *listMovementsUseCase) Execute(ctx context.Context, userID string, currency *string, limit, offset int) (ListMovementsResult, error) {
+func (uc *listMovementsUseCase) Execute(ctx context.Context, userID string, currency *string, from, to *time.Time, limit, offset int) (ListMovementsResult, error) {
 	if userID == "" {
 		return ListMovementsResult{}, apperrors.ErrInvalidInput
 	}
 	if limit < 0 || offset < 0 {
 		return ListMovementsResult{}, apperrors.ErrInvalidInput
 	}
+	if from != nil && to != nil && !from.Before(*to) {
+		return ListMovementsResult{}, apperrors.ErrInvalidInput
+	}
 
-	movements, err := uc.repo.ListByUser(ctx, userID, currency, limit, offset)
+	movements, err := uc.repo.ListByUser(ctx, userID, currency, from, to, limit, offset)
 	if err != nil {
 		return ListMovementsResult{}, err
 	}

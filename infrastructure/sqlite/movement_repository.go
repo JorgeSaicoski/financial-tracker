@@ -26,7 +26,7 @@ func NewMovementRepository(db *sql.DB) repositories.MovementRepository {
 const movementColumns = `id, user_id, amount, currency, description, category, payment_method,
 	credit_card_purchase_id, installment_number, status, cancels_movement_id, reversed_by_movement_id,
 	timestamp, sync_status, ledger_transaction_id, sync_attempts, last_sync_error, last_sync_attempt_at,
-	synced_at, created_at`
+	synced_at, created_at, account_id`
 
 func (r *movementRepository) Create(ctx context.Context, movement *entities.Movement) (*entities.Movement, error) {
 	if movement.ID == "" {
@@ -47,12 +47,20 @@ func (r *movementRepository) GetByID(ctx context.Context, movementID string) (*e
 	return m, err
 }
 
-func (r *movementRepository) ListByUser(ctx context.Context, userID string, currency *string, limit, offset int) ([]*entities.Movement, error) {
+func (r *movementRepository) ListByUser(ctx context.Context, userID string, currency *string, from, to *time.Time, limit, offset int) ([]*entities.Movement, error) {
 	query := `SELECT ` + movementColumns + ` FROM movements WHERE user_id = ?`
 	args := []any{userID}
 	if currency != nil {
 		query += ` AND currency = ?`
 		args = append(args, *currency)
+	}
+	if from != nil {
+		query += ` AND timestamp >= ?`
+		args = append(args, formatTime(*from))
+	}
+	if to != nil {
+		query += ` AND timestamp < ?`
+		args = append(args, formatTime(*to))
 	}
 	query += ` ORDER BY timestamp DESC, created_at DESC LIMIT ? OFFSET ?`
 	if limit <= 0 {
@@ -67,6 +75,25 @@ func (r *movementRepository) ListByCreditCardPurchase(ctx context.Context, purch
 	return r.queryMovements(ctx,
 		`SELECT `+movementColumns+` FROM movements WHERE credit_card_purchase_id = ? ORDER BY installment_number ASC`,
 		purchaseID)
+}
+
+func (r *movementRepository) NetByAccount(ctx context.Context, accountID string, after, until *time.Time) (int64, error) {
+	query := `SELECT COALESCE(SUM(amount), 0) FROM movements WHERE account_id = ? AND status = 'active'`
+	args := []any{accountID}
+	if after != nil {
+		query += ` AND timestamp > ?`
+		args = append(args, formatTime(*after))
+	}
+	if until != nil {
+		query += ` AND timestamp <= ?`
+		args = append(args, formatTime(*until))
+	}
+
+	var net int64
+	if err := r.db.QueryRowContext(ctx, query, args...).Scan(&net); err != nil {
+		return 0, fmt.Errorf("sqlite: net by account: %w", err)
+	}
+	return net, nil
 }
 
 func (r *movementRepository) ListPendingSync(ctx context.Context, now time.Time, retryCooldown time.Duration) ([]*entities.Movement, error) {
@@ -197,14 +224,14 @@ type execer interface {
 func insertMovement(ctx context.Context, ex execer, m *entities.Movement) error {
 	_, err := ex.ExecContext(ctx,
 		`INSERT INTO movements (`+movementColumns+`)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		m.ID, m.UserID, m.Amount, m.Currency,
 		nullString(m.Description), string(m.Category), string(m.PaymentMethod),
 		m.CreditCardPurchaseID, m.InstallmentNumber,
 		string(m.Status), m.CancelsMovementID, m.ReversedByMovementID,
 		formatTime(m.Timestamp), string(m.SyncStatus), m.LedgerTransactionID,
 		m.SyncAttempts, m.LastSyncError, nullTime(m.LastSyncAttemptAt),
-		nullTime(m.SyncedAt), formatTime(m.CreatedAt))
+		nullTime(m.SyncedAt), formatTime(m.CreatedAt), m.AccountID)
 	if err != nil {
 		return fmt.Errorf("sqlite: insert movement: %w", err)
 	}
@@ -222,7 +249,7 @@ func scanMovement(row scannable) (*entities.Movement, error) {
 		description, lastSyncError              sql.NullString
 		category, paymentMethod, status, syncSt string
 		purchaseID, cancelsID, reversedByID     sql.NullString
-		ledgerTxID                              sql.NullString
+		ledgerTxID, accountID                   sql.NullString
 		installmentNumber                       sql.NullInt64
 		timestamp, createdAt                    string
 		lastAttemptAt, syncedAt                 sql.NullString
@@ -235,7 +262,7 @@ func scanMovement(row scannable) (*entities.Movement, error) {
 		&status, &cancelsID, &reversedByID,
 		&timestamp, &syncSt, &ledgerTxID,
 		&m.SyncAttempts, &lastSyncError, &lastAttemptAt,
-		&syncedAt, &createdAt)
+		&syncedAt, &createdAt, &accountID)
 	if err != nil {
 		return nil, err
 	}
@@ -245,6 +272,7 @@ func scanMovement(row scannable) (*entities.Movement, error) {
 	m.PaymentMethod = entities.PaymentMethod(paymentMethod)
 	m.Status = entities.MovementStatus(status)
 	m.SyncStatus = entities.SyncStatus(syncSt)
+	m.AccountID = stringPtr(accountID)
 	m.CreditCardPurchaseID = stringPtr(purchaseID)
 	m.CancelsMovementID = stringPtr(cancelsID)
 	m.ReversedByMovementID = stringPtr(reversedByID)

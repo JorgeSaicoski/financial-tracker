@@ -27,13 +27,16 @@ func (f *fakeRepo) Create(context.Context, *entities.Movement) (*entities.Moveme
 	panic("not used")
 }
 func (f *fakeRepo) GetByID(context.Context, string) (*entities.Movement, error) { panic("not used") }
-func (f *fakeRepo) ListByUser(context.Context, string, *string, int, int) ([]*entities.Movement, error) {
+func (f *fakeRepo) ListByUser(context.Context, string, *string, *time.Time, *time.Time, int, int) ([]*entities.Movement, error) {
 	panic("not used")
 }
 func (f *fakeRepo) ListByCreditCardPurchase(context.Context, string) ([]*entities.Movement, error) {
 	panic("not used")
 }
 func (f *fakeRepo) Void(context.Context, string) error { panic("not used") }
+func (f *fakeRepo) NetByAccount(context.Context, string, *time.Time, *time.Time) (int64, error) {
+	panic("not used")
+}
 func (f *fakeRepo) CreateReversal(context.Context, *entities.Movement) (*entities.Movement, error) {
 	panic("not used")
 }
