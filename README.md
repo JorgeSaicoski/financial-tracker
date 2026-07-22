@@ -39,7 +39,14 @@ Beyond movements, the tracker knows about:
   movements don't explain — interest/yield we couldn't know up front.
 - **Cashflow** — `GET /cashflow?from&to`: money in vs money out over an
   interval, grouped per currency (usd and btc are never summed together)
-  and per account.
+  and per account. Transfers are excluded — they're neither income nor
+  expense.
+- **Transfers** — `POST /transfers` moves money between two of the user's
+  own same-currency accounts as a linked debit/credit pair of movements
+  (category `transfer`, shared `transfer_id`) that always nets to zero.
+  Cancelling one (`POST /transfers/{id}/cancel`) cancels both legs, each
+  per its own sync status; a single leg can't be cancelled directly via
+  `POST /movements/{id}/cancel`.
 
 Backend layout follows Clean Architecture (see `CleanExampleGo` for the
 reference pattern this was modeled on): the **domain** layer holds pure
@@ -111,16 +118,19 @@ implements.
 | `POST` | `/movements` | Create a movement. Body: `{amount, currency?, user_id?, description?, category?, payment_method?, installments?, account_id?}`. With `payment_method="credit_card"` and `installments > 1`, splits into monthly installments and returns the purchase + its movements (no `account_id` allowed in that case). An `account_id`'s currency must match the movement's. |
 | `GET` | `/movements?id={uuid}` | Fetch one movement. |
 | `GET` | `/movements?user_id={uuid}&currency=&from=&to=&limit=&offset=` | List movements + computed `balance` (voided rows excluded from the balance). `from`/`to` take `YYYY-MM-DD` or RFC 3339 (`to` is inclusive when date-only). Each row carries `status` and `sync_status`. |
+| `PATCH` | `/movements/{id}` | Edit one movement. Body: any subset of `{description, category, payment_method, account_id, amount, currency, timestamp}`. `description`/`category`/`payment_method`/`account_id` are local-only metadata and always editable (`account_id: ""` clears it). `amount`/`currency`/`timestamp` edit in place if the movement hasn't synced yet; on an already-synced movement they instead produce a reversal + a replacement (both returned, original left untouched). Rejects voided/reversed movements, reversals themselves, and financial edits on a single credit-card installment or transfer leg (409 in all cases). |
 | `POST` | `/movements/{id}/cancel` | Cancel one movement (void or reversal — see semantics above). Returns the movement and, if created, the reversal. |
 | `POST` | `/credit-card-purchases/{id}/cancel` | Cancel a whole installment purchase. Returns which installments were voided vs reversed. |
 | `POST` | `/sync` | Run one sync pass against ledger-service now. Returns `{synced, failed}`. |
 | `GET` | `/categories` | The fixed category and payment-method lists. |
-| `GET` | `/cashflow?from=&to=&user_id=` | Money in / out / net over the interval, per currency (`totals`) and per account (`by_account`, unassigned movements in their own bucket). `from`/`to` required. |
+| `GET` | `/cashflow?from=&to=&user_id=` | Money in / out / net over the interval, per currency (`totals`) and per account (`by_account`, unassigned movements in their own bucket). `from`/`to` required. Transfers are excluded. |
 | `GET` | `/accounts` | All accounts with `estimated_balance`, latest `reported_balance`/`reported_at`, `movements_since_report` and `last_return` (+ the valid `account_types`). |
 | `POST` | `/accounts` | Create an account. Body: `{name, type?, currency?, user_id?}`. Currency must be registered; duplicate names (case-insensitive) are rejected. |
 | `POST` | `/accounts/{id}/balance` | Report the account's real current balance: `{balance}` (smallest unit). Returns the updated account view, including the newly computed `last_return` when a previous report exists. |
 | `GET` | `/currencies` | Registered currency codes. |
 | `POST` | `/currencies` | Register a code: `{code}` (2–10 lowercase alphanumerics). Idempotent; returns the updated list. |
+| `POST` | `/transfers` | Move money between two of the user's own accounts. Body: `{from_account_id, to_account_id, amount, description?, user_id?, timestamp?}` (`amount` positive). v1 requires both accounts to hold the same currency. Creates a linked debit (`-amount` on `from_account_id`) and credit (`+amount` on `to_account_id`) atomically, category `transfer`, sharing a `transfer_id`. Returns `{transfer_id, debit, credit}`. |
+| `POST` | `/transfers/{id}/cancel` | Cancel both legs of a transfer (`{id}` is the `transfer_id`). Each leg is voided or reversed independently based on its own `sync_status`, same as `/movements/{id}/cancel`. Returns `{debit, credit}`, each shaped like `POST /movements/{id}/cancel`'s response. |
 
 `amount` is an integer in the smallest currency unit (cents), negative for
 expenses, positive for income, and cannot be zero. Splitting an amount too

@@ -10,7 +10,6 @@ import (
 	"github.com/JorgeSaicoski/financial-tracker/application/usecases"
 	"github.com/JorgeSaicoski/financial-tracker/domain/entities"
 	interfacedto "github.com/JorgeSaicoski/financial-tracker/interfaces/dto"
-	apperrors "github.com/JorgeSaicoski/financial-tracker/pkg/errors"
 	"github.com/JorgeSaicoski/financial-tracker/pkg/logger"
 )
 
@@ -21,6 +20,7 @@ type MovementHandler interface {
 	CreateMovement(w http.ResponseWriter, r *http.Request)
 	GetMovement(w http.ResponseWriter, r *http.Request)
 	ListMovements(w http.ResponseWriter, r *http.Request)
+	UpdateMovement(w http.ResponseWriter, r *http.Request)
 	CancelMovement(w http.ResponseWriter, r *http.Request)
 	CancelCreditCardPurchase(w http.ResponseWriter, r *http.Request)
 	Sync(w http.ResponseWriter, r *http.Request)
@@ -33,6 +33,7 @@ type movementHandler struct {
 	createPurchase usecases.CreateCreditCardPurchaseUseCase
 	getMovement    usecases.GetMovementUseCase
 	listMovements  usecases.ListMovementsUseCase
+	updateMovement usecases.UpdateMovementUseCase
 	cancelMovement usecases.CancelMovementUseCase
 	cancelPurchase usecases.CancelCreditCardPurchaseUseCase
 	getCashflow    usecases.GetCashflowUseCase
@@ -49,6 +50,7 @@ func NewMovementHandler(
 	createPurchase usecases.CreateCreditCardPurchaseUseCase,
 	getMovement usecases.GetMovementUseCase,
 	listMovements usecases.ListMovementsUseCase,
+	updateMovement usecases.UpdateMovementUseCase,
 	cancelMovement usecases.CancelMovementUseCase,
 	cancelPurchase usecases.CancelCreditCardPurchaseUseCase,
 	getCashflow usecases.GetCashflowUseCase,
@@ -62,6 +64,7 @@ func NewMovementHandler(
 		createPurchase:  createPurchase,
 		getMovement:     getMovement,
 		listMovements:   listMovements,
+		updateMovement:  updateMovement,
 		cancelMovement:  cancelMovement,
 		cancelPurchase:  cancelPurchase,
 		getCashflow:     getCashflow,
@@ -207,6 +210,51 @@ func (h *movementHandler) ListMovements(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
+// UpdateMovement handles PATCH /movements/{id}. Editing an already-synced
+// movement's amount/currency/timestamp produces a reversal + a
+// replacement instead of an in-place edit (ledger-service never deletes);
+// the response's reversal/replacement fields tell the UI which happened.
+func (h *movementHandler) UpdateMovement(w http.ResponseWriter, r *http.Request) {
+	var req interfacedto.UpdateMovementRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	input := usecases.UpdateMovementInput{
+		Description: req.Description,
+		AccountID:   req.AccountID,
+		Amount:      req.Amount,
+		Currency:    req.Currency,
+		Timestamp:   req.Timestamp,
+	}
+	if req.Category != nil {
+		category := entities.Category(*req.Category)
+		input.Category = &category
+	}
+	if req.PaymentMethod != nil {
+		paymentMethod := entities.PaymentMethod(*req.PaymentMethod)
+		input.PaymentMethod = &paymentMethod
+	}
+
+	result, err := h.updateMovement.Execute(r.Context(), r.PathValue("id"), input)
+	if err != nil {
+		h.writeUsecaseError(w, "update movement", err)
+		return
+	}
+
+	resp := interfacedto.UpdateMovementResponse{Movement: toMovementResponse(result.Movement)}
+	if result.Reversal != nil {
+		reversal := toMovementResponse(result.Reversal)
+		resp.Reversal = &reversal
+	}
+	if result.Replacement != nil {
+		replacement := toMovementResponse(result.Replacement)
+		resp.Replacement = &replacement
+	}
+	h.writeJSON(w, http.StatusOK, resp)
+}
+
 // CancelMovement handles POST /movements/{id}/cancel
 func (h *movementHandler) CancelMovement(w http.ResponseWriter, r *http.Request) {
 	result, err := h.cancelMovement.Execute(r.Context(), r.PathValue("id"))
@@ -215,12 +263,7 @@ func (h *movementHandler) CancelMovement(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	resp := interfacedto.CancelMovementResponse{Movement: toMovementResponse(result.Movement)}
-	if result.Reversal != nil {
-		reversal := toMovementResponse(result.Reversal)
-		resp.Reversal = &reversal
-	}
-	h.writeJSON(w, http.StatusOK, resp)
+	h.writeJSON(w, http.StatusOK, toCancelMovementResponse(result))
 }
 
 // CancelCreditCardPurchase handles POST /credit-card-purchases/{id}/cancel
@@ -363,6 +406,21 @@ func toMovementResponse(m *entities.Movement) interfacedto.MovementResponse {
 	if m.ReversedByMovementID != nil {
 		resp.ReversedByMovementID = *m.ReversedByMovementID
 	}
+	if m.TransferID != nil {
+		resp.TransferID = *m.TransferID
+	}
+	return resp
+}
+
+// toCancelMovementResponse is shared by MovementHandler.CancelMovement and
+// TransferHandler.CancelTransfer, since a transfer's cancel result is just
+// one of these per leg.
+func toCancelMovementResponse(result usecases.CancelMovementResult) interfacedto.CancelMovementResponse {
+	resp := interfacedto.CancelMovementResponse{Movement: toMovementResponse(result.Movement)}
+	if result.Reversal != nil {
+		reversal := toMovementResponse(result.Reversal)
+		resp.Reversal = &reversal
+	}
 	return resp
 }
 
@@ -385,20 +443,7 @@ func toPurchaseResponse(p *entities.CreditCardPurchase, movements []*entities.Mo
 }
 
 func (h *movementHandler) writeUsecaseError(w http.ResponseWriter, action string, err error) {
-	switch {
-	case errors.Is(err, apperrors.ErrInvalidInput):
-		h.writeError(w, http.StatusBadRequest, err.Error())
-	case errors.Is(err, apperrors.ErrNotFound):
-		h.writeError(w, http.StatusNotFound, "not found")
-	case errors.Is(err, apperrors.ErrConflict):
-		h.writeError(w, http.StatusConflict, "already cancelled")
-	case errors.Is(err, apperrors.ErrUpstream):
-		h.log.Error("%s failed: %v", action, err)
-		h.writeError(w, http.StatusBadGateway, "upstream ledger service error")
-	default:
-		h.log.Error("%s failed: %v", action, err)
-		h.writeError(w, http.StatusInternalServerError, "internal error")
-	}
+	writeUsecaseError(h.log, w, action, err)
 }
 
 func (h *movementHandler) writeJSON(w http.ResponseWriter, status int, data interface{}) {

@@ -26,7 +26,7 @@ func NewMovementRepository(db *sql.DB) repositories.MovementRepository {
 const movementColumns = `id, user_id, amount, currency, description, category, payment_method,
 	credit_card_purchase_id, installment_number, status, cancels_movement_id, reversed_by_movement_id,
 	timestamp, sync_status, ledger_transaction_id, sync_attempts, last_sync_error, last_sync_attempt_at,
-	synced_at, created_at, account_id`
+	synced_at, created_at, account_id, transfer_id`
 
 func (r *movementRepository) Create(ctx context.Context, movement *entities.Movement) (*entities.Movement, error) {
 	if movement.ID == "" {
@@ -36,6 +36,28 @@ func (r *movementRepository) Create(ctx context.Context, movement *entities.Move
 		return nil, err
 	}
 	return movement, nil
+}
+
+func (r *movementRepository) CreateBatch(ctx context.Context, movements []*entities.Movement) ([]*entities.Movement, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite: begin batch: %w", err)
+	}
+	defer tx.Rollback()
+
+	for _, m := range movements {
+		if m.ID == "" {
+			m.ID = id.NewUUID()
+		}
+		if err := insertMovement(ctx, tx, m); err != nil {
+			return nil, err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("sqlite: commit batch: %w", err)
+	}
+	return movements, nil
 }
 
 func (r *movementRepository) GetByID(ctx context.Context, movementID string) (*entities.Movement, error) {
@@ -75,6 +97,12 @@ func (r *movementRepository) ListByCreditCardPurchase(ctx context.Context, purch
 	return r.queryMovements(ctx,
 		`SELECT `+movementColumns+` FROM movements WHERE credit_card_purchase_id = ? ORDER BY installment_number ASC`,
 		purchaseID)
+}
+
+func (r *movementRepository) ListByTransferID(ctx context.Context, transferID string) ([]*entities.Movement, error) {
+	return r.queryMovements(ctx,
+		`SELECT `+movementColumns+` FROM movements WHERE transfer_id = ? ORDER BY amount ASC`,
+		transferID)
 }
 
 func (r *movementRepository) NetByAccount(ctx context.Context, accountID string, after, until *time.Time) (int64, error) {
@@ -122,6 +150,18 @@ func (r *movementRepository) MarkSyncFailed(ctx context.Context, movementID, syn
 		     sync_attempts = sync_attempts + 1
 		 WHERE id = ?`,
 		syncErr, formatTime(at), movementID)
+}
+
+func (r *movementRepository) UpdateMetadata(ctx context.Context, movementID, description string, category entities.Category, paymentMethod entities.PaymentMethod, accountID *string) error {
+	return r.execOnRow(ctx,
+		`UPDATE movements SET description = ?, category = ?, payment_method = ?, account_id = ? WHERE id = ?`,
+		nullString(description), string(category), string(paymentMethod), accountID, movementID)
+}
+
+func (r *movementRepository) UpdateFinancial(ctx context.Context, movementID string, amount int64, currency string, timestamp time.Time) error {
+	return r.execOnRow(ctx,
+		`UPDATE movements SET amount = ?, currency = ?, timestamp = ? WHERE id = ?`,
+		amount, currency, formatTime(timestamp), movementID)
 }
 
 func (r *movementRepository) Void(ctx context.Context, movementID string) error {
@@ -224,14 +264,14 @@ type execer interface {
 func insertMovement(ctx context.Context, ex execer, m *entities.Movement) error {
 	_, err := ex.ExecContext(ctx,
 		`INSERT INTO movements (`+movementColumns+`)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		m.ID, m.UserID, m.Amount, m.Currency,
 		nullString(m.Description), string(m.Category), string(m.PaymentMethod),
 		m.CreditCardPurchaseID, m.InstallmentNumber,
 		string(m.Status), m.CancelsMovementID, m.ReversedByMovementID,
 		formatTime(m.Timestamp), string(m.SyncStatus), m.LedgerTransactionID,
 		m.SyncAttempts, m.LastSyncError, nullTime(m.LastSyncAttemptAt),
-		nullTime(m.SyncedAt), formatTime(m.CreatedAt), m.AccountID)
+		nullTime(m.SyncedAt), formatTime(m.CreatedAt), m.AccountID, m.TransferID)
 	if err != nil {
 		return fmt.Errorf("sqlite: insert movement: %w", err)
 	}
@@ -249,7 +289,7 @@ func scanMovement(row scannable) (*entities.Movement, error) {
 		description, lastSyncError              sql.NullString
 		category, paymentMethod, status, syncSt string
 		purchaseID, cancelsID, reversedByID     sql.NullString
-		ledgerTxID, accountID                   sql.NullString
+		ledgerTxID, accountID, transferID       sql.NullString
 		installmentNumber                       sql.NullInt64
 		timestamp, createdAt                    string
 		lastAttemptAt, syncedAt                 sql.NullString
@@ -262,7 +302,7 @@ func scanMovement(row scannable) (*entities.Movement, error) {
 		&status, &cancelsID, &reversedByID,
 		&timestamp, &syncSt, &ledgerTxID,
 		&m.SyncAttempts, &lastSyncError, &lastAttemptAt,
-		&syncedAt, &createdAt, &accountID)
+		&syncedAt, &createdAt, &accountID, &transferID)
 	if err != nil {
 		return nil, err
 	}
@@ -273,6 +313,7 @@ func scanMovement(row scannable) (*entities.Movement, error) {
 	m.Status = entities.MovementStatus(status)
 	m.SyncStatus = entities.SyncStatus(syncSt)
 	m.AccountID = stringPtr(accountID)
+	m.TransferID = stringPtr(transferID)
 	m.CreditCardPurchaseID = stringPtr(purchaseID)
 	m.CancelsMovementID = stringPtr(cancelsID)
 	m.ReversedByMovementID = stringPtr(reversedByID)

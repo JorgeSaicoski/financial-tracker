@@ -30,6 +30,13 @@ func (uc *cancelMovementUseCase) Execute(ctx context.Context, id string) (Cancel
 	if err != nil {
 		return CancelMovementResult{}, err
 	}
+	if movement.TransferID != nil {
+		// Cancelling one leg alone would leave the other stranded,
+		// breaking the transfer's zero-net-worth invariant.
+		return CancelMovementResult{}, fmt.Errorf(
+			"%w: this movement is one leg of a transfer — cancel it via POST /transfers/{id}/cancel",
+			apperrors.ErrConflict)
+	}
 
 	result, err := cancelOne(ctx, uc.repo, movement)
 	if err != nil {

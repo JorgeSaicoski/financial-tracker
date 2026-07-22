@@ -10,6 +10,7 @@ func NewRouter(
 	movementHandler handlers.MovementHandler,
 	accountHandler handlers.AccountHandler,
 	currencyHandler handlers.CurrencyHandler,
+	transferHandler handlers.TransferHandler,
 ) http.Handler {
 	mux := http.NewServeMux()
 
@@ -21,6 +22,7 @@ func NewRouter(
 			movementHandler.ListMovements(w, r)
 		}
 	})
+	mux.HandleFunc("PATCH /movements/{id}", movementHandler.UpdateMovement)
 	mux.HandleFunc("POST /movements/{id}/cancel", movementHandler.CancelMovement)
 	mux.HandleFunc("POST /credit-card-purchases/{id}/cancel", movementHandler.CancelCreditCardPurchase)
 	mux.HandleFunc("POST /sync", movementHandler.Sync)
@@ -34,6 +36,9 @@ func NewRouter(
 	mux.HandleFunc("GET /currencies", currencyHandler.ListCurrencies)
 	mux.HandleFunc("POST /currencies", currencyHandler.AddCurrency)
 
+	mux.HandleFunc("POST /transfers", transferHandler.CreateTransfer)
+	mux.HandleFunc("POST /transfers/{id}/cancel", transferHandler.CancelTransfer)
+
 	return withCORS(mux)
 }
 
@@ -43,7 +48,7 @@ func NewRouter(
 func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 
 		if r.Method == http.MethodOptions {

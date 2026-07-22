@@ -1,0 +1,58 @@
+package usecases
+
+import (
+	"context"
+
+	"github.com/JorgeSaicoski/financial-tracker/application/repositories"
+	"github.com/JorgeSaicoski/financial-tracker/application/services"
+	apperrors "github.com/JorgeSaicoski/financial-tracker/pkg/errors"
+)
+
+type cancelTransferUseCase struct {
+	movements repositories.MovementRepository
+	sync      services.SyncTrigger
+}
+
+// NewCancelTransfer returns interface type for dependency injection.
+func NewCancelTransfer(movements repositories.MovementRepository, sync services.SyncTrigger) CancelTransferUseCase {
+	return &cancelTransferUseCase{movements: movements, sync: sync}
+}
+
+func (uc *cancelTransferUseCase) Execute(ctx context.Context, transferID string) (CancelTransferResult, error) {
+	if transferID == "" {
+		return CancelTransferResult{}, apperrors.ErrInvalidInput
+	}
+
+	legs, err := uc.movements.ListByTransferID(ctx, transferID)
+	if err != nil {
+		return CancelTransferResult{}, err
+	}
+	if len(legs) == 0 {
+		return CancelTransferResult{}, apperrors.ErrNotFound
+	}
+
+	var result CancelTransferResult
+	anySynced := false
+	for _, leg := range legs {
+		one := CancelMovementResult{Movement: leg}
+		if !leg.IsCancelled() {
+			one, err = cancelOne(ctx, uc.movements, leg)
+			if err != nil {
+				return CancelTransferResult{}, err
+			}
+			if one.Reversal != nil {
+				anySynced = true
+			}
+		}
+		if leg.Amount < 0 {
+			result.Debit = one
+		} else {
+			result.Credit = one
+		}
+	}
+
+	if anySynced {
+		uc.sync.TriggerAsync()
+	}
+	return result, nil
+}

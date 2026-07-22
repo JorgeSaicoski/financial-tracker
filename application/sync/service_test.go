@@ -27,6 +27,12 @@ func (f *fakeRepo) Create(context.Context, *entities.Movement) (*entities.Moveme
 	panic("not used")
 }
 func (f *fakeRepo) GetByID(context.Context, string) (*entities.Movement, error) { panic("not used") }
+func (f *fakeRepo) CreateBatch(context.Context, []*entities.Movement) ([]*entities.Movement, error) {
+	panic("not used")
+}
+func (f *fakeRepo) ListByTransferID(context.Context, string) ([]*entities.Movement, error) {
+	panic("not used")
+}
 func (f *fakeRepo) ListByUser(context.Context, string, *string, *time.Time, *time.Time, int, int) ([]*entities.Movement, error) {
 	panic("not used")
 }
@@ -34,6 +40,12 @@ func (f *fakeRepo) ListByCreditCardPurchase(context.Context, string) ([]*entitie
 	panic("not used")
 }
 func (f *fakeRepo) Void(context.Context, string) error { panic("not used") }
+func (f *fakeRepo) UpdateMetadata(context.Context, string, string, entities.Category, entities.PaymentMethod, *string) error {
+	panic("not used")
+}
+func (f *fakeRepo) UpdateFinancial(context.Context, string, int64, string, time.Time) error {
+	panic("not used")
+}
 func (f *fakeRepo) NetByAccount(context.Context, string, *time.Time, *time.Time) (int64, error) {
 	panic("not used")
 }
