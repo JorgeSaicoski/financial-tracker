@@ -114,17 +114,23 @@ func (uc *updateMovementUseCase) Execute(ctx context.Context, id string, input U
 	if !movement.IsSynced() {
 		// Never reached ledger-service: every field can still be edited
 		// in place.
+		originalAmount, originalCurrency, originalTimestamp := movement.Amount, movement.Currency, movement.Timestamp
 		if err := uc.repo.UpdateFinancial(ctx, movement.ID, amount, currency, timestamp); err != nil {
 			return UpdateMovementResult{}, err
 		}
-		movement.Amount, movement.Currency, movement.Timestamp = amount, currency, timestamp
 		if editsMetadata {
 			if err := uc.repo.UpdateMetadata(ctx, movement.ID, description, category, paymentMethod, accountID); err != nil {
+				if rollbackErr := uc.repo.UpdateFinancial(ctx, movement.ID, originalAmount, originalCurrency, originalTimestamp); rollbackErr != nil {
+					return UpdateMovementResult{}, fmt.Errorf(
+						"metadata update failed after financial update and rollback also failed: metadata: %w; rollback: %v",
+						err, rollbackErr)
+				}
 				return UpdateMovementResult{}, err
 			}
 			movement.Description, movement.Category, movement.PaymentMethod, movement.AccountID =
 				description, category, paymentMethod, accountID
 		}
+		movement.Amount, movement.Currency, movement.Timestamp = amount, currency, timestamp
 		return UpdateMovementResult{Movement: movement}, nil
 	}
 

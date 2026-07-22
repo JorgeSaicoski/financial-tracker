@@ -41,8 +41,9 @@ func (f *fakeCurrencyRepo) Add(_ context.Context, code string) error {
 // fakeMovementRepo is an in-memory MovementRepository mirroring the
 // semantics the SQLite implementation guarantees (see its own tests).
 type fakeMovementRepo struct {
-	byID   map[string]*entities.Movement
-	nextID int
+	byID              map[string]*entities.Movement
+	nextID            int
+	updateMetadataErr error
 }
 
 func newFakeMovementRepo() *fakeMovementRepo {
@@ -185,6 +186,9 @@ func (f *fakeMovementRepo) MarkSyncFailed(_ context.Context, id, syncErr string,
 }
 
 func (f *fakeMovementRepo) UpdateMetadata(_ context.Context, id, description string, category entities.Category, paymentMethod entities.PaymentMethod, accountID *string) error {
+	if f.updateMetadataErr != nil {
+		return f.updateMetadataErr
+	}
 	m, ok := f.byID[id]
 	if !ok {
 		return apperrors.ErrNotFound

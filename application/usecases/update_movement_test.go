@@ -74,6 +74,34 @@ func TestUpdateMovementAmountPreSyncEditsInPlace(t *testing.T) {
 	}
 }
 
+func TestUpdateMovementPreSyncRollsBackFinancialUpdateWhenMetadataUpdateFails(t *testing.T) {
+	repo := newFakeMovementRepo()
+	trigger := &fakeSyncTrigger{}
+	repo.add(activeMovement("m1", -500, entities.SyncStatusPending))
+	repo.updateMetadataErr = errors.New("metadata failed")
+
+	uc := NewUpdateMovement(repo, newFakeAccountRepo(), trigger)
+	newDescription := "corrected"
+	_, err := uc.Execute(context.Background(), "m1", UpdateMovementInput{
+		Amount:      int64Ptr(-750),
+		Description: &newDescription,
+	})
+	if !errors.Is(err, repo.updateMetadataErr) {
+		t.Fatalf("want metadata error, got %v", err)
+	}
+	if trigger.calls != 0 {
+		t.Error("failed pre-sync edit must not trigger a sync")
+	}
+
+	stored, _ := repo.GetByID(context.Background(), "m1")
+	if stored.Amount != -500 {
+		t.Errorf("amount changed despite rollback: %+v", stored)
+	}
+	if stored.Description != "" {
+		t.Errorf("metadata changed unexpectedly: %+v", stored)
+	}
+}
+
 func TestUpdateMovementAmountPostSyncReversesAndRecreates(t *testing.T) {
 	repo := newFakeMovementRepo()
 	trigger := &fakeSyncTrigger{}
