@@ -44,8 +44,8 @@ type MovementResponse struct {
 // A field absent from the JSON body leaves that value unchanged; an
 // explicit "account_id": "" clears the account. Description, category,
 // payment_method and account_id are metadata (always editable); amount,
-// currency and timestamp are financial (see the handler for what happens
-// when they're edited on an already-synced movement).
+// currency and timestamp are financial (see the UpdateMovement use case for
+// what happens when they're edited on an already-synced movement).
 type UpdateMovementRequest struct {
 	Description   *string    `json:"description,omitempty"`
 	Category      *string    `json:"category,omitempty"`
