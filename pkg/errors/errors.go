@@ -9,6 +9,7 @@ import "errors"
 var (
 	ErrInvalidInput = errors.New("invalid input")
 	ErrNotFound     = errors.New("not found")
+	ErrConflict     = errors.New("conflict")
 	ErrUpstream     = errors.New("upstream service error")
 )
 

@@ -1,0 +1,78 @@
+# Assumes ledger-service is checked out as a sibling directory
+# (../ledger-service) - this stack builds it directly from source rather
+# than duplicating its Dockerfile/migrations here.
+version: '3.8'
+
+services:
+  postgres:
+    image: docker.io/library/postgres:15-alpine
+    container_name: ledger-postgres
+    environment:
+      POSTGRES_USER: test
+      POSTGRES_PASSWORD: test123
+      POSTGRES_DB: ledger_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ../ledger-service/init-db.sh:/docker-entrypoint-initdb.d/init-db.sh:z
+      - ../ledger-service/migrations/001_create_transactions_table.sql:/docker-entrypoint-initdb.d/001_create_transactions_table.sql:z
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U test -d ledger_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  ledger-service:
+    build:
+      context: ../ledger-service
+      dockerfile: Dockerfile
+    container_name: ledger-service
+    environment:
+      DATABASE_URL: postgres://test:test123@postgres:5432/ledger_db?sslmode=disable
+      PORT: 8080
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  financial-tracker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: financial-tracker-api
+    environment:
+      LEDGER_SERVICE_URL: http://ledger-service:8080
+      PORT: 8081
+      DEFAULT_USER_ID: 00000000-0000-0000-0000-000000000001
+      DEFAULT_CURRENCY: usd
+      DB_PATH: /data/financial-tracker.db
+    ports:
+      - "8081:8081"
+    volumes:
+      - financial_tracker_data:/data
+    # No depends_on ledger-service: financial-tracker's local SQLite is
+    # the source of truth and must come up (and work) even when
+    # ledger-service is down; the background sync catches up later.
+
+  web:
+    image: docker.io/library/node:20-alpine
+    container_name: financial-tracker-web
+    working_dir: /app
+    volumes:
+      - ./web:/app:z
+    environment:
+      # Browser-facing URL - the browser runs on the host, not in the
+      # compose network, so this must be the host-mapped port, not the
+      # container DNS name.
+      PUBLIC_API_URL: http://localhost:8081
+    ports:
+      - "5173:5173"
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    depends_on:
+      - financial-tracker
+
+volumes:
+  postgres_data:
+  financial_tracker_data:

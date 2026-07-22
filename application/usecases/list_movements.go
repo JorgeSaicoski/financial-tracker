@@ -41,8 +41,16 @@ func (uc *listMovementsUseCase) Execute(ctx context.Context, userID string, curr
 		return ListMovementsResult{}, err
 	}
 
+	// Voided movements were cancelled before ever reaching ledger-service
+	// — they count as if they never happened. A synced-then-cancelled
+	// movement and its reversal are both active with opposite amounts, so
+	// they net to zero here without special-casing, exactly as
+	// ledger-service's own records would.
 	var balance int64
 	for _, m := range movements {
+		if m.Status == entities.MovementStatusVoided {
+			continue
+		}
 		balance += m.Amount
 	}
 

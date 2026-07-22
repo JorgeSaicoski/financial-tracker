@@ -17,6 +17,10 @@ func NewRouter(movementHandler handlers.MovementHandler) http.Handler {
 			movementHandler.ListMovements(w, r)
 		}
 	})
+	mux.HandleFunc("POST /movements/{id}/cancel", movementHandler.CancelMovement)
+	mux.HandleFunc("POST /credit-card-purchases/{id}/cancel", movementHandler.CancelCreditCardPurchase)
+	mux.HandleFunc("POST /sync", movementHandler.Sync)
+	mux.HandleFunc("GET /categories", movementHandler.ListCategories)
 
 	return withCORS(mux)
 }

@@ -1,3 +1,6 @@
 .env
 financial-tracker
 /bin/
+
+# Local SQLite database (DB_PATH default)
+/data/
