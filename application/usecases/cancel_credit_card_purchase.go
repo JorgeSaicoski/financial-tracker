@@ -3,35 +3,23 @@ package usecases
 import (
 	"context"
 
+	"github.com/JorgeSaicoski/financial-tracker/application/repositories"
+	"github.com/JorgeSaicoski/financial-tracker/application/services"
 	"github.com/JorgeSaicoski/financial-tracker/domain/entities"
-	"github.com/JorgeSaicoski/financial-tracker/domain/repositories"
 	apperrors "github.com/JorgeSaicoski/financial-tracker/pkg/errors"
 )
-
-// CancelCreditCardPurchaseResult reports what happened to each
-// installment: due/synced ones got reversals, not-yet-due ones were just
-// voided (they never reached ledger-service).
-type CancelCreditCardPurchaseResult struct {
-	Purchase  *entities.CreditCardPurchase
-	Voided    []*entities.Movement
-	Reversals []*entities.Movement
-}
-
-type CancelCreditCardPurchaseUseCase interface {
-	Execute(ctx context.Context, id string) (CancelCreditCardPurchaseResult, error)
-}
 
 type cancelCreditCardPurchaseUseCase struct {
 	purchases repositories.CreditCardPurchaseRepository
 	movements repositories.MovementRepository
-	sync      SyncTrigger
+	sync      services.SyncTrigger
 }
 
 // NewCancelCreditCardPurchase returns interface type for dependency injection.
 func NewCancelCreditCardPurchase(
 	purchases repositories.CreditCardPurchaseRepository,
 	movements repositories.MovementRepository,
-	sync SyncTrigger,
+	sync services.SyncTrigger,
 ) CancelCreditCardPurchaseUseCase {
 	return &cancelCreditCardPurchaseUseCase{purchases: purchases, movements: movements, sync: sync}
 }

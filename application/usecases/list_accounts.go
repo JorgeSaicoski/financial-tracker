@@ -2,38 +2,11 @@ package usecases
 
 import (
 	"context"
-	"time"
 
+	"github.com/JorgeSaicoski/financial-tracker/application/repositories"
 	"github.com/JorgeSaicoski/financial-tracker/domain/entities"
-	"github.com/JorgeSaicoski/financial-tracker/domain/repositories"
 	apperrors "github.com/JorgeSaicoski/financial-tracker/pkg/errors"
 )
-
-// AccountView is an account plus everything derivable about its money:
-//
-//   - ReportedBalance/ReportedAt: the latest user-reported snapshot (nil
-//     until the user reports one).
-//   - MovementsSinceReport: net of tracked movements after that snapshot
-//     (or all-time when there's no snapshot yet).
-//   - EstimatedBalance: reported + movements since — our best guess of
-//     what the account holds right now.
-//   - LastReturn: between the last two snapshots, how much the balance
-//     changed beyond what movements explain — the account's yield or
-//     interest over LastReturnFrom..LastReturnTo. Needs two snapshots.
-type AccountView struct {
-	Account              *entities.Account
-	EstimatedBalance     int64
-	ReportedBalance      *int64
-	ReportedAt           *time.Time
-	MovementsSinceReport int64
-	LastReturn           *int64
-	LastReturnFrom       *time.Time
-	LastReturnTo         *time.Time
-}
-
-type ListAccountsUseCase interface {
-	Execute(ctx context.Context, userID string) ([]AccountView, error)
-}
 
 type listAccountsUseCase struct {
 	accounts  repositories.AccountRepository

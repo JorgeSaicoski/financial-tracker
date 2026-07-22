@@ -7,35 +7,21 @@ import (
 	"context"
 	"time"
 
-	"github.com/JorgeSaicoski/financial-tracker/domain/entities"
-	"github.com/JorgeSaicoski/financial-tracker/domain/repositories"
+	"github.com/JorgeSaicoski/financial-tracker/application/repositories"
+	"github.com/JorgeSaicoski/financial-tracker/application/services"
 	"github.com/JorgeSaicoski/financial-tracker/pkg/logger"
 )
 
-// LedgerGateway is the port this service needs from the outside world:
-// publish one movement, get back the id ledger-service assigned.
-// Implemented by infrastructure/ledgerservice — application code never
-// imports infrastructure.
-type LedgerGateway interface {
-	Publish(ctx context.Context, movement *entities.Movement) (ledgerTransactionID string, err error)
-}
-
-// Summary is the result of one sync pass.
-type Summary struct {
-	Synced int
-	Failed int
-}
-
 type Service struct {
 	repo          repositories.MovementRepository
-	gateway       LedgerGateway
+	gateway       services.LedgerGateway
 	log           logger.Logger
 	retryCooldown time.Duration
 	// asyncTimeout bounds the detached pass triggered after a cancel.
 	asyncTimeout time.Duration
 }
 
-func NewService(repo repositories.MovementRepository, gateway LedgerGateway, log logger.Logger, retryCooldown time.Duration) *Service {
+func NewService(repo repositories.MovementRepository, gateway services.LedgerGateway, log logger.Logger, retryCooldown time.Duration) *Service {
 	return &Service{
 		repo:          repo,
 		gateway:       gateway,
@@ -47,17 +33,17 @@ func NewService(repo repositories.MovementRepository, gateway LedgerGateway, log
 
 // RunPass syncs due movements, skipping rows attempted within the retry
 // cooldown — this is what the background ticker calls.
-func (s *Service) RunPass(ctx context.Context) Summary {
+func (s *Service) RunPass(ctx context.Context) services.Summary {
 	return s.run(ctx, s.retryCooldown)
 }
 
 // RunPassNow ignores the cooldown — the user explicitly asked to sync.
-func (s *Service) RunPassNow(ctx context.Context) Summary {
+func (s *Service) RunPassNow(ctx context.Context) services.Summary {
 	return s.run(ctx, 0)
 }
 
-func (s *Service) run(ctx context.Context, cooldown time.Duration) Summary {
-	var sum Summary
+func (s *Service) run(ctx context.Context, cooldown time.Duration) services.Summary {
+	var sum services.Summary
 
 	pending, err := s.repo.ListPendingSync(ctx, time.Now().UTC(), cooldown)
 	if err != nil {

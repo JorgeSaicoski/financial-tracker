@@ -4,21 +4,10 @@ import (
 	"context"
 	"time"
 
+	"github.com/JorgeSaicoski/financial-tracker/application/repositories"
 	"github.com/JorgeSaicoski/financial-tracker/domain/entities"
-	"github.com/JorgeSaicoski/financial-tracker/domain/repositories"
 	apperrors "github.com/JorgeSaicoski/financial-tracker/pkg/errors"
 )
-
-// ListMovementsResult also carries the computed balance, since
-// ledger-service deliberately leaves that calculation to consumers.
-type ListMovementsResult struct {
-	Movements []*entities.Movement
-	Balance   int64
-}
-
-type ListMovementsUseCase interface {
-	Execute(ctx context.Context, userID string, currency *string, from, to *time.Time, limit, offset int) (ListMovementsResult, error)
-}
 
 type listMovementsUseCase struct {
 	repo repositories.MovementRepository

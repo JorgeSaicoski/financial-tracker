@@ -5,39 +5,19 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/JorgeSaicoski/financial-tracker/application/repositories"
+	"github.com/JorgeSaicoski/financial-tracker/application/services"
 	"github.com/JorgeSaicoski/financial-tracker/domain/entities"
-	"github.com/JorgeSaicoski/financial-tracker/domain/repositories"
 	apperrors "github.com/JorgeSaicoski/financial-tracker/pkg/errors"
 )
 
-// SyncTrigger lets cancel usecases kick a best-effort background sync so a
-// freshly created reversal reaches ledger-service promptly, without the
-// cancel ever blocking on ledger-service being up. Implemented by
-// application/sync.Service.
-type SyncTrigger interface {
-	TriggerAsync()
-}
-
-// CancelMovementResult reports how the cancel was carried out: a
-// never-synced movement is voided in place (Reversal is nil); a synced one
-// stays active and gains a compensating Reversal, mirroring
-// ledger-service's no-delete rule.
-type CancelMovementResult struct {
-	Movement *entities.Movement
-	Reversal *entities.Movement
-}
-
-type CancelMovementUseCase interface {
-	Execute(ctx context.Context, id string) (CancelMovementResult, error)
-}
-
 type cancelMovementUseCase struct {
 	repo repositories.MovementRepository
-	sync SyncTrigger
+	sync services.SyncTrigger
 }
 
 // NewCancelMovement returns interface type for dependency injection.
-func NewCancelMovement(repo repositories.MovementRepository, sync SyncTrigger) CancelMovementUseCase {
+func NewCancelMovement(repo repositories.MovementRepository, sync services.SyncTrigger) CancelMovementUseCase {
 	return &cancelMovementUseCase{repo: repo, sync: sync}
 }
 

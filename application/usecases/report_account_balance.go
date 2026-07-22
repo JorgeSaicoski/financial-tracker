@@ -4,17 +4,10 @@ import (
 	"context"
 	"time"
 
+	"github.com/JorgeSaicoski/financial-tracker/application/repositories"
 	"github.com/JorgeSaicoski/financial-tracker/domain/entities"
-	"github.com/JorgeSaicoski/financial-tracker/domain/repositories"
 	apperrors "github.com/JorgeSaicoski/financial-tracker/pkg/errors"
 )
-
-// ReportAccountBalanceUseCase records what the account really holds right
-// now (per the bank/broker/wallet), as a snapshot. The returned view then
-// exposes the account's return since the previous report.
-type ReportAccountBalanceUseCase interface {
-	Execute(ctx context.Context, accountID string, balance int64) (AccountView, error)
-}
 
 type reportAccountBalanceUseCase struct {
 	accounts  repositories.AccountRepository

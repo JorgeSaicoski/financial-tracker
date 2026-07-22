@@ -6,23 +6,13 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/JorgeSaicoski/financial-tracker/domain/repositories"
+	"github.com/JorgeSaicoski/financial-tracker/application/repositories"
 	apperrors "github.com/JorgeSaicoski/financial-tracker/pkg/errors"
 )
 
 // currencyCodePattern keeps codes short lowercase identifiers (usd, brl,
 // btc, usdt, ...) so they behave everywhere a currency string is used.
 var currencyCodePattern = regexp.MustCompile(`^[a-z0-9]{2,10}$`)
-
-type ListCurrenciesUseCase interface {
-	Execute(ctx context.Context) ([]string, error)
-}
-
-// AddCurrencyUseCase registers a new currency code; adding an existing
-// code is a no-op. Returns the normalized (lowercased) code.
-type AddCurrencyUseCase interface {
-	Execute(ctx context.Context, code string) (string, error)
-}
 
 type listCurrenciesUseCase struct {
 	repo repositories.CurrencyRepository

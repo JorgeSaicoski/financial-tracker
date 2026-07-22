@@ -2,10 +2,11 @@
 
 Personal finance tracker. Records every movement (income/expense) a user makes.
 
-> Contributing? **[CONTRIBUTING.md](CONTRIBUTING.md)** walks through adding a
-> feature end-to-end (migration → repository → usecase → handler → route →
-> frontend), changing an existing route, and the bug-fix workflow — each with
-> a real example from this codebase.
+> Contributing? The **[contributing/](contributing/)** folder walks through
+> adding a feature end-to-end (migration → repository → usecase → handler →
+> route → frontend), building a feature over existing storage, changing an
+> existing route, and the bug-fix workflow — each with a real example from
+> this codebase. Start at [contributing/README.md](contributing/README.md).
 
 **Current architecture:** financial-tracker is local-first. Movements are
 written to its own SQLite database (the source of truth), so creating,
@@ -41,20 +42,24 @@ Beyond movements, the tracker knows about:
   and per account.
 
 Backend layout follows Clean Architecture (see `CleanExampleGo` for the
-reference pattern this was modeled on) with the **domain** layer owning both
-the entities and the repository contracts:
+reference pattern this was modeled on): the **domain** layer holds pure
+entities only, and the **application** layer owns every contract —
+repository interfaces, service ports, and use-case interfaces:
 
 ```
 domain/entities              Movement, CreditCardPurchase, Account (+snapshots),
                              fixed Category/PaymentMethod/AccountType lists
-domain/repositories          MovementRepository, CreditCardPurchaseRepository,
+application/repositories     MovementRepository, CreditCardPurchaseRepository,
                              AccountRepository, CurrencyRepository interfaces — the swap points
-application/usecases         CreateMovement, CreateCreditCardPurchase, GetMovement,
-                             ListMovements (computes balance), CancelMovement,
+application/services         LedgerGateway, SyncTrigger, SyncRunner — service contracts the
+                             application defines; sync/infrastructure implement them
+application/usecases         all use-case interfaces + Input/Result types in interfaces.go;
+                             one impl file each: CreateMovement, CreateCreditCardPurchase,
+                             GetMovement, ListMovements (computes balance), CancelMovement,
                              CancelCreditCardPurchase, CreateAccount, ListAccounts
                              (computes balances/returns), ReportAccountBalance,
                              GetCashflow, ListCurrencies, AddCurrency
-application/sync             SyncService: pushes pending movements to ledger-service via a
+application/sync             SyncService: pushes pending movements to ledger-service via the
                              LedgerGateway port (background ticker + manual trigger)
 infrastructure/sqlite        implements the repositories on the local SQLite DB (source of truth)
 infrastructure/ledgerservice HTTP client for ledger-service + LedgerGateway adapter
@@ -134,7 +139,7 @@ make up         # builds and starts postgres, ledger-service, financial-tracker 
 make logs       # follow logs
 make down       # stop and remove everything (data volumes survive)
 make restart    # down + up
-make rebuild    # down + build images + up — REQUIRED after changing Go code (see CONTRIBUTING.md)
+make rebuild    # down + build images + up — REQUIRED after changing Go code (see contributing/bug-fix.md)
 make remove-db  # wipe ALL databases (tracker SQLite + ledger postgres) for a fresh start
 make ps         # see what's running
 ```

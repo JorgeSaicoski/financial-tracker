@@ -3,14 +3,10 @@ package usecases
 import (
 	"context"
 
+	"github.com/JorgeSaicoski/financial-tracker/application/repositories"
 	"github.com/JorgeSaicoski/financial-tracker/domain/entities"
-	"github.com/JorgeSaicoski/financial-tracker/domain/repositories"
 	apperrors "github.com/JorgeSaicoski/financial-tracker/pkg/errors"
 )
-
-type GetMovementUseCase interface {
-	Execute(ctx context.Context, id string) (*entities.Movement, error)
-}
 
 type getMovementUseCase struct {
 	repo repositories.MovementRepository

@@ -3,19 +3,20 @@ package ledgerservice
 import (
 	"context"
 
-	syncapp "github.com/JorgeSaicoski/financial-tracker/application/sync"
+	"github.com/JorgeSaicoski/financial-tracker/application/services"
 	"github.com/JorgeSaicoski/financial-tracker/domain/entities"
 	wire "github.com/JorgeSaicoski/financial-tracker/infrastructure/ledgerservice/entities"
 )
 
-// gateway adapts Client to application/sync's LedgerGateway port. Only the
+// gateway adapts Client to the application layer's LedgerGateway port
+// (application/services). Only the
 // money facts cross the wire — ledger-service's transaction model doesn't
 // know about descriptions, categories, or payment methods.
 type gateway struct {
 	client *Client
 }
 
-func NewLedgerGateway(client *Client) syncapp.LedgerGateway {
+func NewLedgerGateway(client *Client) services.LedgerGateway {
 	return &gateway{client: client}
 }
 

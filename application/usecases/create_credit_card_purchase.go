@@ -4,23 +4,10 @@ import (
 	"context"
 	"time"
 
+	"github.com/JorgeSaicoski/financial-tracker/application/repositories"
 	"github.com/JorgeSaicoski/financial-tracker/domain/entities"
-	"github.com/JorgeSaicoski/financial-tracker/domain/repositories"
 	apperrors "github.com/JorgeSaicoski/financial-tracker/pkg/errors"
 )
-
-type CreateCreditCardPurchaseInput struct {
-	UserID       string
-	TotalAmount  int64
-	Currency     string
-	Description  string
-	Category     entities.Category
-	Installments int
-}
-
-type CreateCreditCardPurchaseUseCase interface {
-	Execute(ctx context.Context, input CreateCreditCardPurchaseInput) (*entities.CreditCardPurchase, []*entities.Movement, error)
-}
 
 type createCreditCardPurchaseUseCase struct {
 	purchases repositories.CreditCardPurchaseRepository

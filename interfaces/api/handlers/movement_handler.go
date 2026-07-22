@@ -1,26 +1,18 @@
 package handlers
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
 
-	syncapp "github.com/JorgeSaicoski/financial-tracker/application/sync"
+	"github.com/JorgeSaicoski/financial-tracker/application/services"
 	"github.com/JorgeSaicoski/financial-tracker/application/usecases"
 	"github.com/JorgeSaicoski/financial-tracker/domain/entities"
 	interfacedto "github.com/JorgeSaicoski/financial-tracker/interfaces/dto"
 	apperrors "github.com/JorgeSaicoski/financial-tracker/pkg/errors"
 	"github.com/JorgeSaicoski/financial-tracker/pkg/logger"
 )
-
-// SyncRunner is what the handler needs from application/sync: run one
-// synchronous pass (POST /sync ignores the retry cooldown — the user
-// explicitly asked).
-type SyncRunner interface {
-	RunPassNow(ctx context.Context) syncapp.Summary
-}
 
 // MovementHandler exposes financial-tracker's own API. It never talks to
 // the database or ledger-service directly - it only calls application
@@ -44,7 +36,7 @@ type movementHandler struct {
 	cancelMovement usecases.CancelMovementUseCase
 	cancelPurchase usecases.CancelCreditCardPurchaseUseCase
 	getCashflow    usecases.GetCashflowUseCase
-	syncRunner     SyncRunner
+	syncRunner     services.SyncRunner
 
 	defaultUserID   string
 	defaultCurrency string
@@ -60,7 +52,7 @@ func NewMovementHandler(
 	cancelMovement usecases.CancelMovementUseCase,
 	cancelPurchase usecases.CancelCreditCardPurchaseUseCase,
 	getCashflow usecases.GetCashflowUseCase,
-	syncRunner SyncRunner,
+	syncRunner services.SyncRunner,
 	defaultUserID string,
 	defaultCurrency string,
 	log logger.Logger,

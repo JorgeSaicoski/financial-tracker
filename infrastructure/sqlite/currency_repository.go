@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/JorgeSaicoski/financial-tracker/domain/repositories"
+	"github.com/JorgeSaicoski/financial-tracker/application/repositories"
 )
 
 type currencyRepository struct {

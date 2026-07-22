@@ -5,27 +5,10 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/JorgeSaicoski/financial-tracker/application/repositories"
 	"github.com/JorgeSaicoski/financial-tracker/domain/entities"
-	"github.com/JorgeSaicoski/financial-tracker/domain/repositories"
 	apperrors "github.com/JorgeSaicoski/financial-tracker/pkg/errors"
 )
-
-// CreateMovementInput carries the caller-supplied fields for a single
-// movement. Category and PaymentMethod default to "other" when empty so
-// pre-existing clients that only send an amount keep working.
-type CreateMovementInput struct {
-	UserID        string
-	Amount        int64
-	Currency      string
-	Description   string
-	Category      entities.Category
-	PaymentMethod entities.PaymentMethod
-	AccountID     *string
-}
-
-type CreateMovementUseCase interface {
-	Execute(ctx context.Context, input CreateMovementInput) (*entities.Movement, error)
-}
 
 type createMovementUseCase struct {
 	repo     repositories.MovementRepository

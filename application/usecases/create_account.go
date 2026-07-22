@@ -6,24 +6,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/JorgeSaicoski/financial-tracker/application/repositories"
 	"github.com/JorgeSaicoski/financial-tracker/domain/entities"
-	"github.com/JorgeSaicoski/financial-tracker/domain/repositories"
 	apperrors "github.com/JorgeSaicoski/financial-tracker/pkg/errors"
 )
-
-// CreateAccountInput carries the caller-supplied fields for a new
-// account. Type defaults to "other" when empty; Currency must already be
-// registered (POST /currencies first for a new one).
-type CreateAccountInput struct {
-	UserID   string
-	Name     string
-	Type     entities.AccountType
-	Currency string
-}
-
-type CreateAccountUseCase interface {
-	Execute(ctx context.Context, input CreateAccountInput) (*entities.Account, error)
-}
 
 type createAccountUseCase struct {
 	accounts   repositories.AccountRepository

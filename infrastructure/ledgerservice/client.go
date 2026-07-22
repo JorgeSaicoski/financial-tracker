@@ -1,6 +1,6 @@
 // Package ledgerservice is the only place in financial-tracker that knows
 // ledger-service's wire format (POST/GET /transactions). It is consumed
-// through application/sync's LedgerGateway port — since the local SQLite
+// through the application layer's LedgerGateway port — since the local SQLite
 // database became the source of truth, nothing in the request path talks
 // to ledger-service anymore.
 package ledgerservice
