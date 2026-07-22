@@ -33,12 +33,12 @@ func (uc *updateMovementUseCase) Execute(ctx context.Context, id string, input U
 		return UpdateMovementResult{}, err
 	}
 	if movement.IsCancelled() {
-		return UpdateMovementResult{}, apperrors.ErrConflict
+		return UpdateMovementResult{}, fmt.Errorf("%w: movement is already cancelled", apperrors.ErrConflict)
 	}
 	if movement.IsReversal() {
 		// A reversal is itself a compensating entry; editing it would
 		// desync it from the movement it exists to cancel.
-		return UpdateMovementResult{}, apperrors.ErrConflict
+		return UpdateMovementResult{}, fmt.Errorf("%w: can't edit a reversal movement", apperrors.ErrConflict)
 	}
 
 	editsFinancial := input.Amount != nil || input.Currency != nil || input.Timestamp != nil
