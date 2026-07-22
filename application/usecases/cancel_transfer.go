@@ -30,6 +30,9 @@ func (uc *cancelTransferUseCase) Execute(ctx context.Context, transferID string)
 	if len(legs) == 0 {
 		return CancelTransferResult{}, apperrors.ErrNotFound
 	}
+	if len(legs) != 2 || legs[0].Amount >= 0 || legs[1].Amount <= 0 {
+		return CancelTransferResult{}, apperrors.ErrNotFound
+	}
 
 	var result CancelTransferResult
 	anySynced := false
