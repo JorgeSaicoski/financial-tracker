@@ -236,6 +236,16 @@ func createReversalTx(ctx context.Context, tx *sql.Tx, reversal *dto.MovementDTO
 		return err
 	}
 	if affected == 0 {
+		// A concurrent cancel won the race between our SELECT and this
+		// UPDATE, so our own reversal insert above is now an orphan: it
+		// exists but nothing points at it. Delete it explicitly rather than
+		// relying solely on the caller rolling back — CreateReversal must
+		// not leave an unlinked reversal row behind even if it's called
+		// inside a Transact whose caller went on to commit anyway despite
+		// this error.
+		if _, delErr := tx.ExecContext(ctx, `DELETE FROM movements WHERE id = $1`, reversal.ID); delErr != nil {
+			return fmt.Errorf("postgresql: clean up orphan reversal after conflict: %w", delErr)
+		}
 		return apperrors.ErrConflict
 	}
 	return nil

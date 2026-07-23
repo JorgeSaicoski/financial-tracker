@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/JorgeSaicoski/financial-tracker/application/repositories"
@@ -55,7 +56,13 @@ func main() {
 			log.Error("DATABASE_URL is required when DB_DRIVER=postgres")
 			os.Exit(1)
 		}
-		db, err = postgresql.Open(databaseURL)
+		poolConfig := postgresql.PoolConfig{
+			MaxOpenConns:    intEnvOr(log, "POSTGRES_MAX_OPEN_CONNS", postgresql.DefaultPoolConfig.MaxOpenConns),
+			MaxIdleConns:    intEnvOr(log, "POSTGRES_MAX_IDLE_CONNS", postgresql.DefaultPoolConfig.MaxIdleConns),
+			ConnMaxLifetime: durationEnvOr(log, "POSTGRES_CONN_MAX_LIFETIME", postgresql.DefaultPoolConfig.ConnMaxLifetime),
+			ConnMaxIdleTime: durationEnvOr(log, "POSTGRES_CONN_MAX_IDLE_TIME", postgresql.DefaultPoolConfig.ConnMaxIdleTime),
+		}
+		db, err = postgresql.Open(databaseURL, poolConfig)
 		if err != nil {
 			log.Error("opening database failed: %v", err)
 			os.Exit(1)
@@ -164,4 +171,17 @@ func durationEnvOr(log applogger.Logger, key string, fallback time.Duration) tim
 		return fallback
 	}
 	return d
+}
+
+func intEnvOr(log applogger.Logger, key string, fallback int) int {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		log.Error("invalid %s %q, using default %d", key, raw, fallback)
+		return fallback
+	}
+	return n
 }

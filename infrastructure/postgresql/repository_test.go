@@ -12,6 +12,7 @@ import (
 	"github.com/JorgeSaicoski/financial-tracker/application/repositories"
 	"github.com/JorgeSaicoski/financial-tracker/domain/entities"
 	apperrors "github.com/JorgeSaicoski/financial-tracker/pkg/errors"
+	"github.com/JorgeSaicoski/financial-tracker/pkg/id"
 )
 
 // openTestDB connects to TEST_DATABASE_URL, applies migrations, and wipes
@@ -27,7 +28,7 @@ func openTestDB(t *testing.T) *sql.DB {
 		t.Skip("TEST_DATABASE_URL not set; skipping Postgres repository tests")
 	}
 
-	db, err := Open(url)
+	db, err := Open(url, PoolConfig{})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -252,6 +253,95 @@ func TestCreateReversalLinksAtomically(t *testing.T) {
 	}
 }
 
+// TestCreateReversalCleansUpOrphanWhenCallerSwallowsConflict targets the
+// specific gap createReversalTx's post-conflict DELETE closes: a top-level
+// CreateReversal call always rolls back its own self-contained transaction
+// on any error, so a plain conflict alone never leaves an orphan row
+// regardless of the DELETE — that only matters when CreateReversal runs
+// inside a caller's own Transact and that caller treats "already reversed"
+// as a handled, non-fatal case (returning nil instead of propagating the
+// conflict), letting the transaction commit anyway.
+//
+// Reproducing that precisely needs the loser's reversal row to already be
+// inserted by the time its link UPDATE loses the race — which a plain
+// goroutine race can't guarantee happens on every run (the loser might
+// instead observe the original as already reversed before ever inserting,
+// same as TestCreateReversalLinksAtomically's sequential second call, which
+// exercises a different, uninteresting path here). So this test drives the
+// interleaving directly with two raw transactions and createReversalTx
+// (the unexported function movementRepositoryTx.CreateReversal itself
+// calls) instead of relying on goroutine scheduling: the loser's link
+// UPDATE is made to block on the winner's row lock, and only released
+// (via the winner's commit) once the loser is guaranteed to be sitting on
+// its own already-inserted, not-yet-linked reversal row.
+func TestCreateReversalCleansUpOrphanWhenCallerSwallowsConflict(t *testing.T) {
+	db := openTestDB(t)
+	repo := NewMovementRepository(db)
+	ctx := context.Background()
+
+	original, err := repo.Create(ctx, testMovement(-450))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	txWinner, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	winner := testMovement(450)
+	winner.ID = id.NewUUID() // createReversalTx doesn't assign one; callers normally do (see movementRepositoryTx.CreateReversal)
+	winner.CancelsMovementID = &original.ID
+	if err := createReversalTx(ctx, txWinner, winner); err != nil {
+		t.Fatalf("winner reversal failed: %v", err)
+	}
+	// txWinner is deliberately left open (not committed) here: the loser's
+	// SELECT below must still see the original as unreversed, and its
+	// UPDATE must still find the row unlocked-by-value-but-lockable, for
+	// this to reproduce the real race window.
+
+	txLoser, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loser := testMovement(450)
+	loser.ID = id.NewUUID()
+	loser.CancelsMovementID = &original.ID
+
+	loserErrCh := make(chan error, 1)
+	go func() {
+		// createReversalTx's link UPDATE blocks here on txWinner's row
+		// lock until the commit below releases it — by which point
+		// loser's reversal row has already been inserted (uncommitted,
+		// but present in txLoser), exactly reproducing "insert landed,
+		// link lost the race."
+		loserErrCh <- createReversalTx(ctx, txLoser, loser)
+	}()
+
+	// Generous margin for the goroutine to reach the blocking UPDATE
+	// before the lock it's waiting on is released.
+	time.Sleep(200 * time.Millisecond)
+	if err := txWinner.Commit(); err != nil {
+		t.Fatalf("commit winner: %v", err)
+	}
+
+	loserErr := <-loserErrCh
+	if !errors.Is(loserErr, apperrors.ErrConflict) {
+		t.Fatalf("loser: want ErrConflict, got %v", loserErr)
+	}
+
+	// Simulate a caller that treats the conflict as handled and commits
+	// the transaction anyway, instead of propagating the error and
+	// rolling back — the scenario createReversalTx's own cleanup exists
+	// for, since nothing else will undo the insert in this case.
+	if err := txLoser.Commit(); err != nil {
+		t.Fatalf("commit loser: %v", err)
+	}
+
+	if _, err := repo.GetByID(ctx, loser.ID); !errors.Is(err, apperrors.ErrNotFound) {
+		t.Errorf("loser's reversal row must have been cleaned up even though its transaction committed, got %v", err)
+	}
+}
+
 func TestMovementUpdateMetadataAndFinancial(t *testing.T) {
 	db := openTestDB(t)
 	repo := NewMovementRepository(db)
@@ -465,5 +555,146 @@ func TestPurchaseCreateWithInstallments(t *testing.T) {
 	}
 	if err := purchases.MarkCancelled(ctx, "missing"); !errors.Is(err, apperrors.ErrNotFound) {
 		t.Errorf("cancel missing purchase: want ErrNotFound, got %v", err)
+	}
+}
+
+// TestCurrencyRepositoryListAndAdd doesn't use openTestDB's truncation —
+// migrations/postgres/003 seeds usd/brl once and never re-runs, so the
+// currencies table (unlike the others) accumulates across the whole test
+// binary. The code used here is chosen to be distinct from any other
+// test's fixtures and is checked by exact count, not by asserting the
+// list's total size.
+func TestCurrencyRepositoryListAndAdd(t *testing.T) {
+	repo := NewCurrencyRepository(openTestDB(t))
+	ctx := context.Background()
+
+	seeded, err := repo.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsString(seeded, "usd") || !containsString(seeded, "brl") {
+		t.Fatalf("expected seeded usd/brl currencies, got %v", seeded)
+	}
+
+	const code = "zzz_test_currency"
+	if err := repo.Add(ctx, code); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	// Adding an existing code is a no-op, not an error.
+	if err := repo.Add(ctx, code); err != nil {
+		t.Fatalf("add duplicate: %v", err)
+	}
+
+	all, err := repo.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := 0
+	for _, c := range all {
+		if c == code {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("want exactly one %q in currency list, got %d (list: %v)", code, count, all)
+	}
+}
+
+func containsString(list []string, want string) bool {
+	for _, s := range list {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}
+
+func TestAccountRepositoryListByUser(t *testing.T) {
+	repo := NewAccountRepository(openTestDB(t))
+	ctx := context.Background()
+	userID := "00000000-0000-0000-0000-000000000001"
+	otherUserID := "00000000-0000-0000-0000-000000000002"
+
+	// Inserted out of alphabetical order to verify ListByUser sorts by name.
+	for _, name := range []string{"savings", "wallet", "brokerage"} {
+		_, err := repo.Create(ctx, &dto.AccountDTO{
+			UserID: userID, Name: name, Type: string(entities.AccountTypeBank),
+			Currency: "usd", CreatedAt: nowTruncated(),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A different user's account must never show up in userID's list.
+	if _, err := repo.Create(ctx, &dto.AccountDTO{
+		UserID: otherUserID, Name: "other-account", Type: string(entities.AccountTypeCash),
+		Currency: "usd", CreatedAt: nowTruncated(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := repo.ListByUser(ctx, userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("listed %d accounts, want 3", len(got))
+	}
+	if got[0].Name != "brokerage" || got[1].Name != "savings" || got[2].Name != "wallet" {
+		t.Errorf("ListByUser not alphabetical: %s, %s, %s", got[0].Name, got[1].Name, got[2].Name)
+	}
+	for _, a := range got {
+		if a.UserID != userID {
+			t.Errorf("ListByUser leaked another user's account: %+v", a)
+		}
+	}
+}
+
+func TestAccountSnapshotsRoundtrip(t *testing.T) {
+	db := openTestDB(t)
+	repo := NewAccountRepository(db)
+	ctx := context.Background()
+	now := nowTruncated()
+
+	account, err := repo.Create(ctx, &dto.AccountDTO{
+		UserID: "00000000-0000-0000-0000-000000000001", Name: "wallet",
+		Type: string(entities.AccountTypeCash), Currency: "usd", CreatedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i, balance := range []int64{1000, 1500, 2000} {
+		snap := &dto.AccountSnapshotDTO{
+			AccountID: account.ID, Balance: balance,
+			Timestamp: now.Add(time.Duration(i) * time.Hour), CreatedAt: now,
+		}
+		created, err := repo.AddSnapshot(ctx, snap)
+		if err != nil {
+			t.Fatalf("add snapshot %d: %v", i, err)
+		}
+		if created.ID == "" {
+			t.Fatal("no snapshot id generated")
+		}
+	}
+
+	latest, err := repo.LatestSnapshots(ctx, account.ID, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(latest) != 2 {
+		t.Fatalf("want 2 latest snapshots, got %d", len(latest))
+	}
+	// Newest first.
+	if latest[0].Balance != 2000 || latest[1].Balance != 1500 {
+		t.Errorf("wrong order/values: %d, %d", latest[0].Balance, latest[1].Balance)
+	}
+
+	all, err := repo.LatestSnapshots(ctx, account.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("want all 3 snapshots when n exceeds count, got %d", len(all))
 	}
 }

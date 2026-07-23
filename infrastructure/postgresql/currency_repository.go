@@ -13,7 +13,7 @@ type currencyRepository struct {
 	db *sql.DB
 }
 
-// NewCurrencyRepository returns the domain interface type, not the
+// NewCurrencyRepository returns the application interface type, not the
 // concrete struct, so callers depend only on the contract.
 func NewCurrencyRepository(db *sql.DB) repositories.CurrencyRepository {
 	return &currencyRepository{db: db}

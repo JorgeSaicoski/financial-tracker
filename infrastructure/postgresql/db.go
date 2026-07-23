@@ -16,14 +16,59 @@ import (
 	pgmigrations "github.com/JorgeSaicoski/financial-tracker/migrations/postgres"
 )
 
-// Open opens a connection pool to the given Postgres DATABASE_URL. Unlike
-// SQLite, Postgres handles concurrent writers itself, so no connection
-// limit is imposed here.
-func Open(databaseURL string) (*sql.DB, error) {
+// PoolConfig bounds the connection pool Open creates. A zero-valued field
+// (including a zero PoolConfig{} entirely) falls back to the matching
+// DefaultPoolConfig value, so callers that don't care can pass PoolConfig{}.
+type PoolConfig struct {
+	MaxOpenConns    int
+	MaxIdleConns    int
+	ConnMaxLifetime time.Duration
+	ConnMaxIdleTime time.Duration
+}
+
+// DefaultPoolConfig is sized for one financial-tracker API instance talking
+// to one Postgres database — not a high-throughput multi-tenant service.
+var DefaultPoolConfig = PoolConfig{
+	MaxOpenConns:    10,
+	MaxIdleConns:    5,
+	ConnMaxLifetime: 30 * time.Minute,
+	ConnMaxIdleTime: 5 * time.Minute,
+}
+
+// Open opens a connection pool to the given Postgres DATABASE_URL, bounded
+// by cfg. Unlike SQLite (which this package's sibling caps at a single
+// connection because SQLite itself only has one writer), Postgres handles
+// concurrent writers fine — but an unbounded database/sql pool in an HTTP
+// API can still grow without limit under load and exhaust Postgres's own
+// max_connections, so the pool is capped here instead of left at Go's
+// default of "unlimited".
+func Open(databaseURL string, cfg PoolConfig) (*sql.DB, error) {
 	db, err := sql.Open("pgx", databaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("postgresql: open: %w", err)
 	}
+
+	maxOpenConns := cfg.MaxOpenConns
+	if maxOpenConns <= 0 {
+		maxOpenConns = DefaultPoolConfig.MaxOpenConns
+	}
+	maxIdleConns := cfg.MaxIdleConns
+	if maxIdleConns <= 0 {
+		maxIdleConns = DefaultPoolConfig.MaxIdleConns
+	}
+	connMaxLifetime := cfg.ConnMaxLifetime
+	if connMaxLifetime <= 0 {
+		connMaxLifetime = DefaultPoolConfig.ConnMaxLifetime
+	}
+	connMaxIdleTime := cfg.ConnMaxIdleTime
+	if connMaxIdleTime <= 0 {
+		connMaxIdleTime = DefaultPoolConfig.ConnMaxIdleTime
+	}
+	db.SetMaxOpenConns(maxOpenConns)
+	db.SetMaxIdleConns(maxIdleConns)
+	db.SetConnMaxLifetime(connMaxLifetime)
+	db.SetConnMaxIdleTime(connMaxIdleTime)
+
 	if err := db.Ping(); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("postgresql: ping: %w", err)
@@ -91,19 +136,50 @@ func Migrate(db *sql.DB) error {
 }
 
 // splitStatements breaks a migration script into individual statements on
-// ';' boundaries, respecting single-quoted string literals so a semicolon
-// inside a string (e.g. a default value) doesn't split mid-statement.
+// ';' boundaries, respecting single-quoted string literals (including the
+// standard SQL escaped-quote convention of doubling the quote character,
+// e.g. O + quote + quote + Reilly for a literal O'Reilly) and '--' line
+// comments, so a semicolon or apostrophe inside either doesn't split
+// mid-statement or desync the parser's quote-tracking for the rest of the
+// file.
 func splitStatements(script string) []string {
 	var stmts []string
 	var buf strings.Builder
 	inQuote := false
+	inLineComment := false
 
 	for i := 0; i < len(script); i++ {
 		c := script[i]
-		buf.WriteByte(c)
-		if c == '\'' {
-			inQuote = !inQuote
+
+		if inLineComment {
+			buf.WriteByte(c)
+			if c == '\n' {
+				inLineComment = false
+			}
+			continue
 		}
+
+		if !inQuote && c == '-' && i+1 < len(script) && script[i+1] == '-' {
+			inLineComment = true
+			buf.WriteByte(c)
+			continue
+		}
+
+		if c == '\'' {
+			if inQuote && i+1 < len(script) && script[i+1] == '\'' {
+				// '' inside a string is an escaped literal quote, not the
+				// closing quote — consume both bytes and stay in-string.
+				buf.WriteByte(c)
+				buf.WriteByte(script[i+1])
+				i++
+				continue
+			}
+			inQuote = !inQuote
+			buf.WriteByte(c)
+			continue
+		}
+
+		buf.WriteByte(c)
 		if c == ';' && !inQuote {
 			stmts = append(stmts, buf.String())
 			buf.Reset()
