@@ -55,9 +55,14 @@ repository interfaces, service ports, and use-case interfaces:
 
 ```
 domain/entities              Movement, CreditCardPurchase, Account (+snapshots),
-                             fixed Category/PaymentMethod/AccountType lists
+                             fixed Category/PaymentMethod/AccountType lists; single-entity
+                             rules live here too (e.g. Account.Send()/Receive() for transfers)
+application/dto              MovementDTO, AccountDTO, CreditCardPurchaseDTO — what
+                             repositories/services/usecases actually pass to each other,
+                             converted from domain entities at the infrastructure boundary
 application/repositories     MovementRepository, CreditCardPurchaseRepository,
-                             AccountRepository, CurrencyRepository interfaces — the swap points
+                             AccountRepository, CurrencyRepository interfaces, expressed in
+                             application/dto types — the swap points
 application/services         LedgerGateway, SyncTrigger, SyncRunner — service contracts the
                              application defines; sync/infrastructure implement them
 application/usecases         all use-case interfaces + Input/Result types in interfaces.go;
@@ -68,27 +73,25 @@ application/usecases         all use-case interfaces + Input/Result types in int
                              GetCashflow, ListCurrencies, AddCurrency
 application/sync             SyncService: pushes pending movements to ledger-service via the
                              LedgerGateway port (background ticker + manual trigger)
-infrastructure/sqlite        implements the repositories on the local SQLite DB (source of truth)
+infrastructure/sqlite        implements the repositories on the local SQLite DB (source of truth,
+                             the default)
+infrastructure/postgresql    same repository contracts on Postgres instead, selected via
+                             DB_DRIVER=postgres
 infrastructure/ledgerservice HTTP client for ledger-service + LedgerGateway adapter
   /entities                  internal wire structs matching ledger-service's JSON
 interfaces/api               HTTP handlers + router (what the Svelte app calls)
 interfaces/dto               API request/response shapes
 migrations/                  financial-tracker's own SQLite schema, embedded into the binary
+migrations/postgres          the same schema ported to Postgres dialect, embedded separately
 pkg/errors, pkg/logger, pkg/id  shared utilities
 cmd/api/main.go              wiring/entrypoint
 web/                         SvelteKit frontend
 ```
 
-Two things this diagram intentionally does **not** paper over — see
-`contributing/architecture.md` for both in full: there's no
-`application/dto` layer yet, so the repository/usecase contracts above
-are typed against `domain/entities` directly instead of an
-application-level DTO (a known gap against the CleanExampleGo reference,
-not an accepted variant of it); and single-entity business logic that
-should live as a method on an entity (e.g. an account producing the
-movement it sends/receives in a transfer) is currently inlined in
-usecases instead.
-```
+See `contributing/architecture.md` for the full layer-by-layer rationale
+(why `application/dto` is a separate contract from `interfaces/dto`, why
+single-entity logic like `Account.Send`/`Receive` belongs on the entity
+rather than inlined in a usecase, and so on).
 
 Every constructor returns its interface type, not the concrete struct —
 each layer depends on a contract instead of an implementation. Usecases
@@ -193,6 +196,11 @@ already set in `docker-compose.yml` — without it `npm install` fails with
    Listens on `:8081`, stores data at `DB_PATH` (default
    `./data/financial-tracker.db`), syncs to `LEDGER_SERVICE_URL`
    (default `http://localhost:8080`) every `SYNC_INTERVAL` (default 30s).
+
+   Set `DB_DRIVER=postgres` and `DATABASE_URL=postgres://...` to run against
+   Postgres instead — `DB_PATH` is then ignored. Both drivers apply their
+   own embedded migrations on startup and implement the same repository
+   contracts, so usecases/handlers behave identically either way.
 2. **ledger-service** (separate repo, has its own compose file) — optional
    at runtime:
    ```bash
@@ -222,7 +230,14 @@ Automated tests cover the trickiest correctness points: cancel semantics
 rejection), installment split math (signed amounts, remainder cents,
 too-small totals), balance calculation with cancelled movements, the sync
 pass (success/failure recording, retry cooldown vs manual sync), and the
-SQLite repositories (including the atomic reversal link).
+SQLite repositories (including the atomic reversal link). The Postgres
+repositories in `infrastructure/postgresql` mirror the same test suite but
+only run against a real database, guarded by `TEST_DATABASE_URL` — unset,
+they're skipped so `go test ./...` still passes offline:
+
+```bash
+TEST_DATABASE_URL="postgres://user:password@localhost:5432/financial_tracker_test?sslmode=disable" go test ./infrastructure/postgresql/...
+```
 
 Manually smoke-tested end-to-end: movements created/listed/cancelled with
 ledger-service **down**, then a `POST /sync` after bringing it up pushed

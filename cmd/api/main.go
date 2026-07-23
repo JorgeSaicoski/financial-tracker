@@ -2,13 +2,17 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
+	"github.com/JorgeSaicoski/financial-tracker/application/repositories"
 	syncapp "github.com/JorgeSaicoski/financial-tracker/application/sync"
 	"github.com/JorgeSaicoski/financial-tracker/application/usecases"
 	"github.com/JorgeSaicoski/financial-tracker/infrastructure/ledgerservice"
+	"github.com/JorgeSaicoski/financial-tracker/infrastructure/postgresql"
 	"github.com/JorgeSaicoski/financial-tracker/infrastructure/sqlite"
 	"github.com/JorgeSaicoski/financial-tracker/interfaces/api"
 	"github.com/JorgeSaicoski/financial-tracker/interfaces/api/handlers"
@@ -25,30 +29,71 @@ func main() {
 	defaultCurrency := envOr("DEFAULT_CURRENCY", "usd")
 	port := envOr("PORT", "8081")
 	dbPath := envOr("DB_PATH", "./data/financial-tracker.db")
+	dbDriver := envOr("DB_DRIVER", "sqlite")
 
 	log := applogger.New()
 
 	syncInterval := durationEnvOr(log, "SYNC_INTERVAL", 30*time.Second)
 	retryCooldown := durationEnvOr(log, "SYNC_RETRY_COOLDOWN", 60*time.Second)
 
-	// Infrastructure: the local SQLite database is the source of truth;
-	// ledger-service is only reached by the background sync, so requests
-	// keep working while it's down.
-	db, err := sqlite.Open(dbPath)
-	if err != nil {
-		log.Error("opening database failed: %v", err)
+	// Infrastructure: the local database (SQLite by default, or Postgres
+	// when DB_DRIVER=postgres) is the source of truth; ledger-service is
+	// only reached by the background sync, so requests keep working while
+	// it's down.
+	var (
+		db           *sql.DB
+		err          error
+		movementRepo repositories.MovementRepository
+		purchaseRepo repositories.CreditCardPurchaseRepository
+		accountRepo  repositories.AccountRepository
+		currencyRepo repositories.CurrencyRepository
+	)
+
+	switch dbDriver {
+	case "postgres":
+		databaseURL := os.Getenv("DATABASE_URL")
+		if databaseURL == "" {
+			log.Error("DATABASE_URL is required when DB_DRIVER=postgres")
+			os.Exit(1)
+		}
+		poolConfig := postgresql.PoolConfig{
+			MaxOpenConns:    intEnvOr(log, "POSTGRES_MAX_OPEN_CONNS", postgresql.DefaultPoolConfig.MaxOpenConns),
+			MaxIdleConns:    intEnvOr(log, "POSTGRES_MAX_IDLE_CONNS", postgresql.DefaultPoolConfig.MaxIdleConns),
+			ConnMaxLifetime: durationEnvOr(log, "POSTGRES_CONN_MAX_LIFETIME", postgresql.DefaultPoolConfig.ConnMaxLifetime),
+			ConnMaxIdleTime: durationEnvOr(log, "POSTGRES_CONN_MAX_IDLE_TIME", postgresql.DefaultPoolConfig.ConnMaxIdleTime),
+		}
+		db, err = postgresql.Open(databaseURL, poolConfig)
+		if err != nil {
+			log.Error("opening database failed: %v", err)
+			os.Exit(1)
+		}
+		if err := postgresql.Migrate(db); err != nil {
+			log.Error("migrating database failed: %v", err)
+			os.Exit(1)
+		}
+		movementRepo = postgresql.NewMovementRepository(db)
+		purchaseRepo = postgresql.NewCreditCardPurchaseRepository(db)
+		accountRepo = postgresql.NewAccountRepository(db)
+		currencyRepo = postgresql.NewCurrencyRepository(db)
+	case "sqlite":
+		db, err = sqlite.Open(dbPath)
+		if err != nil {
+			log.Error("opening database failed: %v", err)
+			os.Exit(1)
+		}
+		if err := sqlite.Migrate(db); err != nil {
+			log.Error("migrating database failed: %v", err)
+			os.Exit(1)
+		}
+		movementRepo = sqlite.NewMovementRepository(db)
+		purchaseRepo = sqlite.NewCreditCardPurchaseRepository(db)
+		accountRepo = sqlite.NewAccountRepository(db)
+		currencyRepo = sqlite.NewCurrencyRepository(db)
+	default:
+		log.Error("unknown DB_DRIVER %q (want sqlite or postgres)", dbDriver)
 		os.Exit(1)
 	}
 	defer db.Close()
-	if err := sqlite.Migrate(db); err != nil {
-		log.Error("migrating database failed: %v", err)
-		os.Exit(1)
-	}
-
-	movementRepo := sqlite.NewMovementRepository(db)
-	purchaseRepo := sqlite.NewCreditCardPurchaseRepository(db)
-	accountRepo := sqlite.NewAccountRepository(db)
-	currencyRepo := sqlite.NewCurrencyRepository(db)
 
 	ledgerClient := ledgerservice.NewClient(ledgerServiceURL)
 	ledgerGateway := ledgerservice.NewLedgerGateway(ledgerClient)
@@ -94,8 +139,12 @@ func main() {
 	defer stop()
 	syncService.Start(ctx, syncInterval)
 
+	dbDescription := dbPath
+	if dbDriver == "postgres" {
+		dbDescription = "postgres"
+	}
 	addr := ":" + port
-	log.Info("financial-tracker API listening on %s (db %s, syncing to ledger-service at %s every %s)", addr, dbPath, ledgerServiceURL, syncInterval)
+	log.Info("financial-tracker API listening on %s (db driver %s at %s, syncing to ledger-service at %s every %s)", addr, dbDriver, dbDescription, ledgerServiceURL, syncInterval)
 	log.Info("endpoints: POST /movements | GET /movements | PATCH /movements/{id} | POST /movements/{id}/cancel | POST /credit-card-purchases/{id}/cancel | POST /sync | GET /categories | GET /cashflow | GET|POST /accounts | POST /accounts/{id}/balance | GET|POST /currencies | POST /transfers | POST /transfers/{id}/cancel")
 
 	if err := http.ListenAndServe(addr, router); err != nil {
@@ -122,4 +171,17 @@ func durationEnvOr(log applogger.Logger, key string, fallback time.Duration) tim
 		return fallback
 	}
 	return d
+}
+
+func intEnvOr(log applogger.Logger, key string, fallback int) int {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		log.Error("invalid %s %q, using default %d", key, raw, fallback)
+		return fallback
+	}
+	return n
 }
