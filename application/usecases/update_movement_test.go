@@ -216,6 +216,19 @@ func TestUpdateMovementRejectsInstallmentFinancialEdit(t *testing.T) {
 	}
 }
 
+func TestUpdateMovementRejectsTransferFinancialEdit(t *testing.T) {
+	repo := newFakeMovementRepo()
+	m := activeMovement("m1", -500, entities.SyncStatusPending)
+	transferID := "t1"
+	m.TransferID = &transferID
+	repo.add(m)
+
+	uc := NewUpdateMovement(repo, newFakeAccountRepo(), &fakeSyncTrigger{})
+	if _, err := uc.Execute(context.Background(), "m1", UpdateMovementInput{Amount: int64Ptr(-1)}); !errors.Is(err, apperrors.ErrConflict) {
+		t.Fatalf("want ErrConflict, got %v", err)
+	}
+}
+
 func TestUpdateMovementValidatesLikeCreate(t *testing.T) {
 	repo := newFakeMovementRepo()
 	accounts := newFakeAccountRepo()
