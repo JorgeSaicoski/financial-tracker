@@ -22,11 +22,13 @@
 		<ul class="quick-actions">
 			{#each quickActions as action (action.label)}
 				<li>
-					<button type="button" disabled title="Coming soon — FRONT-07">
-						<span class="icon">{action.icon}</span>
-						<span class="label">{action.label}</span>
-						<span class="soon">soon</span>
-					</button>
+					<span title="Coming soon — FRONT-07">
+						<button type="button" disabled>
+							<span class="icon">{action.icon}</span>
+							<span class="label">{action.label}</span>
+							<span class="soon">soon</span>
+						</button>
+					</span>
 				</li>
 			{/each}
 		</ul>
@@ -35,11 +37,13 @@
 	<div class="section">
 		<span class="section-label">Cards</span>
 		<p class="empty-hint">No cards registered yet.</p>
-		<button type="button" class="add-card" disabled title="Coming soon — BACK-08 + FRONT-07">
-			<span class="icon">💳</span>
-			<span class="label">Add card</span>
-			<span class="soon">soon</span>
-		</button>
+		<span title="Coming soon — BACK-08 + FRONT-07">
+			<button type="button" class="add-card" disabled>
+				<span class="icon">💳</span>
+				<span class="label">Add card</span>
+				<span class="soon">soon</span>
+			</button>
+		</span>
 	</div>
 </aside>
 

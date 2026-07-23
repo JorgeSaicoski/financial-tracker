@@ -551,15 +551,6 @@
 </main>
 
 <style>
-	:global(body) {
-		margin: 0;
-		background: var(--color-bg);
-	}
-
-	:global(*) {
-		box-sizing: border-box;
-	}
-
 	main {
 		max-width: 560px;
 		margin: 0 auto;
@@ -577,7 +568,6 @@
 
 	h1 {
 		font: var(--text-page-title);
-		font-size: 1.5rem;
 		margin: 0;
 		color: var(--color-primary);
 		letter-spacing: -0.02em;
