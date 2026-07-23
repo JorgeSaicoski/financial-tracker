@@ -47,7 +47,7 @@ func (uc *updateMovementUseCase) Execute(ctx context.Context, id string, input U
 	if editsFinancial && movement.CreditCardPurchaseID != nil {
 		return UpdateMovementResult{}, fmt.Errorf(
 			"%w: can't edit one installment's amount, currency or timestamp — cancel the purchase instead",
-			apperrors.ErrInvalidInput)
+			apperrors.ErrConflict)
 	}
 	if editsFinancial && movement.TransferID != nil {
 		// Editing one leg's amount/currency/timestamp alone would break
