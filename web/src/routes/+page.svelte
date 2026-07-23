@@ -274,6 +274,8 @@
 	}
 
 	async function handleUpdateMovement(id, patch) {
+		error = '';
+		notice = '';
 		const result = await updateMovement(id, patch);
 		notice = result.replacement
 			? 'Correction recorded: the original was reversed and a replacement created with the new values'
