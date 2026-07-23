@@ -54,7 +54,7 @@ func (uc *updateMovementUseCase) Execute(ctx context.Context, id string, input U
 		// the transfer's zero-net-worth invariant.
 		return UpdateMovementResult{}, fmt.Errorf(
 			"%w: can't edit one transfer leg's amount, currency or timestamp — cancel the transfer instead",
-			apperrors.ErrInvalidInput)
+			apperrors.ErrConflict)
 	}
 
 	description := orDefault(input.Description, movement.Description)
