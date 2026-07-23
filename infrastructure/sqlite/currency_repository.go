@@ -3,10 +3,12 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/JorgeSaicoski/financial-tracker/application/repositories"
+	apperrors "github.com/JorgeSaicoski/financial-tracker/pkg/errors"
 )
 
 type currencyRepository struct {
@@ -45,4 +47,16 @@ func (r *currencyRepository) Add(ctx context.Context, code string) error {
 		return fmt.Errorf("sqlite: insert currency: %w", err)
 	}
 	return nil
+}
+
+func (r *currencyRepository) Decimals(ctx context.Context, code string) (int, error) {
+	var decimals int
+	err := r.db.QueryRowContext(ctx, `SELECT decimals FROM currencies WHERE code = ?`, code).Scan(&decimals)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, apperrors.ErrNotFound
+	}
+	if err != nil {
+		return 0, fmt.Errorf("sqlite: query currency decimals: %w", err)
+	}
+	return decimals, nil
 }
