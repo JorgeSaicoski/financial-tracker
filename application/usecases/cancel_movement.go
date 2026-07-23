@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/JorgeSaicoski/financial-tracker/application/dto"
 	"github.com/JorgeSaicoski/financial-tracker/application/repositories"
 	"github.com/JorgeSaicoski/financial-tracker/application/services"
 	"github.com/JorgeSaicoski/financial-tracker/domain/entities"
@@ -49,8 +50,11 @@ func (uc *cancelMovementUseCase) Execute(ctx context.Context, id string) (Cancel
 }
 
 // cancelOne applies the cancel semantics to one movement; shared with the
-// purchase-level cancel.
-func cancelOne(ctx context.Context, repo repositories.MovementRepository, movement *entities.Movement) (CancelMovementResult, error) {
+// purchase-level and transfer-level cancels. It receives and returns
+// application DTOs (the contract currency), converting to the domain
+// entity internally to run its business-rule checks.
+func cancelOne(ctx context.Context, repo repositories.MovementRepository, movementDTO *dto.MovementDTO) (CancelMovementResult, error) {
+	movement := movementDTO.ToEntity()
 	if movement.IsReversal() {
 		// Cancelling a reversal would spawn reversal-of-reversal chains;
 		// re-create the original movement instead if the cancel was a
@@ -68,8 +72,8 @@ func cancelOne(ctx context.Context, repo repositories.MovementRepository, moveme
 		if err := repo.Void(ctx, movement.ID); err != nil {
 			return CancelMovementResult{}, err
 		}
-		movement.Status = entities.MovementStatusVoided
-		return CancelMovementResult{Movement: movement}, nil
+		movementDTO.Status = string(entities.MovementStatusVoided)
+		return CancelMovementResult{Movement: movementDTO}, nil
 	}
 
 	// Already in ledger-service, which never deletes: compensate with a
@@ -92,10 +96,10 @@ func cancelOne(ctx context.Context, repo repositories.MovementRepository, moveme
 		CreatedAt:         now,
 	}
 
-	reversal, err := repo.CreateReversal(ctx, reversal)
+	reversalDTO, err := repo.CreateReversal(ctx, dto.MovementFromEntity(reversal))
 	if err != nil {
 		return CancelMovementResult{}, err
 	}
-	movement.ReversedByMovementID = &reversal.ID
-	return CancelMovementResult{Movement: movement, Reversal: reversal}, nil
+	movementDTO.ReversedByMovementID = &reversalDTO.ID
+	return CancelMovementResult{Movement: movementDTO, Reversal: reversalDTO}, nil
 }

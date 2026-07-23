@@ -3,8 +3,8 @@ package usecases
 import (
 	"context"
 
+	"github.com/JorgeSaicoski/financial-tracker/application/dto"
 	"github.com/JorgeSaicoski/financial-tracker/application/repositories"
-	"github.com/JorgeSaicoski/financial-tracker/domain/entities"
 	apperrors "github.com/JorgeSaicoski/financial-tracker/pkg/errors"
 )
 
@@ -45,7 +45,7 @@ func buildAccountView(
 	ctx context.Context,
 	accounts repositories.AccountRepository,
 	movements repositories.MovementRepository,
-	account *entities.Account,
+	account *dto.AccountDTO,
 ) (AccountView, error) {
 	view := AccountView{Account: account}
 

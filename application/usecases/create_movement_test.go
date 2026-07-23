@@ -42,16 +42,16 @@ func TestCreateMovementDefaultsAndState(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if m.Category != entities.CategoryOther {
+	if m.Category != string(entities.CategoryOther) {
 		t.Errorf("category = %q, want other", m.Category)
 	}
-	if m.PaymentMethod != entities.PaymentMethodOther {
+	if m.PaymentMethod != string(entities.PaymentMethodOther) {
 		t.Errorf("payment method = %q, want other", m.PaymentMethod)
 	}
-	if m.Status != entities.MovementStatusActive {
+	if m.Status != string(entities.MovementStatusActive) {
 		t.Errorf("status = %q, want active", m.Status)
 	}
-	if m.SyncStatus != entities.SyncStatusPending {
+	if m.SyncStatus != string(entities.SyncStatusPending) {
 		t.Errorf("sync status = %q, want pending", m.SyncStatus)
 	}
 	if m.Timestamp.IsZero() || m.CreatedAt.IsZero() {
@@ -65,13 +65,13 @@ func TestCreateMovementKeepsExplicitFields(t *testing.T) {
 	m, err := uc.Execute(context.Background(), CreateMovementInput{
 		UserID: "u1", Amount: -500, Currency: "usd",
 		Description:   "groceries",
-		Category:      entities.CategoryFood,
-		PaymentMethod: entities.PaymentMethodPix,
+		Category:      string(entities.CategoryFood),
+		PaymentMethod: string(entities.PaymentMethodPix),
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if m.Description != "groceries" || m.Category != entities.CategoryFood || m.PaymentMethod != entities.PaymentMethodPix {
+	if m.Description != "groceries" || m.Category != string(entities.CategoryFood) || m.PaymentMethod != string(entities.PaymentMethodPix) {
 		t.Errorf("fields not preserved: %+v", m)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/JorgeSaicoski/financial-tracker/application/dto"
 	"github.com/JorgeSaicoski/financial-tracker/application/repositories"
 	"github.com/JorgeSaicoski/financial-tracker/application/services"
 	"github.com/JorgeSaicoski/financial-tracker/domain/entities"
@@ -28,10 +29,11 @@ func (uc *updateMovementUseCase) Execute(ctx context.Context, id string, input U
 		return UpdateMovementResult{}, apperrors.ErrInvalidInput
 	}
 
-	movement, err := uc.repo.GetByID(ctx, id)
+	movementDTO, err := uc.repo.GetByID(ctx, id)
 	if err != nil {
 		return UpdateMovementResult{}, err
 	}
+	movement := movementDTO.ToEntity()
 	if movement.IsCancelled() {
 		return UpdateMovementResult{}, fmt.Errorf("%w: movement is already cancelled", apperrors.ErrConflict)
 	}
@@ -58,8 +60,8 @@ func (uc *updateMovementUseCase) Execute(ctx context.Context, id string, input U
 	}
 
 	description := orDefault(input.Description, movement.Description)
-	category := orDefault(input.Category, movement.Category)
-	paymentMethod := orDefault(input.PaymentMethod, movement.PaymentMethod)
+	categoryInput := orDefault(input.Category, string(movement.Category))
+	paymentMethodInput := orDefault(input.PaymentMethod, string(movement.PaymentMethod))
 	amount := orDefault(input.Amount, movement.Amount)
 	currency := movement.Currency
 	if input.Currency != nil {
@@ -79,7 +81,7 @@ func (uc *updateMovementUseCase) Execute(ctx context.Context, id string, input U
 		}
 	}
 
-	category, paymentMethod, err = normalizeCategoryAndMethod(category, paymentMethod)
+	category, paymentMethod, err := normalizeCategoryAndMethod(categoryInput, paymentMethodInput)
 	if err != nil {
 		return UpdateMovementResult{}, err
 	}
@@ -105,13 +107,13 @@ func (uc *updateMovementUseCase) Execute(ctx context.Context, id string, input U
 
 	if !editsFinancial {
 		if editsMetadata {
-			if err := uc.repo.UpdateMetadata(ctx, movement.ID, description, category, paymentMethod, accountID); err != nil {
+			if err := uc.repo.UpdateMetadata(ctx, movement.ID, description, string(category), string(paymentMethod), accountID); err != nil {
 				return UpdateMovementResult{}, err
 			}
-			movement.Description, movement.Category, movement.PaymentMethod, movement.AccountID =
-				description, category, paymentMethod, accountID
+			movementDTO.Description, movementDTO.Category, movementDTO.PaymentMethod, movementDTO.AccountID =
+				description, string(category), string(paymentMethod), accountID
 		}
-		return UpdateMovementResult{Movement: movement}, nil
+		return UpdateMovementResult{Movement: movementDTO}, nil
 	}
 
 	if !movement.IsSynced() {
@@ -122,7 +124,7 @@ func (uc *updateMovementUseCase) Execute(ctx context.Context, id string, input U
 			return UpdateMovementResult{}, err
 		}
 		if editsMetadata {
-			if err := uc.repo.UpdateMetadata(ctx, movement.ID, description, category, paymentMethod, accountID); err != nil {
+			if err := uc.repo.UpdateMetadata(ctx, movement.ID, description, string(category), string(paymentMethod), accountID); err != nil {
 				if rollbackErr := uc.repo.UpdateFinancial(ctx, movement.ID, originalAmount, originalCurrency, originalTimestamp); rollbackErr != nil {
 					return UpdateMovementResult{}, fmt.Errorf(
 						"metadata update failed after financial update and rollback also failed: metadata: %w; rollback: %v",
@@ -130,11 +132,11 @@ func (uc *updateMovementUseCase) Execute(ctx context.Context, id string, input U
 				}
 				return UpdateMovementResult{}, err
 			}
-			movement.Description, movement.Category, movement.PaymentMethod, movement.AccountID =
-				description, category, paymentMethod, accountID
+			movementDTO.Description, movementDTO.Category, movementDTO.PaymentMethod, movementDTO.AccountID =
+				description, string(category), string(paymentMethod), accountID
 		}
-		movement.Amount, movement.Currency, movement.Timestamp = amount, currency, timestamp
-		return UpdateMovementResult{Movement: movement}, nil
+		movementDTO.Amount, movementDTO.Currency, movementDTO.Timestamp = amount, currency, timestamp
+		return UpdateMovementResult{Movement: movementDTO}, nil
 	}
 
 	// Already in ledger-service, which never deletes: compensate the
@@ -144,18 +146,18 @@ func (uc *updateMovementUseCase) Execute(ctx context.Context, id string, input U
 	// it was, just marked reversed, so it remains an accurate record of
 	// what actually synced.
 	var (
-		replacement *entities.Movement
+		replacement *dto.MovementDTO
 		result      CancelMovementResult
 	)
 	err = uc.repo.Transact(ctx, func(tx repositories.MovementRepository) error {
 		var err error
-		result, err = cancelOne(ctx, tx, movement)
+		result, err = cancelOne(ctx, tx, movementDTO)
 		if err != nil {
 			return err
 		}
 
 		now := time.Now().UTC()
-		replacement = &entities.Movement{
+		replacementEntity := &entities.Movement{
 			UserID:        movement.UserID,
 			Amount:        amount,
 			Currency:      currency,
@@ -168,7 +170,7 @@ func (uc *updateMovementUseCase) Execute(ctx context.Context, id string, input U
 			Timestamp:     timestamp,
 			CreatedAt:     now,
 		}
-		replacement, err = tx.Create(ctx, replacement)
+		replacement, err = tx.Create(ctx, dto.MovementFromEntity(replacementEntity))
 		return err
 	})
 	if err != nil {

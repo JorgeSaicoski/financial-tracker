@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/JorgeSaicoski/financial-tracker/application/dto"
 	"github.com/JorgeSaicoski/financial-tracker/application/repositories"
 	"github.com/JorgeSaicoski/financial-tracker/domain/entities"
 	apperrors "github.com/JorgeSaicoski/financial-tracker/pkg/errors"
@@ -20,7 +21,7 @@ func NewCreateMovement(repo repositories.MovementRepository, accounts repositori
 	return &createMovementUseCase{repo: repo, accounts: accounts}
 }
 
-func (uc *createMovementUseCase) Execute(ctx context.Context, input CreateMovementInput) (*entities.Movement, error) {
+func (uc *createMovementUseCase) Execute(ctx context.Context, input CreateMovementInput) (*dto.MovementDTO, error) {
 	if input.UserID == "" || input.Currency == "" || input.Amount == 0 {
 		return nil, apperrors.ErrInvalidInput
 	}
@@ -61,20 +62,24 @@ func (uc *createMovementUseCase) Execute(ctx context.Context, input CreateMoveme
 		CreatedAt:     now,
 	}
 
-	return uc.repo.Create(ctx, movement)
+	return uc.repo.Create(ctx, dto.MovementFromEntity(movement))
 }
 
 // normalizeCategoryAndMethod applies the empty-means-other default and
-// rejects values outside the fixed lists.
-func normalizeCategoryAndMethod(category entities.Category, method entities.PaymentMethod) (entities.Category, entities.PaymentMethod, error) {
-	if category == "" {
-		category = entities.CategoryOther
+// rejects values outside the domain's fixed lists. Inputs arrive as
+// plain strings (application/dto convention); the domain types do the
+// validating.
+func normalizeCategoryAndMethod(category, method string) (entities.Category, entities.PaymentMethod, error) {
+	c := entities.Category(category)
+	m := entities.PaymentMethod(method)
+	if c == "" {
+		c = entities.CategoryOther
 	}
-	if method == "" {
-		method = entities.PaymentMethodOther
+	if m == "" {
+		m = entities.PaymentMethodOther
 	}
-	if !category.IsValid() || !method.IsValid() {
+	if !c.IsValid() || !m.IsValid() {
 		return "", "", apperrors.ErrInvalidInput
 	}
-	return category, method, nil
+	return c, m, nil
 }

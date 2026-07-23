@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/JorgeSaicoski/financial-tracker/application/dto"
+	"github.com/JorgeSaicoski/financial-tracker/application/repositories"
 	"github.com/JorgeSaicoski/financial-tracker/domain/entities"
 	apperrors "github.com/JorgeSaicoski/financial-tracker/pkg/errors"
 )
@@ -25,17 +27,17 @@ func openTestDB(t *testing.T) *sql.DB {
 	return db
 }
 
-func testMovement(amount int64) *entities.Movement {
+func testMovement(amount int64) *dto.MovementDTO {
 	now := time.Now().UTC()
-	return &entities.Movement{
+	return &dto.MovementDTO{
 		UserID:        "00000000-0000-0000-0000-000000000001",
 		Amount:        amount,
 		Currency:      "usd",
 		Description:   "coffee",
-		Category:      entities.CategoryFood,
-		PaymentMethod: entities.PaymentMethodCash,
-		Status:        entities.MovementStatusActive,
-		SyncStatus:    entities.SyncStatusPending,
+		Category:      string(entities.CategoryFood),
+		PaymentMethod: string(entities.PaymentMethodCash),
+		Status:        string(entities.MovementStatusActive),
+		SyncStatus:    string(entities.SyncStatusPending),
 		Timestamp:     now,
 		CreatedAt:     now,
 	}
@@ -58,8 +60,8 @@ func TestMovementCreateGetRoundtrip(t *testing.T) {
 		t.Fatalf("get: %v", err)
 	}
 	if got.Amount != -450 || got.Description != "coffee" ||
-		got.Category != entities.CategoryFood || got.PaymentMethod != entities.PaymentMethodCash ||
-		got.Status != entities.MovementStatusActive || got.SyncStatus != entities.SyncStatusPending {
+		got.Category != string(entities.CategoryFood) || got.PaymentMethod != string(entities.PaymentMethodCash) ||
+		got.Status != string(entities.MovementStatusActive) || got.SyncStatus != string(entities.SyncStatusPending) {
 		t.Errorf("roundtrip mismatch: %+v", got)
 	}
 	if !got.Timestamp.Equal(created.Timestamp) {
@@ -170,7 +172,7 @@ func TestListPendingSyncFilters(t *testing.T) {
 	}
 
 	got, _ := repo.GetByID(ctx, failedRecently.ID)
-	if got.SyncStatus != entities.SyncStatusFailed || got.SyncAttempts != 1 ||
+	if got.SyncStatus != string(entities.SyncStatusFailed) || got.SyncAttempts != 1 ||
 		got.LastSyncError == nil || *got.LastSyncError != "boom" {
 		t.Errorf("failure not recorded: %+v", got)
 	}
@@ -189,7 +191,7 @@ func TestCreateReversalLinksAtomically(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	makeReversal := func() *entities.Movement {
+	makeReversal := func() *dto.MovementDTO {
 		r := testMovement(450)
 		r.CancelsMovementID = &original.ID
 		return r
@@ -237,23 +239,23 @@ func TestMovementUpdateMetadataAndFinancial(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	account, err := NewAccountRepository(db).Create(ctx, &entities.Account{
-		UserID: created.UserID, Name: "wallet", Type: entities.AccountTypeCash,
+	account, err := NewAccountRepository(db).Create(ctx, &dto.AccountDTO{
+		UserID: created.UserID, Name: "wallet", Type: string(entities.AccountTypeCash),
 		Currency: "usd", CreatedAt: time.Now().UTC(),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if err := repo.UpdateMetadata(ctx, created.ID, "renamed", entities.CategoryTransport, entities.PaymentMethodPix, &account.ID); err != nil {
+	if err := repo.UpdateMetadata(ctx, created.ID, "renamed", string(entities.CategoryTransport), string(entities.PaymentMethodPix), &account.ID); err != nil {
 		t.Fatalf("update metadata: %v", err)
 	}
 	got, err := repo.GetByID(ctx, created.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Description != "renamed" || got.Category != entities.CategoryTransport ||
-		got.PaymentMethod != entities.PaymentMethodPix || got.AccountID == nil || *got.AccountID != account.ID {
+	if got.Description != "renamed" || got.Category != string(entities.CategoryTransport) ||
+		got.PaymentMethod != string(entities.PaymentMethodPix) || got.AccountID == nil || *got.AccountID != account.ID {
 		t.Errorf("metadata not persisted: %+v", got)
 	}
 	if got.Amount != -450 {
@@ -275,7 +277,7 @@ func TestMovementUpdateMetadataAndFinancial(t *testing.T) {
 		t.Errorf("metadata must be untouched by UpdateFinancial: %+v", got)
 	}
 
-	if err := repo.UpdateMetadata(ctx, "missing", "x", entities.CategoryOther, entities.PaymentMethodOther, nil); !errors.Is(err, apperrors.ErrNotFound) {
+	if err := repo.UpdateMetadata(ctx, "missing", "x", string(entities.CategoryOther), string(entities.PaymentMethodOther), nil); !errors.Is(err, apperrors.ErrNotFound) {
 		t.Errorf("update metadata on missing id: want ErrNotFound, got %v", err)
 	}
 	if err := repo.UpdateFinancial(ctx, "missing", -1, "usd", time.Now()); !errors.Is(err, apperrors.ErrNotFound) {
@@ -293,7 +295,7 @@ func TestMovementCreateBatchAtomicity(t *testing.T) {
 	credit := testMovement(500)
 	credit.TransferID = &transferID
 
-	created, err := repo.CreateBatch(ctx, []*entities.Movement{debit, credit})
+	created, err := repo.CreateBatch(ctx, []*dto.MovementDTO{debit, credit})
 	if err != nil {
 		t.Fatalf("create batch: %v", err)
 	}
@@ -317,11 +319,63 @@ func TestMovementCreateBatchAtomicity(t *testing.T) {
 	secondOfSecondBatch := testMovement(100)
 	secondOfSecondBatch.ID = dupID
 
-	if _, err := repo.CreateBatch(ctx, []*entities.Movement{firstOfSecondBatch, secondOfSecondBatch}); err == nil {
+	if _, err := repo.CreateBatch(ctx, []*dto.MovementDTO{firstOfSecondBatch, secondOfSecondBatch}); err == nil {
 		t.Fatal("expected the batch to fail on the colliding second leg")
 	}
 	if _, err := repo.GetByID(ctx, firstOfSecondBatch.ID); !errors.Is(err, apperrors.ErrNotFound) {
 		t.Errorf("first leg of the failed batch must have rolled back, got %v", err)
+	}
+}
+
+// TestTransactRollsBackReversalWhenLaterWriteFails is the repository-level
+// proof behind update_movement's post-sync path (and cancel_transfer's
+// per-leg loop): both wrap a CreateReversal plus a later write in one
+// Transact specifically so that if the later write fails, the reversal —
+// which on its own commits immediately — gets undone too. Without this
+// guarantee, a failure after the reversal would leave a movement
+// compensated with nothing to show for it: money silently disappearing.
+func TestTransactRollsBackReversalWhenLaterWriteFails(t *testing.T) {
+	repo := NewMovementRepository(openTestDB(t))
+	ctx := context.Background()
+
+	original, err := repo.Create(ctx, testMovement(10000))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The later write collides on ID with a row that will only exist
+	// once this same Transact has already inserted it — the simplest way
+	// to force a real, deterministic failure on the second write.
+	dupID := "collide-1"
+
+	err = repo.Transact(ctx, func(tx repositories.MovementRepository) error {
+		reversal := testMovement(-10000)
+		reversal.ID = dupID
+		reversal.CancelsMovementID = &original.ID
+		if _, err := tx.CreateReversal(ctx, reversal); err != nil {
+			return err
+		}
+
+		// This second insert collides with the reversal's own ID and
+		// must fail, taking the whole transaction down with it.
+		colliding := testMovement(-999)
+		colliding.ID = dupID
+		_, err := tx.Create(ctx, colliding)
+		return err
+	})
+	if err == nil {
+		t.Fatal("expected the transaction to fail on the colliding second write")
+	}
+
+	got, err := repo.GetByID(ctx, original.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ReversedByMovementID != nil {
+		t.Errorf("original must NOT be left reversed when the transaction rolled back: %+v", got)
+	}
+	if _, err := repo.GetByID(ctx, dupID); !errors.Is(err, apperrors.ErrNotFound) {
+		t.Errorf("the reversal must have rolled back too, got %v", err)
 	}
 }
 
@@ -332,21 +386,21 @@ func TestPurchaseCreateWithInstallments(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC()
 
-	purchase := &entities.CreditCardPurchase{
+	purchase := &dto.CreditCardPurchaseDTO{
 		UserID:           "00000000-0000-0000-0000-000000000001",
 		Description:      "tv",
-		Category:         entities.CategoryShopping,
+		Category:         string(entities.CategoryShopping),
 		TotalAmount:      -900,
 		Currency:         "usd",
 		InstallmentCount: 3,
 		PurchaseDate:     now,
-		Status:           entities.CreditCardPurchaseStatusActive,
+		Status:           string(entities.CreditCardPurchaseStatusActive),
 		CreatedAt:        now,
 	}
-	var installments []*entities.Movement
+	var installments []*dto.MovementDTO
 	for i := 0; i < 3; i++ {
 		m := testMovement(-300)
-		m.PaymentMethod = entities.PaymentMethodCreditCard
+		m.PaymentMethod = string(entities.PaymentMethodCreditCard)
 		n := i + 1
 		m.InstallmentNumber = &n
 		m.Timestamp = now.AddDate(0, i, 0)
@@ -362,7 +416,7 @@ func TestPurchaseCreateWithInstallments(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.TotalAmount != -900 || got.InstallmentCount != 3 || got.Status != entities.CreditCardPurchaseStatusActive {
+	if got.TotalAmount != -900 || got.InstallmentCount != 3 || got.Status != string(entities.CreditCardPurchaseStatusActive) {
 		t.Errorf("purchase roundtrip mismatch: %+v", got)
 	}
 
@@ -383,7 +437,7 @@ func TestPurchaseCreateWithInstallments(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, _ = purchases.GetByID(ctx, purchase.ID)
-	if got.Status != entities.CreditCardPurchaseStatusCancelled {
+	if got.Status != string(entities.CreditCardPurchaseStatusCancelled) {
 		t.Error("purchase not cancelled")
 	}
 	if err := purchases.MarkCancelled(ctx, "missing"); !errors.Is(err, apperrors.ErrNotFound) {

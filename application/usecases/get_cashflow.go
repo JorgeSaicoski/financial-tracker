@@ -5,6 +5,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/JorgeSaicoski/financial-tracker/application/dto"
 	"github.com/JorgeSaicoski/financial-tracker/application/repositories"
 	"github.com/JorgeSaicoski/financial-tracker/domain/entities"
 	apperrors "github.com/JorgeSaicoski/financial-tracker/pkg/errors"
@@ -33,7 +34,7 @@ func (uc *getCashflowUseCase) Execute(ctx context.Context, userID string, from, 
 	if err != nil {
 		return CashflowResult{}, err
 	}
-	accountByID := make(map[string]*entities.Account, len(accounts))
+	accountByID := make(map[string]*dto.AccountDTO, len(accounts))
 	for _, a := range accounts {
 		accountByID[a.ID] = a
 	}
@@ -44,14 +45,14 @@ func (uc *getCashflowUseCase) Execute(ctx context.Context, userID string, from, 
 		// Voided movements never happened. A reversal and its original
 		// stay active with opposite signs: they show up on both sides of
 		// In/Out but cancel in Net, mirroring the ledger's records.
-		if m.Status == entities.MovementStatusVoided {
+		if m.Status == string(entities.MovementStatusVoided) {
 			continue
 		}
 		// A transfer moves money between the user's own accounts — it's
 		// neither income nor expense, so it's excluded from cashflow
 		// entirely (its two legs would otherwise inflate both In and Out
 		// while netting to zero, which is misleading, not neutral).
-		if m.Category == entities.CategoryTransfer {
+		if m.Category == string(entities.CategoryTransfer) {
 			continue
 		}
 

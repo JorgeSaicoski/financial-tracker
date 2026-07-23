@@ -5,13 +5,14 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/JorgeSaicoski/financial-tracker/application/dto"
 	"github.com/JorgeSaicoski/financial-tracker/domain/entities"
 	apperrors "github.com/JorgeSaicoski/financial-tracker/pkg/errors"
 )
 
-func mustCreateAccount(t *testing.T, accounts *fakeAccountRepo, userID, currency string) *entities.Account {
+func mustCreateAccount(t *testing.T, accounts *fakeAccountRepo, userID, currency string) *dto.AccountDTO {
 	t.Helper()
-	a, err := accounts.Create(context.Background(), &entities.Account{UserID: userID, Currency: currency})
+	a, err := accounts.Create(context.Background(), &dto.AccountDTO{UserID: userID, Currency: currency})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +44,7 @@ func TestTransferBetweenAccountsHappyPath(t *testing.T) {
 	if *result.Debit.TransferID != result.TransferID || *result.Credit.TransferID != result.TransferID {
 		t.Error("legs not linked by transfer id")
 	}
-	if result.Debit.Category != entities.CategoryTransfer || result.Credit.Category != entities.CategoryTransfer {
+	if result.Debit.Category != string(entities.CategoryTransfer) || result.Credit.Category != string(entities.CategoryTransfer) {
 		t.Error("legs must be categorized as transfer")
 	}
 
@@ -172,7 +173,7 @@ func TestCancelTransferCancelsBothLegsPerSyncStatus(t *testing.T) {
 			}
 
 			if tc.wantDebitVoided {
-				if result.Debit.Movement.Status != entities.MovementStatusVoided || result.Debit.Reversal != nil {
+				if result.Debit.Movement.Status != string(entities.MovementStatusVoided) || result.Debit.Reversal != nil {
 					t.Errorf("debit should be voided: %+v", result.Debit)
 				}
 			} else {
@@ -181,7 +182,7 @@ func TestCancelTransferCancelsBothLegsPerSyncStatus(t *testing.T) {
 				}
 			}
 			if tc.wantCreditVoided {
-				if result.Credit.Movement.Status != entities.MovementStatusVoided || result.Credit.Reversal != nil {
+				if result.Credit.Movement.Status != string(entities.MovementStatusVoided) || result.Credit.Reversal != nil {
 					t.Errorf("credit should be voided: %+v", result.Credit)
 				}
 			} else {
@@ -201,6 +202,65 @@ func TestCancelTransferCancelsBothLegsPerSyncStatus(t *testing.T) {
 				t.Errorf("net worth changed after cancel: %d + %d != 0", fromNet, toNet)
 			}
 		})
+	}
+}
+
+// TestCancelTransferRollsBackFirstLegWhenSecondLegFails is the regression
+// test for the same bug class as update_movement's: cancelling a transfer
+// loops over both legs and used to commit each leg's cancel independently.
+// If the second leg's cancel ever failed, the first was already gone,
+// leaving a "half-cancelled" transfer with one leg voided/reversed and the
+// other still active — breaking the zero-net-worth invariant. The fix
+// wraps both legs in one Transact; this forces the second (credit) leg to
+// fail and asserts the first (debit) leg rolls back with it.
+func TestCancelTransferRollsBackFirstLegWhenSecondLegFails(t *testing.T) {
+	movements := newFakeMovementRepo()
+	accounts := newFakeAccountRepo()
+	from := mustCreateAccount(t, accounts, "u1", "usd")
+	to := mustCreateAccount(t, accounts, "u1", "usd")
+
+	transferUC := NewTransferBetweenAccounts(movements, accounts)
+	transfer, err := transferUC.Execute(context.Background(), TransferBetweenAccountsInput{
+		UserID: "u1", FromAccountID: from.ID, ToAccountID: to.ID, Amount: 500,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Both legs synced, so cancelling either goes through the
+	// reversal path rather than a plain void.
+	if err := movements.MarkSynced(context.Background(), transfer.Debit.ID, "ledger-d", transfer.Debit.Timestamp); err != nil {
+		t.Fatal(err)
+	}
+	if err := movements.MarkSynced(context.Background(), transfer.Credit.ID, "ledger-c", transfer.Credit.Timestamp); err != nil {
+		t.Fatal(err)
+	}
+
+	// ListByTransferID orders debit (negative) before credit (positive),
+	// so the credit leg is the "second write" here.
+	movements.createReversalErrForID = transfer.Credit.ID
+
+	trigger := &fakeSyncTrigger{}
+	_, err = NewCancelTransfer(movements, trigger).Execute(context.Background(), transfer.TransferID)
+	if err == nil {
+		t.Fatal("expected the cancel to fail when the second leg's reversal fails")
+	}
+	if trigger.calls != 0 {
+		t.Error("a failed cancel must not trigger a sync")
+	}
+
+	debit, _ := movements.GetByID(context.Background(), transfer.Debit.ID)
+	if debit.ReversedByMovementID != nil {
+		t.Errorf("debit leg must NOT be left reversed when the credit leg's cancel failed: %+v", debit)
+	}
+	credit, _ := movements.GetByID(context.Background(), transfer.Credit.ID)
+	if credit.ReversedByMovementID != nil {
+		t.Errorf("credit leg must not be reversed either — the whole cancel failed: %+v", credit)
+	}
+
+	fromNet, _ := movements.NetByAccount(context.Background(), from.ID, nil, nil)
+	toNet, _ := movements.NetByAccount(context.Background(), to.ID, nil, nil)
+	if fromNet+toNet != 0 {
+		t.Errorf("net worth must be unaffected by a fully-rolled-back cancel: %d + %d != 0", fromNet, toNet)
 	}
 }
 
