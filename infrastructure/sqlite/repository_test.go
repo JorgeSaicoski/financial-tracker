@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/JorgeSaicoski/financial-tracker/application/repositories"
 	"github.com/JorgeSaicoski/financial-tracker/domain/entities"
 	apperrors "github.com/JorgeSaicoski/financial-tracker/pkg/errors"
 )
@@ -322,6 +323,58 @@ func TestMovementCreateBatchAtomicity(t *testing.T) {
 	}
 	if _, err := repo.GetByID(ctx, firstOfSecondBatch.ID); !errors.Is(err, apperrors.ErrNotFound) {
 		t.Errorf("first leg of the failed batch must have rolled back, got %v", err)
+	}
+}
+
+// TestTransactRollsBackReversalWhenLaterWriteFails is the repository-level
+// proof behind update_movement's post-sync path (and cancel_transfer's
+// per-leg loop): both wrap a CreateReversal plus a later write in one
+// Transact specifically so that if the later write fails, the reversal —
+// which on its own commits immediately — gets undone too. Without this
+// guarantee, a failure after the reversal would leave a movement
+// compensated with nothing to show for it: money silently disappearing.
+func TestTransactRollsBackReversalWhenLaterWriteFails(t *testing.T) {
+	repo := NewMovementRepository(openTestDB(t))
+	ctx := context.Background()
+
+	original, err := repo.Create(ctx, testMovement(10000))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The later write collides on ID with a row that will only exist
+	// once this same Transact has already inserted it — the simplest way
+	// to force a real, deterministic failure on the second write.
+	dupID := "collide-1"
+
+	err = repo.Transact(ctx, func(tx repositories.MovementRepository) error {
+		reversal := testMovement(-10000)
+		reversal.ID = dupID
+		reversal.CancelsMovementID = &original.ID
+		if _, err := tx.CreateReversal(ctx, reversal); err != nil {
+			return err
+		}
+
+		// This second insert collides with the reversal's own ID and
+		// must fail, taking the whole transaction down with it.
+		colliding := testMovement(-999)
+		colliding.ID = dupID
+		_, err := tx.Create(ctx, colliding)
+		return err
+	})
+	if err == nil {
+		t.Fatal("expected the transaction to fail on the colliding second write")
+	}
+
+	got, err := repo.GetByID(ctx, original.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ReversedByMovementID != nil {
+		t.Errorf("original must NOT be left reversed when the transaction rolled back: %+v", got)
+	}
+	if _, err := repo.GetByID(ctx, dupID); !errors.Is(err, apperrors.ErrNotFound) {
+		t.Errorf("the reversal must have rolled back too, got %v", err)
 	}
 }
 

@@ -45,6 +45,15 @@ type fakeMovementRepo struct {
 	byID              map[string]*entities.Movement
 	nextID            int
 	updateMetadataErr error
+	// createErr, if set, is returned by Create instead of inserting —
+	// lets tests simulate the second write of a multi-step Transact
+	// (e.g. update_movement's reversal-then-replacement) failing, to
+	// verify the first write rolls back with it.
+	createErr error
+	// createReversalErrForID, if set, makes CreateReversal fail only when
+	// reversing this specific movement ID — used to fail the *second*
+	// leg of a two-leg cancel while letting the first succeed.
+	createReversalErrForID string
 }
 
 func newFakeMovementRepo() *fakeMovementRepo {
@@ -62,6 +71,9 @@ func (f *fakeMovementRepo) add(m *entities.Movement) *entities.Movement {
 }
 
 func (f *fakeMovementRepo) Create(_ context.Context, m *entities.Movement) (*entities.Movement, error) {
+	if f.createErr != nil {
+		return nil, f.createErr
+	}
 	return f.add(m), nil
 }
 
@@ -222,6 +234,9 @@ func (f *fakeMovementRepo) Void(_ context.Context, id string) error {
 }
 
 func (f *fakeMovementRepo) CreateReversal(_ context.Context, reversal *entities.Movement) (*entities.Movement, error) {
+	if f.createReversalErrForID != "" && *reversal.CancelsMovementID == f.createReversalErrForID {
+		return nil, fmt.Errorf("forced failure reversing %s", f.createReversalErrForID)
+	}
 	original, ok := f.byID[*reversal.CancelsMovementID]
 	if !ok {
 		return nil, apperrors.ErrNotFound
@@ -234,8 +249,20 @@ func (f *fakeMovementRepo) CreateReversal(_ context.Context, reversal *entities.
 	return reversal, nil
 }
 
+// Transact mirrors the real SQLite implementation's all-or-nothing
+// guarantee: fn's writes only stick if it returns nil, otherwise the
+// repo's state is restored to what it was before fn ran.
 func (f *fakeMovementRepo) Transact(_ context.Context, fn func(tx repositories.MovementRepository) error) error {
-	return fn(f)
+	snapshot := make(map[string]*entities.Movement, len(f.byID))
+	for id, m := range f.byID {
+		cp := *m
+		snapshot[id] = &cp
+	}
+	if err := fn(f); err != nil {
+		f.byID = snapshot
+		return err
+	}
+	return nil
 }
 
 type fakePurchaseRepo struct {

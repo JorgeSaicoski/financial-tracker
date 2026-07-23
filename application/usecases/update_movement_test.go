@@ -154,6 +154,110 @@ func TestUpdateMovementAmountPostSyncReversesAndRecreates(t *testing.T) {
 	}
 }
 
+// TestUpdateMovementPostSyncRollsBackReversalWhenReplacementCreationFails
+// is the regression test for a real bug: a synced movement's amount edit
+// used to cancel (reverse) the original in one write, then create the
+// replacement in a second, unrelated write. If that second write ever
+// failed — a transient error, a full disk, anything — the reversal had
+// already committed, so the movement was left reversed with no
+// replacement: money silently vanished. The fix wraps both writes in one
+// Transact; this test forces the second write to fail and asserts the
+// first rolls back with it, so a synced movement's edit is all-or-nothing.
+func TestUpdateMovementPostSyncRollsBackReversalWhenReplacementCreationFails(t *testing.T) {
+	repo := newFakeMovementRepo()
+	trigger := &fakeSyncTrigger{}
+	repo.add(activeMovement("m1", 10000, entities.SyncStatusSynced))
+	repo.createErr = errors.New("simulated write failure creating the replacement")
+
+	uc := NewUpdateMovement(repo, newFakeAccountRepo(), trigger)
+	_, err := uc.Execute(context.Background(), "m1", UpdateMovementInput{
+		Amount: int64Ptr(20000),
+	})
+	if !errors.Is(err, repo.createErr) {
+		t.Fatalf("want the create error surfaced, got %v", err)
+	}
+	if trigger.calls != 0 {
+		t.Error("a failed update must not trigger a sync")
+	}
+
+	original, err := repo.GetByID(context.Background(), "m1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if original.ReversedByMovementID != nil {
+		t.Errorf("original must NOT be left reversed when the replacement never got created: %+v", original)
+	}
+	if original.Amount != 10000 {
+		t.Errorf("original amount must be untouched, got %d", original.Amount)
+	}
+
+	all, err := repo.ListByUser(context.Background(), "u1", nil, nil, nil, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("a dangling reversal (or anything else) must not have survived: got %d movements: %+v", len(all), all)
+	}
+}
+
+// TestUpdateMovementPostSyncCombinedAmountAndMetadataEdit covers editing a
+// synced movement's amount and metadata together: the replacement must
+// carry the new metadata (not the original's), and the original's own
+// metadata must stay exactly as it was — it's a historical record now.
+func TestUpdateMovementPostSyncCombinedAmountAndMetadataEdit(t *testing.T) {
+	repo := newFakeMovementRepo()
+	m := activeMovement("m1", 10000, entities.SyncStatusSynced)
+	m.Description = "old description"
+	m.Category = entities.CategoryOther
+	repo.add(m)
+
+	uc := NewUpdateMovement(repo, newFakeAccountRepo(), &fakeSyncTrigger{})
+	newDescription := "salary, corrected"
+	newCategory := entities.CategoryIncome
+	result, err := uc.Execute(context.Background(), "m1", UpdateMovementInput{
+		Amount:      int64Ptr(20000),
+		Description: &newDescription,
+		Category:    &newCategory,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Replacement == nil {
+		t.Fatal("expected a replacement")
+	}
+	if result.Replacement.Amount != 20000 || result.Replacement.Description != newDescription || result.Replacement.Category != newCategory {
+		t.Errorf("replacement must carry the new amount and metadata: %+v", result.Replacement)
+	}
+
+	original, _ := repo.GetByID(context.Background(), "m1")
+	if original.Description != "old description" || original.Category != entities.CategoryOther {
+		t.Errorf("original's metadata must stay exactly as it was, it's a historical record: %+v", original)
+	}
+}
+
+// TestUpdateMovementCurrencyOnlyPostSyncReversesAndRecreates covers editing
+// just the currency (no amount change) on an already-synced movement —
+// editsFinancial must fire for currency alone, same as for amount.
+func TestUpdateMovementCurrencyOnlyPostSyncReversesAndRecreates(t *testing.T) {
+	repo := newFakeMovementRepo()
+	repo.add(activeMovement("m1", 10000, entities.SyncStatusSynced))
+
+	uc := NewUpdateMovement(repo, newFakeAccountRepo(), &fakeSyncTrigger{})
+	newCurrency := "brl"
+	result, err := uc.Execute(context.Background(), "m1", UpdateMovementInput{
+		Currency: &newCurrency,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Reversal == nil || result.Replacement == nil {
+		t.Fatalf("currency-only edit on a synced movement must reverse + recreate: %+v", result)
+	}
+	if result.Replacement.Currency != "brl" || result.Replacement.Amount != 10000 {
+		t.Errorf("replacement = %+v, want amount unchanged and currency brl", result.Replacement)
+	}
+}
+
 func TestUpdateMovementRejectsVoidedMovement(t *testing.T) {
 	repo := newFakeMovementRepo()
 	voided := activeMovement("m1", -500, entities.SyncStatusPending)
