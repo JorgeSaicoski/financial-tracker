@@ -111,7 +111,7 @@ func (r *accountRepository) LatestSnapshots(ctx context.Context, accountID strin
 	return out, rows.Err()
 }
 
-// scanAccount adapts one accounts row to the application layer's
+// scanAccount adapts one account row to the application layer's
 // AccountDTO — the contract this repository implements.
 func scanAccount(row scannable) (*dto.AccountDTO, error) {
 	var (
