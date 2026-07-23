@@ -143,30 +143,37 @@ if input.Currency != nil {
 	// plus whatever metadata was requested. The original stays exactly as
 	// it was, just marked reversed, so it remains an accurate record of
 	// what actually synced.
-	result, err := cancelOne(ctx, uc.repo, movement)
+	var (
+		replacement *entities.Movement
+		result      CancelMovementResult
+	)
+	err = uc.repo.Transact(ctx, func(tx repositories.MovementRepository) error {
+		var err error
+		result, err = cancelOne(ctx, tx, movement)
+		if err != nil {
+			return err
+		}
+
+		now := time.Now().UTC()
+		replacement = &entities.Movement{
+			UserID:        movement.UserID,
+			Amount:        amount,
+			Currency:      currency,
+			Description:   description,
+			Category:      category,
+			PaymentMethod: paymentMethod,
+			AccountID:     accountID,
+			Status:        entities.MovementStatusActive,
+			SyncStatus:    entities.SyncStatusPending,
+			Timestamp:     timestamp,
+			CreatedAt:     now,
+		}
+		replacement, err = tx.Create(ctx, replacement)
+		return err
+	})
 	if err != nil {
 		return UpdateMovementResult{}, err
 	}
-
-	now := time.Now().UTC()
-	replacement := &entities.Movement{
-		UserID:        movement.UserID,
-		Amount:        amount,
-		Currency:      currency,
-		Description:   description,
-		Category:      category,
-		PaymentMethod: paymentMethod,
-		AccountID:     accountID,
-		Status:        entities.MovementStatusActive,
-		SyncStatus:    entities.SyncStatusPending,
-		Timestamp:     timestamp,
-		CreatedAt:     now,
-	}
-	replacement, err = uc.repo.Create(ctx, replacement)
-	if err != nil {
-		return UpdateMovementResult{}, err
-	}
-
 	uc.sync.TriggerAsync()
 	return UpdateMovementResult{Movement: result.Movement, Reversal: result.Reversal, Replacement: replacement}, nil
 }
