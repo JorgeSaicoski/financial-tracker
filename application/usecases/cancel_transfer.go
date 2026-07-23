@@ -30,17 +30,14 @@ func (uc *cancelTransferUseCase) Execute(ctx context.Context, transferID string)
 	if len(legs) == 0 {
 		return CancelTransferResult{}, apperrors.ErrNotFound
 	}
-if len(legs) == 0 {
-	return CancelTransferResult{}, apperrors.ErrNotFound
-}
-if len(legs) != 2 || legs[0].Amount >= 0 || legs[1].Amount <= 0 {
-	return CancelTransferResult{}, apperrors.ErrNotFound
-}
-if legs[0].IsCancelled() && legs[1].IsCancelled() {
-	return CancelTransferResult{}, apperrors.ErrConflict
-}
+	if len(legs) != 2 || legs[0].Amount >= 0 || legs[1].Amount <= 0 {
+		return CancelTransferResult{}, apperrors.ErrNotFound
+	}
+	if legs[0].IsCancelled() && legs[1].IsCancelled() {
+		return CancelTransferResult{}, apperrors.ErrConflict
+	}
 
-var result CancelTransferResult
+	var result CancelTransferResult
 	anySynced := false
 
 	err = uc.movements.Transact(ctx, func(tx repositories.MovementRepository) error {
