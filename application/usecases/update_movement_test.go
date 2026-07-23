@@ -201,8 +201,8 @@ func TestUpdateMovementRejectsInstallmentFinancialEdit(t *testing.T) {
 	repo.add(installment)
 
 	uc := NewUpdateMovement(repo, newFakeAccountRepo(), &fakeSyncTrigger{})
-	if _, err := uc.Execute(context.Background(), "m1", UpdateMovementInput{Amount: int64Ptr(-400)}); !errors.Is(err, apperrors.ErrInvalidInput) {
-		t.Fatalf("want ErrInvalidInput, got %v", err)
+	if _, err := uc.Execute(context.Background(), "m1", UpdateMovementInput{Amount: int64Ptr(-400)}); !errors.Is(err, apperrors.ErrConflict) {
+		t.Fatalf("want ErrConflict, got %v", err)
 	}
 
 	// Metadata edits on installments are still fine.
