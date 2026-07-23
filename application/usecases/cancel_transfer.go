@@ -44,6 +44,7 @@ var result CancelTransferResult
 	anySynced := false
 
 	err = uc.movements.Transact(ctx, func(tx repositories.MovementRepository) error {
+		anySynced = false // reset in case the callback is ever re-invoked
 		for _, leg := range legs {
 			one := CancelMovementResult{Movement: leg}
 			if !leg.IsCancelled() {

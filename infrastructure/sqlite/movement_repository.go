@@ -241,8 +241,10 @@ func (r *movementRepository) Transact(ctx context.Context, fn func(repositories.
 }
 
 // movementRepositoryTx wraps a *sql.Tx and satisfies MovementRepository.
-// It is only returned by movementRepository.Transact and must not be used
-// outside the transaction callback.
+// It is unexported and only created inside movementRepository.Transact.
+// Callers must not retain a reference to the value passed to Transact's
+// callback beyond the callback's return, as the underlying transaction will
+// have been committed or rolled back by then.
 type movementRepositoryTx struct {
 	tx *sql.Tx
 }
