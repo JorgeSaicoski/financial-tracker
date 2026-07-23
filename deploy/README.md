@@ -57,8 +57,9 @@ This starts, in dependency order: `ft-postgres` and `authentik-postgres`
 before anything depending on them starts), `ledger-service` (same
 profile), `authentik-server` + `authentik-worker` (identity provider —
 see "Authentik" below), `financial-tracker` (API, `DB_DRIVER=postgres`),
-and `web` (production SvelteKit build via `@sveltejs/adapter-node`, not
-`npm run dev`).
+`web` (production SvelteKit build via `@sveltejs/adapter-node`, not `npm
+run dev`), and `caddy` (the reverse proxy — see "Networking" below for
+the URL map).
 
 ```bash
 podman-compose down          # stop everything; data volumes survive
@@ -67,26 +68,41 @@ podman-compose logs -f
 podman-compose ps
 ```
 
-## Networking: no host ports by default
+## Networking: one entry point (caddy)
 
-Only Postgres, ledger-service, Authentik, financial-tracker, and web talk
-to each other over the compose-internal network — **nothing publishes a
-host port** in this file. That's deliberate: INFRA-03 adds the reverse
-proxy that will be the one thing exposed to the outside world (mapped to
-8080/8443, not raw 80/443), fronting `financial-tracker`, `web`, and
-`authentik-server`. Until INFRA-03 lands, this stack is not reachable from
-a browser.
+Postgres, ledger-service, Authentik, financial-tracker, and web only talk
+to each other over the compose-internal network — **`caddy` is the only
+service publishing host ports** (`8080:80`, `8443:443`; deliberately not
+raw 80/443). It reverse-proxies everything else:
 
-### Verifying without a proxy yet
+| URL | Routes to |
+|---|---|
+| `https://${APP_HOSTNAME}:8443/` | `web` (the SvelteKit app) |
+| `https://${APP_HOSTNAME}:8443/api/*` | `financial-tracker` (prefix stripped) |
+| `https://auth.${APP_HOSTNAME}:8443/` | `authentik-server` |
+
+TLS is Caddy's automatic internal CA (self-signed) by default — see
+`deploy/Caddyfile`'s comments for swapping in a real cert or ACME email.
+Same-origin end state: `financial-tracker`'s `CORS_ALLOWED_ORIGIN` is
+locked to `https://${APP_HOSTNAME}:8443` (see `compose.yaml`), not `*`.
+
+**No real DNS?** Add both hostnames to `/etc/hosts` pointing at the
+Podman host, e.g.:
+```
+127.0.0.1 financial-tracker.local auth.financial-tracker.local
+```
+and trust Caddy's internal CA locally, or click through the browser's
+self-signed warning.
+
+### Bypassing the proxy for local debugging
 
 ```bash
 podman exec financial-tracker-api wget -qO- http://localhost:8081/movements
 ```
 
 or temporarily uncomment the `ports:` block under `financial-tracker`
-and/or `web` in `compose.yaml` for local testing — remove it again once
-INFRA-03's proxy is in place (don't leave both a direct port and the proxy
-open in a real deployment).
+and/or `web` in `compose.yaml` — remove it again afterward (don't leave
+both a direct port and the proxy open in a real deployment).
 
 ## Authentik (identity provider)
 
@@ -109,14 +125,10 @@ directly with no transformation.
 1. Bring the stack up (`podman-compose --profile ledger up -d --build`)
    and wait for `authentik-server`/`authentik-worker` to report healthy:
    `podman-compose logs -f authentik-server`.
-2. Visit Authentik's initial-setup flow to create the admin account.
-   Until INFRA-03's proxy is up, reach it directly: temporarily add
-   `ports: ["9000:9000"]` under `authentik-server` in `compose.yaml`,
-   `podman-compose up -d authentik-server`, then open
-   `http://localhost:9000/if/flow/initial-setup/`. Remove the port again
-   afterward (see "Verifying without a proxy yet" above for the same
-   pattern). Once INFRA-03 lands, this is reachable at
-   `https://auth.${APP_HOSTNAME}:8443/if/flow/initial-setup/` instead.
+2. Visit Authentik's initial-setup flow to create the admin account:
+   `https://auth.${APP_HOSTNAME}:8443/if/flow/initial-setup/` (add an
+   `/etc/hosts` entry first if you don't have real DNS — see
+   "Networking" above).
 3. Confirm the blueprint applied: Admin interface → **Customization →
    Blueprints** should show `financial-tracker OAuth2 provider +
    application` as applied; **Applications → Applications** should list
@@ -136,13 +148,21 @@ directly with no transformation.
 
 ## Rootless-Podman / SELinux notes
 
-- No bind mounts in this file (ledger-postgres's init/migration SQL is
-  baked into its image at build time instead — see above), so there's no
-  `:z`/`:Z` relabeling to worry about. The named volumes (`ft_postgres_data`,
-  `ledger_postgres_data`) don't need it either — SELinux labeling only
+- Two read-only bind mounts: `./Caddyfile` (into `caddy`) and
+  `./authentik/blueprints` (into `authentik-server`/`authentik-worker`).
+  Both are `:ro`, which SELinux's default container policy (`container_file_t`
+  via `:z`) doesn't strictly require for read access on most rootless
+  Podman setups — if you hit an SELinux denial reading either, add `:z`
+  (shared label; fine here since nothing else needs these paths) to the
+  mount in `compose.yaml`. Everything else (ledger-postgres's
+  init/migration SQL) is baked into its image at build time instead — see
+  above. The named volumes (`ft_postgres_data`, `ledger_postgres_data`,
+  `authentik_postgres_data`, `authentik_media`, `caddy_data`,
+  `caddy_config`) don't need relabeling either way — SELinux labeling only
   matters for host-path bind mounts.
-- No privileged ports are opened by this file (see above), so no
-  `CAP_NET_BIND_SERVICE` concerns.
+- No privileged ports (<1024) are opened by this file — `caddy`'s
+  `8080`/`8443` are both unprivileged — so no `CAP_NET_BIND_SERVICE`
+  concerns.
 - The `postgres:*-alpine` images and `financial-tracker-web` (Node) run as
   their upstream non-root default user. `financial-tracker-api` and
   `ledger-service` are `alpine:latest`-based with no `USER` set, so they
@@ -158,17 +178,20 @@ directly with no transformation.
 **Quick: `podman generate systemd`** (works today, no extra files):
 ```bash
 podman-compose up -d
-podman generate systemd --new --files --name financial-tracker-api
-podman generate systemd --new --files --name financial-tracker-web
-podman generate systemd --new --files --name ledger-service
-podman generate systemd --new --files --name financial-tracker-postgres
-podman generate systemd --new --files --name ledger-postgres
+for name in financial-tracker-postgres authentik-postgres ledger-postgres \
+  ledger-service authentik-server authentik-worker \
+  financial-tracker-api financial-tracker-web financial-tracker-caddy; do
+  podman generate systemd --new --files --name "$name"
+done
 mkdir -p ~/.config/systemd/user
 mv container-*.service ~/.config/systemd/user/
 systemctl --user daemon-reload
-systemctl --user enable --now container-financial-tracker-postgres.service \
+systemctl --user enable --now \
+  container-financial-tracker-postgres.service container-authentik-postgres.service \
   container-ledger-postgres.service container-ledger-service.service \
-  container-financial-tracker-api.service container-financial-tracker-web.service
+  container-authentik-server.service container-authentik-worker.service \
+  container-financial-tracker-api.service container-financial-tracker-web.service \
+  container-financial-tracker-caddy.service
 loginctl enable-linger "$USER"   # let user services start without a login session
 ```
 

@@ -1,0 +1,46 @@
+# INFRA-03: single entry point for the whole stack so OIDC redirects,
+# cookies, and CORS stay sane. Caddy is the only service in compose.yaml
+# publishing host ports (8080/8443 -> 80/443, not raw 80/443 — see
+# deploy/README.md). TLS is Caddy's automatic internal CA (self-signed) by
+# default, swappable for a real cert/ACME email below.
+
+(security_headers) {
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		# Scoped to this app's own origin plus Authentik's — both live
+		# under APP_HOSTNAME, so 'self' plus the auth subdomain covers it.
+		Content-Security-Policy "default-src 'self'; connect-src 'self' https://auth.{$APP_HOSTNAME}; frame-ancestors 'none'"
+	}
+}
+
+{$APP_HOSTNAME} {
+	import security_headers
+
+	# Homelab default: Caddy's internal CA (self-signed, trust it locally
+	# or click through the browser warning). For a real deployment with a
+	# real domain, replace this whole block's TLS directive with either a
+	# cert/key pair:
+	#   tls /path/to/cert.pem /path/to/key.pem
+	# or ACME (Caddy issues + renews automatically) with a real email:
+	#   tls you@example.com
+	tls internal
+
+	handle_path /api/* {
+		reverse_proxy financial-tracker:8081
+	}
+
+	reverse_proxy web:3000
+}
+
+auth.{$APP_HOSTNAME} {
+	import security_headers
+	tls internal
+
+	# Authentik needs correct X-Forwarded-* headers to build redirect/
+	# callback URLs and know it's behind TLS — reverse_proxy sets those
+	# (For/Proto/Host) on every request by default, no extra config needed.
+	reverse_proxy authentik-server:9000
+}

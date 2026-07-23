@@ -114,7 +114,7 @@ services:
       PUBLIC_OIDC_REDIRECT_URI: https://${APP_HOSTNAME:-financial-tracker.local}:8443/auth/callback
     volumes:
       - authentik_media:/media
-      - ./authentik/blueprints:/blueprints/local:ro
+      - ./authentik/blueprints:/blueprints/local:ro,Z
     depends_on:
       authentik-postgres:
         condition: service_healthy
@@ -129,7 +129,7 @@ services:
     environment: *authentik-environment
     volumes:
       - authentik_media:/media
-      - ./authentik/blueprints:/blueprints/local:ro
+      - ./authentik/blueprints:/blueprints/local:ro,Z
     depends_on:
       authentik-postgres:
         condition: service_healthy
@@ -158,13 +158,15 @@ services:
       DEFAULT_CURRENCY: ${DEFAULT_CURRENCY}
       SYNC_INTERVAL: ${SYNC_INTERVAL:-30s}
       SYNC_RETRY_COOLDOWN: ${SYNC_RETRY_COOLDOWN:-60s}
+      # Same-origin end state: caddy fronts both financial-tracker and web
+      # under one hostname, so only that origin needs to be allowed.
+      CORS_ALLOWED_ORIGIN: https://${APP_HOSTNAME:-financial-tracker.local}:8443
     depends_on:
       ft-postgres:
         condition: service_healthy
     restart: unless-stopped
-    # Until INFRA-03's reverse proxy lands, this is unreachable from the
-    # host on purpose (see README's "Verifying without a proxy yet"
-    # section for how to check it's up). Uncomment to test directly:
+    # No host port: caddy is the only public entry point (see below).
+    # Uncomment to bypass the proxy for local debugging:
     # ports:
     #   - "8081:8081"
 
@@ -175,20 +177,41 @@ services:
     container_name: financial-tracker-web
     environment:
       PORT: 3000
-      # Browser-facing API URL. Until INFRA-03 puts both services behind
-      # one reverse-proxied domain, this needs to be reachable from
-      # wherever the browser runs — set it in deploy/.env.
+      # Browser-facing API URL, routed through caddy's /api path (see
+      # ../Caddyfile) rather than hitting financial-tracker directly —
+      # set in deploy/.env to match APP_HOSTNAME.
       PUBLIC_API_URL: ${PUBLIC_API_URL}
     depends_on:
       - financial-tracker
     restart: unless-stopped
-    # Same as financial-tracker above: no host port until INFRA-03 fronts
-    # this. Uncomment to test directly:
+    # No host port: same reasoning as financial-tracker above.
     # ports:
     #   - "3000:3000"
+
+  caddy:
+    image: docker.io/library/caddy:2-alpine
+    container_name: financial-tracker-caddy
+    environment:
+      APP_HOSTNAME: ${APP_HOSTNAME:-financial-tracker.local}
+    ports:
+      - "8080:80"
+      - "8443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro,Z
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - financial-tracker
+      - web
+      - authentik-server
+    restart: unless-stopped
+    # The only service in this stack publishing host ports — see
+    # deploy/README.md's "Networking" section.
 
 volumes:
   ft_postgres_data:
   ledger_postgres_data:
   authentik_postgres_data:
   authentik_media:
+  caddy_data:
+  caddy_config:
