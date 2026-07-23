@@ -1,0 +1,70 @@
+/*
+ * Financial-tracker design tokens.
+ * Copy this file to web/src/lib/styles/tokens.css and import it once
+ * globally (e.g. from +layout.svelte or app.html) if it isn't wired up yet.
+ * See ../design-tokens.md for the rationale behind each value.
+ */
+
+:root {
+	/* brand */
+	--color-primary: #1e3a5f;
+	--color-primary-hover: #16304f;
+	--color-secondary: #2a9d8f;
+	--color-accent: #7bdcb5;
+	--color-accent-2: #4da3ff;
+
+	/* neutrals */
+	--color-bg: #f7f9fc;
+	--color-surface: #ffffff;
+	--color-border: #e3eaf2;
+	--color-text-primary: #102a43;
+	--color-text-secondary: #627d98;
+	--color-text-muted: #94a3b8;
+
+	/* semantic */
+	--color-income: #16a34a;
+	--color-expense: #dc2626;
+	--color-warning: #f59e0b;
+	--color-info: #2563eb;
+	--color-success-soft: #dcfce7;
+	--color-error-soft: #fee2e2;
+
+	/* chart series */
+	--chart-income: #16a34a;
+	--chart-spending: #dc2626;
+	--chart-savings: #2563eb;
+	--chart-budget: #2a9d8f;
+	--chart-forecast: #7c3aed;
+
+	/* radii */
+	--radius-card: 16px;
+	--radius-control: 12px;
+	--radius-pill: 999px;
+
+	/* shadow */
+	--shadow-soft: 0 8px 24px rgba(16, 42, 67, 0.08);
+
+	/* spacing (8px grid) */
+	--space-1: 8px;
+	--space-2: 16px;
+	--space-3: 24px;
+	--space-4: 32px;
+	--space-5: 40px;
+	--space-6: 48px;
+
+	/* typography */
+	--font-heading: 'Inter', 'Sora', 'Manrope', sans-serif;
+	--font-body: 'Inter', 'Source Sans 3', 'Roboto', sans-serif;
+	--text-page-title: 700 30px/1.2 var(--font-heading);
+	--text-section-title: 600 20px/1.3 var(--font-heading);
+	--text-body: 400 15px/1.5 var(--font-body);
+	--text-label: 500 12px/1.4 var(--font-body);
+	--text-amount: 700 24px/1.2 var(--font-body);
+
+	/* motion */
+	--transition-fast: 150ms ease;
+	--transition-base: 200ms ease;
+
+	/* focus */
+	--focus-ring: 0 0 0 3px rgba(42, 157, 143, 0.15);
+}

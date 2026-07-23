@@ -125,17 +125,16 @@
 
 <style>
 	.edit-form {
-		flex: 1;
 		display: flex;
 		flex-direction: column;
 		gap: 0.6rem;
-		padding: 0.85rem 1rem;
+		padding: var(--space-2);
 	}
 
 	.hint {
 		margin: 0;
 		font-size: 0.78rem;
-		color: var(--muted);
+		color: var(--color-text-secondary);
 	}
 
 	.edit-actions {
