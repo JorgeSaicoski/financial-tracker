@@ -12,10 +12,32 @@ persistence without needing a Kubernetes YAML translation step.
 
 ## Prerequisites
 
-- Rootless Podman + `podman-compose` on the host.
-- `../../ledger-service` checked out as a sibling of this repo (same
-  assumption as the root `docker-compose.yml` — this stack builds it from
-  source rather than duplicating its Dockerfile/migrations).
+- Rootless Podman + `podman-compose` on the host. Nothing else — unlike the
+  root `docker-compose.yml`, this file does **not** need a local
+  `../ledger-service` checkout; the ledger-service app image is built
+  straight from its git repo. (Its Postgres init/migration SQL is a local
+  copy under `deploy/ledger-postgres/` rather than fetched from git too —
+  see the comment on `ledger-postgres` in `compose.yaml` for why.)
+
+## ledger-service is optional
+
+financial-tracker's local Postgres is always the source of truth; sync to
+ledger-service tolerates it being unreachable and retries on a cooldown
+(see root README's "Running locally" section) — nothing blocks on it.
+Bring it up alongside the rest with `--profile ledger`:
+
+```bash
+podman-compose --profile ledger up -d --build
+```
+
+or omit `--profile ledger` to run financial-tracker + web without it (e.g.
+pointing `LEDGER_SERVICE_URL` in `.env` at an externally-hosted instance
+instead, or running fully standalone).
+
+`LEDGER_SERVICE_GIT_URL` in `.env` controls what ledger-service build pulls
+(defaults to `JorgeSaicoski/ledger-service`'s `main` branch) — pin it to a
+tag or point it at a fork if needed, e.g.
+`https://github.com/you/ledger-service.git#v1.2.0`.
 
 ## Bring the stack up
 
@@ -26,13 +48,14 @@ cp .env.example .env
 # secrets (or point them at your secrets manager of choice — anything that
 # lands in .env works, nothing is hardcoded in compose.yaml), and adjust
 # DEFAULT_USER_ID/PUBLIC_API_URL for your deployment.
-podman-compose up -d --build
+podman-compose --profile ledger up -d --build   # or drop --profile ledger — see above
 ```
 
-This starts, in dependency order: `ft-postgres` and `ledger-postgres`
-(healthchecked before anything depending on them starts), `ledger-service`,
-`financial-tracker` (API, `DB_DRIVER=postgres`), and `web` (production
-SvelteKit build via `@sveltejs/adapter-node`, not `npm run dev`).
+This starts, in dependency order: `ft-postgres` (and `ledger-postgres` if
+`--profile ledger` is given, both healthchecked before anything depending
+on them starts), `ledger-service` (same profile), `financial-tracker`
+(API, `DB_DRIVER=postgres`), and `web` (production SvelteKit build via
+`@sveltejs/adapter-node`, not `npm run dev`).
 
 ```bash
 podman-compose down          # stop everything; data volumes survive
@@ -63,14 +86,20 @@ open in a real deployment).
 
 ## Rootless-Podman / SELinux notes
 
-- Bind mounts (only `ledger-postgres`'s init-script/migration mounts here)
-  use the `:z` relabel flag, same as the root `docker-compose.yml`. The
-  named volumes (`ft_postgres_data`, `ledger_postgres_data`) don't need
-  it — SELinux labeling only matters for host-path bind mounts.
+- No bind mounts in this file (ledger-postgres's init/migration SQL is
+  baked into its image at build time instead — see above), so there's no
+  `:z`/`:Z` relabeling to worry about. The named volumes (`ft_postgres_data`,
+  `ledger_postgres_data`) don't need it either — SELinux labeling only
+  matters for host-path bind mounts.
 - No privileged ports are opened by this file (see above), so no
   `CAP_NET_BIND_SERVICE` concerns.
-- All images run as their upstream default (non-root) user; nothing here
-  needs `--privileged` or extra capabilities.
+- The `postgres:*-alpine` images and `financial-tracker-web` (Node) run as
+  their upstream non-root default user. `financial-tracker-api` and
+  `ledger-service` are `alpine:latest`-based with no `USER` set, so they
+  currently run as root **inside the container** — still fine under
+  rootless Podman (root-in-container maps to your unprivileged host user,
+  not host root), but worth tightening with an explicit non-root `USER` in
+  both Dockerfiles at some point.
 
 ## Boot persistence (systemd / Quadlet)
 
