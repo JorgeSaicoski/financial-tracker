@@ -55,9 +55,14 @@ repository interfaces, service ports, and use-case interfaces:
 
 ```
 domain/entities              Movement, CreditCardPurchase, Account (+snapshots),
-                             fixed Category/PaymentMethod/AccountType lists
+                             fixed Category/PaymentMethod/AccountType lists; single-entity
+                             rules live here too (e.g. Account.Send()/Receive() for transfers)
+application/dto              MovementDTO, AccountDTO, CreditCardPurchaseDTO — what
+                             repositories/services/usecases actually pass to each other,
+                             converted from domain entities at the infrastructure boundary
 application/repositories     MovementRepository, CreditCardPurchaseRepository,
-                             AccountRepository, CurrencyRepository interfaces — the swap points
+                             AccountRepository, CurrencyRepository interfaces, expressed in
+                             application/dto types — the swap points
 application/services         LedgerGateway, SyncTrigger, SyncRunner — service contracts the
                              application defines; sync/infrastructure implement them
 application/usecases         all use-case interfaces + Input/Result types in interfaces.go;
@@ -83,16 +88,10 @@ cmd/api/main.go              wiring/entrypoint
 web/                         SvelteKit frontend
 ```
 
-Two things this diagram intentionally does **not** paper over — see
-`contributing/architecture.md` for both in full: there's no
-`application/dto` layer yet, so the repository/usecase contracts above
-are typed against `domain/entities` directly instead of an
-application-level DTO (a known gap against the CleanExampleGo reference,
-not an accepted variant of it); and single-entity business logic that
-should live as a method on an entity (e.g. an account producing the
-movement it sends/receives in a transfer) is currently inlined in
-usecases instead.
-```
+See `contributing/architecture.md` for the full layer-by-layer rationale
+(why `application/dto` is a separate contract from `interfaces/dto`, why
+single-entity logic like `Account.Send`/`Receive` belongs on the entity
+rather than inlined in a usecase, and so on).
 
 Every constructor returns its interface type, not the concrete struct —
 each layer depends on a contract instead of an implementation. Usecases
