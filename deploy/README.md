@@ -180,7 +180,8 @@ directly with no transformation.
 podman-compose up -d
 for name in financial-tracker-postgres authentik-postgres ledger-postgres \
   ledger-service authentik-server authentik-worker \
-  financial-tracker-api financial-tracker-web financial-tracker-caddy; do
+  financial-tracker-api financial-tracker-web financial-tracker-caddy \
+  financial-tracker-backup; do
   podman generate systemd --new --files --name "$name"
 done
 mkdir -p ~/.config/systemd/user
@@ -191,7 +192,7 @@ systemctl --user enable --now \
   container-ledger-postgres.service container-ledger-service.service \
   container-authentik-server.service container-authentik-worker.service \
   container-financial-tracker-api.service container-financial-tracker-web.service \
-  container-financial-tracker-caddy.service
+  container-financial-tracker-caddy.service container-financial-tracker-backup.service
 loginctl enable-linger "$USER"   # let user services start without a login session
 ```
 
@@ -233,5 +234,62 @@ via CSV instead would silently drop all of that.
 
 ## Backups
 
-Not covered here — see INFRA-04 (Postgres backups + tested restore),
-which builds on the `ft_postgres_data` volume this file creates.
+The `backup` service (`deploy/backup/`) dumps all three databases daily at
+03:00 UTC and prunes old dumps, writing to the `backup_data` volume as
+`gzip`-compressed, timestamped files: `financial_tracker_<UTC
+timestamp>.sql.gz`, `authentik_<...>.sql.gz`, and — only when
+`--profile ledger` is running — `ledger_<...>.sql.gz` (unreachable is
+logged and skipped, not a failure, the rest of the time). Retention is
+independent for two tiers: the newest `BACKUP_DAILY_RETENTION` (default 7)
+plain dumps, and the newest `BACKUP_WEEKLY_RETENTION` (default 4) Sunday
+dumps kept separately under `backup_data/weekly/`.
+
+**Mechanism: sidecar container with cron, not a host systemd timer.**
+Same reasoning INFRA-01 gave for podman-compose over `podman kube play` —
+this whole stack is defined in `compose.yaml` alone; a host-level systemd
+timer would be a second mechanism to keep in sync with it. `deploy/backup/
+Dockerfile`'s `crond` runs in the foreground as the container's PID 1, so
+`podman logs financial-tracker-backup` shows every run (including
+failures — the job exits non-zero if a required target's dump fails).
+
+**Off-host copying of `backup_data` is the operator's job** — this only
+protects against database corruption/accidental deletion on the same
+host, not host loss. Mount it, `rsync` it, whatever fits your setup; not
+automated here.
+
+### Running a backup on demand
+
+```bash
+podman exec financial-tracker-backup /usr/local/bin/backup.sh
+```
+
+### Restore procedure
+
+Restoring into a **fresh** stack (the scenario this is actually for — a
+lost/corrupted host):
+
+1. Bring up just the Postgres containers, empty:
+   ```bash
+   podman-compose up -d ft-postgres authentik-postgres   # add ledger-postgres too if you run --profile ledger
+   ```
+2. For each database, in any order (they're independent), pick the dump
+   to restore from `backup_data` (or `backup_data/weekly` for an
+   older one) and:
+   ```bash
+   # financial-tracker
+   gunzip -c /path/to/backup_data/financial_tracker_<timestamp>.sql.gz | \
+     podman exec -i financial-tracker-postgres psql -U "$FT_POSTGRES_USER" -d "$FT_POSTGRES_DB"
+
+   # Authentik
+   gunzip -c /path/to/backup_data/authentik_<timestamp>.sql.gz | \
+     podman exec -i authentik-postgres psql -U "$AUTHENTIK_POSTGRES_USER" -d "$AUTHENTIK_POSTGRES_DB"
+
+   # ledger-service (only if you run --profile ledger)
+   gunzip -c /path/to/backup_data/ledger_<timestamp>.sql.gz | \
+     podman exec -i ledger-postgres psql -U "$LEDGER_POSTGRES_USER" -d "$LEDGER_POSTGRES_DB"
+   ```
+3. Start the rest of the stack: `podman-compose up -d`.
+4. Verify: movement count and a balance spot-check in financial-tracker
+   (`GET /movements`/`GET /cashflow` against a known-good number from
+   before the loss) and that logging into Authentik with an existing user
+   still works.

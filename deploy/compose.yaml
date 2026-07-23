@@ -208,6 +208,39 @@ services:
     # The only service in this stack publishing host ports — see
     # deploy/README.md's "Networking" section.
 
+  backup:
+    # Sidecar + cron, not a host systemd timer — see deploy/backup/
+    # Dockerfile's comment and deploy/README.md's Backups section for why.
+    build:
+      context: ./backup
+    container_name: financial-tracker-backup
+    environment:
+      FT_POSTGRES_USER: ${FT_POSTGRES_USER}
+      FT_POSTGRES_PASSWORD: ${FT_POSTGRES_PASSWORD}
+      FT_POSTGRES_DB: ${FT_POSTGRES_DB}
+      AUTHENTIK_POSTGRES_USER: ${AUTHENTIK_POSTGRES_USER}
+      AUTHENTIK_POSTGRES_PASSWORD: ${AUTHENTIK_POSTGRES_PASSWORD}
+      AUTHENTIK_POSTGRES_DB: ${AUTHENTIK_POSTGRES_DB}
+      # Optional target — see backup.sh's dump_target: unreachable is
+      # logged and skipped, not a failure, when --profile ledger isn't
+      # running. Fine to leave these unset in that case.
+      LEDGER_POSTGRES_USER: ${LEDGER_POSTGRES_USER}
+      LEDGER_POSTGRES_PASSWORD: ${LEDGER_POSTGRES_PASSWORD}
+      LEDGER_POSTGRES_DB: ${LEDGER_POSTGRES_DB}
+      BACKUP_DAILY_RETENTION: ${BACKUP_DAILY_RETENTION:-7}
+      BACKUP_WEEKLY_RETENTION: ${BACKUP_WEEKLY_RETENTION:-4}
+    volumes:
+      - backup_data:/backups
+    depends_on:
+      ft-postgres:
+        condition: service_healthy
+      authentik-postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    # No host port — cron-only sidecar, nothing to reach over the network.
+    # Not tied to --profile ledger: it must run even when ledger-postgres
+    # isn't up, to keep backing up financial-tracker/Authentik.
+
 volumes:
   ft_postgres_data:
   ledger_postgres_data:
@@ -215,3 +248,4 @@ volumes:
   authentik_media:
   caddy_data:
   caddy_config:
+  backup_data:
