@@ -65,8 +65,10 @@
 				<button
 					class="cancel all"
 					title="Cancel the whole transfer (both legs)"
-					onclick={() => onCancelTransfer(movement.transfer_id)}>⇄ cancel</button
+					onclick={() => onCancelTransfer(movement.transfer_id)}
 				>
+					⇄ cancel
+				</button>
 			{:else}
 				<button class="cancel" title="Cancel this movement" onclick={() => onCancel(movement)}>✕</button>
 				{#if movement.credit_card_purchase_id}
