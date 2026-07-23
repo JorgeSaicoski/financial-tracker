@@ -4,6 +4,7 @@ Pick the walkthrough that matches what you're doing:
 
 | You're doing | Read |
 |---|---|
+| Any of the below, first time — the layer map itself | [architecture.md](architecture.md) |
 | A complete new feature (new storage, new everything) | [new-feature.md](new-feature.md) |
 | A feature composing existing storage (no/little new infra) | [feature-without-infra.md](feature-without-infra.md) |
 | Changing an existing endpoint | [update-route.md](update-route.md) |
@@ -17,20 +18,29 @@ repo right now.
 
 ## How a request flows
 
+The full, corrected layer map — including the `application/dto` layer
+this repo is currently missing — is in [architecture.md](architecture.md).
+Short version:
+
 ```
 browser (web/src/routes/+page.svelte)
   └─ API client        web/src/lib/api.js            fetch() wrapper, throws Error(body.error)
       └─ router        interfaces/api/router.go       method+path → handler (Go 1.22 ServeMux patterns)
-          └─ handler   interfaces/api/handlers/       decode DTO, fill defaults, map errors → HTTP status
+          └─ handler   interfaces/api/handlers/       decode interfaces/dto request, map errors → HTTP status
               └─ usecase  application/usecases/       validation + business rules, no SQL/HTTP knowledge
-                  └─ repository interface  application/repositories/   the contract the usecase depends on
-                      └─ implementation    infrastructure/sqlite/  the only place that knows SQL
+                  └─ repository interface  application/repositories/   the contract the usecase depends on,
+                                                                        expressed in application/dto types
+                      └─ implementation    infrastructure/sqlite/  the only place that knows SQL; converts
+                                                                    rows to application/dto before returning
                           └─ schema        migrations/*.sql        embedded, applied on boot
 ```
 
 - **Handlers** never touch repositories directly — they call usecases.
-- **Usecases** never import `database/sql` or `net/http` — they see only
-  `domain/entities` and `application/repositories` interfaces.
+- **Usecases** never import `database/sql` or `net/http` — and, per
+  `AGENTS.md`, should see `application/dto` types (not `domain/entities`
+  directly) from repositories/services. financial-tracker's code doesn't
+  do this today — see architecture.md's "Current compliance status" —
+  don't copy that shape into new code.
 - **Constructors return interface types** (`NewCreateMovement(...) CreateMovementUseCase`),
   so every layer depends on a contract, and tests swap in fakes.
 - **`cmd/api/main.go`** is the only place concrete implementations meet:
@@ -44,6 +54,7 @@ visible in one place (see the architecture rules in the workspace's
 
 | Contract kind | Lives in | Real examples |
 |---|---|---|
+| Application DTOs | `application/dto/` (missing today — see [architecture.md](architecture.md)) | `MovementDTO`, `AccountDTO` |
 | Use-case interfaces + their Input/Result types | `application/usecases/interfaces.go` (one file, all of them) | `CreateMovementUseCase`, `CreateMovementInput`, `AccountView` |
 | Repository interfaces | `application/repositories/` (one file per aggregate) | `MovementRepository`, `AccountRepository` |
 | Service ports / cross-service contracts | `application/services/` | `LedgerGateway`, `SyncTrigger`, `SyncRunner` |

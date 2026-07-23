@@ -9,13 +9,40 @@ the latter, most of the full walkthrough's steps don't apply, and
 skipping straight to them is how you end up with a duplicate table or a
 pointless repository method that just calls another repository method.
 
-**Worked example: transfer money between two accounts.** This is not
-implemented in the repo — it's a realistic exercise in the same
-conventions, to show what changes and, just as importantly, what
-*doesn't*. `Movement` already has `AccountID`, a signed `Amount`, and
-`entities.CategoryTransfer` already exists. A transfer is just: one
-movement leaves an account, another movement arrives in a different
-account. Nothing about that needs a new table.
+**Worked example: transfer money between two accounts.** When this
+walkthrough was written, transfer wasn't implemented yet, and the
+prediction below was: no migration, no entity changes, no new repository
+— just a usecase composing two existing `Create` calls. Transfer has
+since been built for real (`POST /transfers`, `POST /transfers/{id}/cancel`),
+and that prediction was **wrong in an instructive way**: it turned out to
+need a migration after all (`005_add_movement_transfer_id.sql`, a
+nullable `transfer_id` column) and an entity change (`Movement.TransferID`),
+because linking the two legs by `transfer_id` — so cancelling one cancels
+both, and a leg can't be cancelled alone — needs to survive a DB
+round-trip, not just live in memory during one request. The two-`Create`
+version below also has the atomicity gap called out further down, which
+the real implementation closes with `MovementRepository.CreateBatch`
+wrapping both inserts in one transaction (see
+`infrastructure/sqlite/movement_repository.go`), exactly the "if this
+were a real PR" option this walkthrough names as (b).
+
+Read the real thing at `application/usecases/transfer_between_account.go`,
+`application/usecases/cancel_transfer.go`, and
+`interfaces/api/handlers/transfer_handler.go` for what it actually looks
+like today. The walkthrough below is kept as-is, unedited from before the
+real feature existed, because the mismatch is the lesson: **Step 0's
+"what already exists" check is where you write down your best guess, not
+a guarantee** — you can be wrong about needing a migration, and finding
+out you were wrong two steps in is normal, not a process failure.
+
+**Architecture note:** the code below (like the real implementation)
+types the repository/usecase contract as `*entities.Movement` directly.
+Per `contributing/architecture.md`, that's a known gap against
+CleanExampleGo's `application/dto` layer, not the target shape — see that
+doc before copying this pattern into new work. The same doc's "Rich
+entities" section also shows what the two `Create` calls below would look
+like as `Account.Send`/`Account.Receive` methods instead of inline
+`Movement` construction in the usecase.
 
 ## Step 0 — work out what's actually new, before writing anything
 
