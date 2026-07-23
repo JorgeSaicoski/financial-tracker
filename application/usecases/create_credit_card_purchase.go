@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/JorgeSaicoski/financial-tracker/application/dto"
 	"github.com/JorgeSaicoski/financial-tracker/application/repositories"
 	"github.com/JorgeSaicoski/financial-tracker/domain/entities"
 	apperrors "github.com/JorgeSaicoski/financial-tracker/pkg/errors"
@@ -18,7 +19,7 @@ func NewCreateCreditCardPurchase(purchases repositories.CreditCardPurchaseReposi
 	return &createCreditCardPurchaseUseCase{purchases: purchases}
 }
 
-func (uc *createCreditCardPurchaseUseCase) Execute(ctx context.Context, input CreateCreditCardPurchaseInput) (*entities.CreditCardPurchase, []*entities.Movement, error) {
+func (uc *createCreditCardPurchaseUseCase) Execute(ctx context.Context, input CreateCreditCardPurchaseInput) (*dto.CreditCardPurchaseDTO, []*dto.MovementDTO, error) {
 	if input.UserID == "" || input.Currency == "" || input.TotalAmount == 0 {
 		return nil, nil, apperrors.ErrInvalidInput
 	}
@@ -26,7 +27,7 @@ func (uc *createCreditCardPurchaseUseCase) Execute(ctx context.Context, input Cr
 		return nil, nil, apperrors.ErrInvalidInput
 	}
 
-	category, _, err := normalizeCategoryAndMethod(input.Category, entities.PaymentMethodCreditCard)
+	category, _, err := normalizeCategoryAndMethod(input.Category, string(entities.PaymentMethodCreditCard))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -79,5 +80,7 @@ func (uc *createCreditCardPurchaseUseCase) Execute(ctx context.Context, input Cr
 		}
 	}
 
-	return uc.purchases.CreateWithInstallments(ctx, purchase, installments)
+	return uc.purchases.CreateWithInstallments(ctx,
+		dto.CreditCardPurchaseFromEntity(purchase),
+		dto.MovementsFromEntities(installments))
 }

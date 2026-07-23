@@ -6,20 +6,21 @@ import (
 	"testing"
 	"time"
 
+	"github.com/JorgeSaicoski/financial-tracker/application/dto"
 	"github.com/JorgeSaicoski/financial-tracker/domain/entities"
 	apperrors "github.com/JorgeSaicoski/financial-tracker/pkg/errors"
 )
 
-func activeMovement(id string, amount int64, syncStatus entities.SyncStatus) *entities.Movement {
-	return &entities.Movement{
+func activeMovement(id string, amount int64, syncStatus entities.SyncStatus) *dto.MovementDTO {
+	return &dto.MovementDTO{
 		ID:            id,
 		UserID:        "u1",
 		Amount:        amount,
 		Currency:      "usd",
-		Category:      entities.CategoryFood,
-		PaymentMethod: entities.PaymentMethodPix,
-		Status:        entities.MovementStatusActive,
-		SyncStatus:    syncStatus,
+		Category:      string(entities.CategoryFood),
+		PaymentMethod: string(entities.PaymentMethodPix),
+		Status:        string(entities.MovementStatusActive),
+		SyncStatus:    string(syncStatus),
 		Timestamp:     time.Now().UTC(),
 		CreatedAt:     time.Now().UTC(),
 	}
@@ -37,7 +38,7 @@ func TestCancelUnsyncedMovementVoidsLocally(t *testing.T) {
 	if result.Reversal != nil {
 		t.Error("unsynced cancel must not create a reversal")
 	}
-	if result.Movement.Status != entities.MovementStatusVoided {
+	if result.Movement.Status != string(entities.MovementStatusVoided) {
 		t.Errorf("status = %q, want voided", result.Movement.Status)
 	}
 	if trigger.calls != 0 {
@@ -60,7 +61,7 @@ func TestCancelFailedSyncMovementVoidsLocally(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result.Reversal != nil || result.Movement.Status != entities.MovementStatusVoided {
+	if result.Reversal != nil || result.Movement.Status != string(entities.MovementStatusVoided) {
 		t.Errorf("failed-sync movement should void, got %+v", result)
 	}
 }
@@ -86,7 +87,7 @@ func TestCancelSyncedMovementCreatesReversal(t *testing.T) {
 	if rev.CancelsMovementID == nil || *rev.CancelsMovementID != "m1" {
 		t.Error("reversal not linked to original")
 	}
-	if rev.SyncStatus != entities.SyncStatusPending || rev.Status != entities.MovementStatusActive {
+	if rev.SyncStatus != string(entities.SyncStatusPending) || rev.Status != string(entities.MovementStatusActive) {
 		t.Errorf("reversal state = %s/%s, want active/pending", rev.Status, rev.SyncStatus)
 	}
 	if rev.Category != original.Category || rev.PaymentMethod != original.PaymentMethod {
@@ -96,7 +97,7 @@ func TestCancelSyncedMovementCreatesReversal(t *testing.T) {
 	// Original stays active (immutable once in ledger-service) but is
 	// marked reversed.
 	stored, _ := repo.GetByID(context.Background(), "m1")
-	if stored.Status != entities.MovementStatusActive {
+	if stored.Status != string(entities.MovementStatusActive) {
 		t.Errorf("original status = %q, want active", stored.Status)
 	}
 	if stored.ReversedByMovementID == nil || *stored.ReversedByMovementID != rev.ID {
@@ -112,7 +113,7 @@ func TestCancelRejectsBadStates(t *testing.T) {
 	uc := NewCancelMovement(repo, &fakeSyncTrigger{})
 
 	voided := activeMovement("voided", -100, entities.SyncStatusPending)
-	voided.Status = entities.MovementStatusVoided
+	voided.Status = string(entities.MovementStatusVoided)
 	repo.add(voided)
 
 	reversedID := "rev"

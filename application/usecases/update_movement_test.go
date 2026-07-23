@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/JorgeSaicoski/financial-tracker/application/dto"
 	"github.com/JorgeSaicoski/financial-tracker/domain/entities"
 	apperrors "github.com/JorgeSaicoski/financial-tracker/pkg/errors"
 )
@@ -19,7 +20,7 @@ func TestUpdateMovementMetadataOnSyncedMovementEditsInPlace(t *testing.T) {
 
 	uc := NewUpdateMovement(repo, newFakeAccountRepo(), trigger)
 	newDescription := "corrected description"
-	newCategory := entities.CategoryTransport
+	newCategory := string(entities.CategoryTransport)
 	result, err := uc.Execute(context.Background(), "m1", UpdateMovementInput{
 		Description: &newDescription,
 		Category:    &newCategory,
@@ -127,7 +128,7 @@ func TestUpdateMovementAmountPostSyncReversesAndRecreates(t *testing.T) {
 	if result.Replacement.Amount != -750 {
 		t.Errorf("replacement amount = %d, want -750", result.Replacement.Amount)
 	}
-	if result.Replacement.SyncStatus != entities.SyncStatusPending {
+	if result.Replacement.SyncStatus != string(entities.SyncStatusPending) {
 		t.Errorf("replacement sync status = %s, want pending", result.Replacement.SyncStatus)
 	}
 	if trigger.calls != 1 {
@@ -208,12 +209,12 @@ func TestUpdateMovementPostSyncCombinedAmountAndMetadataEdit(t *testing.T) {
 	repo := newFakeMovementRepo()
 	m := activeMovement("m1", 10000, entities.SyncStatusSynced)
 	m.Description = "old description"
-	m.Category = entities.CategoryOther
+	m.Category = string(entities.CategoryOther)
 	repo.add(m)
 
 	uc := NewUpdateMovement(repo, newFakeAccountRepo(), &fakeSyncTrigger{})
 	newDescription := "salary, corrected"
-	newCategory := entities.CategoryIncome
+	newCategory := string(entities.CategoryIncome)
 	result, err := uc.Execute(context.Background(), "m1", UpdateMovementInput{
 		Amount:      int64Ptr(20000),
 		Description: &newDescription,
@@ -230,7 +231,7 @@ func TestUpdateMovementPostSyncCombinedAmountAndMetadataEdit(t *testing.T) {
 	}
 
 	original, _ := repo.GetByID(context.Background(), "m1")
-	if original.Description != "old description" || original.Category != entities.CategoryOther {
+	if original.Description != "old description" || original.Category != string(entities.CategoryOther) {
 		t.Errorf("original's metadata must stay exactly as it was, it's a historical record: %+v", original)
 	}
 }
@@ -261,7 +262,7 @@ func TestUpdateMovementCurrencyOnlyPostSyncReversesAndRecreates(t *testing.T) {
 func TestUpdateMovementRejectsVoidedMovement(t *testing.T) {
 	repo := newFakeMovementRepo()
 	voided := activeMovement("m1", -500, entities.SyncStatusPending)
-	voided.Status = entities.MovementStatusVoided
+	voided.Status = string(entities.MovementStatusVoided)
 	repo.add(voided)
 
 	uc := NewUpdateMovement(repo, newFakeAccountRepo(), &fakeSyncTrigger{})
@@ -337,7 +338,7 @@ func TestUpdateMovementValidatesLikeCreate(t *testing.T) {
 	repo := newFakeMovementRepo()
 	accounts := newFakeAccountRepo()
 	repo.add(activeMovement("m1", -500, entities.SyncStatusPending))
-	account, _ := accounts.Create(context.Background(), &entities.Account{UserID: "someone-else", Currency: "usd"})
+	account, _ := accounts.Create(context.Background(), &dto.AccountDTO{UserID: "someone-else", Currency: "usd"})
 
 	uc := NewUpdateMovement(repo, accounts, &fakeSyncTrigger{})
 
@@ -346,11 +347,11 @@ func TestUpdateMovementValidatesLikeCreate(t *testing.T) {
 		input UpdateMovementInput
 	}{
 		{"zero amount", UpdateMovementInput{Amount: int64Ptr(0)}},
-		{"unknown category", UpdateMovementInput{Category: (*entities.Category)(strPtr("yacht"))}},
-		{"unknown payment method", UpdateMovementInput{PaymentMethod: (*entities.PaymentMethod)(strPtr("iou"))}},
+		{"unknown category", UpdateMovementInput{Category: strPtr("yacht")}},
+		{"unknown payment method", UpdateMovementInput{PaymentMethod: strPtr("iou")}},
 		{"account belongs to another user", UpdateMovementInput{AccountID: &account.ID}},
 		{"account currency mismatch", UpdateMovementInput{AccountID: func() *string {
-			mismatched, _ := accounts.Create(context.Background(), &entities.Account{UserID: "u1", Currency: "brl"})
+			mismatched, _ := accounts.Create(context.Background(), &dto.AccountDTO{UserID: "u1", Currency: "brl"})
 			return &mismatched.ID
 		}()}},
 	}
@@ -366,7 +367,7 @@ func TestUpdateMovementValidatesLikeCreate(t *testing.T) {
 func TestUpdateMovementClearsAccountWithEmptyString(t *testing.T) {
 	repo := newFakeMovementRepo()
 	accounts := newFakeAccountRepo()
-	account, _ := accounts.Create(context.Background(), &entities.Account{UserID: "u1", Currency: "usd"})
+	account, _ := accounts.Create(context.Background(), &dto.AccountDTO{UserID: "u1", Currency: "usd"})
 	m := activeMovement("m1", -500, entities.SyncStatusSynced)
 	m.AccountID = &account.ID
 	repo.add(m)

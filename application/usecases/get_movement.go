@@ -3,8 +3,8 @@ package usecases
 import (
 	"context"
 
+	"github.com/JorgeSaicoski/financial-tracker/application/dto"
 	"github.com/JorgeSaicoski/financial-tracker/application/repositories"
-	"github.com/JorgeSaicoski/financial-tracker/domain/entities"
 	apperrors "github.com/JorgeSaicoski/financial-tracker/pkg/errors"
 )
 
@@ -17,7 +17,7 @@ func NewGetMovement(repo repositories.MovementRepository) GetMovementUseCase {
 	return &getMovementUseCase{repo: repo}
 }
 
-func (uc *getMovementUseCase) Execute(ctx context.Context, id string) (*entities.Movement, error) {
+func (uc *getMovementUseCase) Execute(ctx context.Context, id string) (*dto.MovementDTO, error) {
 	if id == "" {
 		return nil, apperrors.ErrInvalidInput
 	}

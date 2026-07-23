@@ -3,8 +3,8 @@ package ledgerservice
 import (
 	"context"
 
+	"github.com/JorgeSaicoski/financial-tracker/application/dto"
 	"github.com/JorgeSaicoski/financial-tracker/application/services"
-	"github.com/JorgeSaicoski/financial-tracker/domain/entities"
 	wire "github.com/JorgeSaicoski/financial-tracker/infrastructure/ledgerservice/entities"
 )
 
@@ -20,7 +20,7 @@ func NewLedgerGateway(client *Client) services.LedgerGateway {
 	return &gateway{client: client}
 }
 
-func (g *gateway) Publish(ctx context.Context, movement *entities.Movement) (string, error) {
+func (g *gateway) Publish(ctx context.Context, movement *dto.MovementDTO) (string, error) {
 	tx, err := g.client.CreateTransaction(ctx, wire.TransactionRequest{
 		UserID:   movement.UserID,
 		Amount:   movement.Amount,

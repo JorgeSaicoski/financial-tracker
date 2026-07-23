@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/JorgeSaicoski/financial-tracker/application/dto"
 	"github.com/JorgeSaicoski/financial-tracker/application/repositories"
 	"github.com/JorgeSaicoski/financial-tracker/domain/entities"
 	apperrors "github.com/JorgeSaicoski/financial-tracker/pkg/errors"
@@ -13,35 +14,35 @@ import (
 )
 
 type fakeRepo struct {
-	movements map[string]*entities.Movement
+	movements map[string]*dto.MovementDTO
 }
 
-func newFakeRepo(movements ...*entities.Movement) *fakeRepo {
-	f := &fakeRepo{movements: map[string]*entities.Movement{}}
+func newFakeRepo(movements ...*dto.MovementDTO) *fakeRepo {
+	f := &fakeRepo{movements: map[string]*dto.MovementDTO{}}
 	for _, m := range movements {
 		f.movements[m.ID] = m
 	}
 	return f
 }
 
-func (f *fakeRepo) Create(context.Context, *entities.Movement) (*entities.Movement, error) {
+func (f *fakeRepo) Create(context.Context, *dto.MovementDTO) (*dto.MovementDTO, error) {
 	panic("not used")
 }
-func (f *fakeRepo) GetByID(context.Context, string) (*entities.Movement, error) { panic("not used") }
-func (f *fakeRepo) CreateBatch(context.Context, []*entities.Movement) ([]*entities.Movement, error) {
+func (f *fakeRepo) GetByID(context.Context, string) (*dto.MovementDTO, error) { panic("not used") }
+func (f *fakeRepo) CreateBatch(context.Context, []*dto.MovementDTO) ([]*dto.MovementDTO, error) {
 	panic("not used")
 }
-func (f *fakeRepo) ListByTransferID(context.Context, string) ([]*entities.Movement, error) {
+func (f *fakeRepo) ListByTransferID(context.Context, string) ([]*dto.MovementDTO, error) {
 	panic("not used")
 }
-func (f *fakeRepo) ListByUser(context.Context, string, *string, *time.Time, *time.Time, int, int) ([]*entities.Movement, error) {
+func (f *fakeRepo) ListByUser(context.Context, string, *string, *time.Time, *time.Time, int, int) ([]*dto.MovementDTO, error) {
 	panic("not used")
 }
-func (f *fakeRepo) ListByCreditCardPurchase(context.Context, string) ([]*entities.Movement, error) {
+func (f *fakeRepo) ListByCreditCardPurchase(context.Context, string) ([]*dto.MovementDTO, error) {
 	panic("not used")
 }
 func (f *fakeRepo) Void(context.Context, string) error { panic("not used") }
-func (f *fakeRepo) UpdateMetadata(context.Context, string, string, entities.Category, entities.PaymentMethod, *string) error {
+func (f *fakeRepo) UpdateMetadata(context.Context, string, string, string, string, *string) error {
 	panic("not used")
 }
 func (f *fakeRepo) UpdateFinancial(context.Context, string, int64, string, time.Time) error {
@@ -50,17 +51,17 @@ func (f *fakeRepo) UpdateFinancial(context.Context, string, int64, string, time.
 func (f *fakeRepo) NetByAccount(context.Context, string, *time.Time, *time.Time) (int64, error) {
 	panic("not used")
 }
-func (f *fakeRepo) CreateReversal(context.Context, *entities.Movement) (*entities.Movement, error) {
+func (f *fakeRepo) CreateReversal(context.Context, *dto.MovementDTO) (*dto.MovementDTO, error) {
 	panic("not used")
 }
 func (f *fakeRepo) Transact(_ context.Context, fn func(repositories.MovementRepository) error) error {
 	panic("not used")
 }
 
-func (f *fakeRepo) ListPendingSync(_ context.Context, now time.Time, retryCooldown time.Duration) ([]*entities.Movement, error) {
-	var out []*entities.Movement
+func (f *fakeRepo) ListPendingSync(_ context.Context, now time.Time, retryCooldown time.Duration) ([]*dto.MovementDTO, error) {
+	var out []*dto.MovementDTO
 	for _, m := range f.movements {
-		if m.Status != entities.MovementStatusActive || m.SyncStatus == entities.SyncStatusSynced {
+		if m.Status != string(entities.MovementStatusActive) || m.SyncStatus == string(entities.SyncStatusSynced) {
 			continue
 		}
 		if m.Timestamp.After(now) {
@@ -79,7 +80,7 @@ func (f *fakeRepo) MarkSynced(_ context.Context, id, ledgerTransactionID string,
 	if !ok {
 		return apperrors.ErrNotFound
 	}
-	m.SyncStatus = entities.SyncStatusSynced
+	m.SyncStatus = string(entities.SyncStatusSynced)
 	m.LedgerTransactionID = &ledgerTransactionID
 	m.SyncedAt = &at
 	m.LastSyncAttemptAt = &at
@@ -92,7 +93,7 @@ func (f *fakeRepo) MarkSyncFailed(_ context.Context, id, syncErr string, at time
 	if !ok {
 		return apperrors.ErrNotFound
 	}
-	m.SyncStatus = entities.SyncStatusFailed
+	m.SyncStatus = string(entities.SyncStatusFailed)
 	m.LastSyncError = &syncErr
 	m.LastSyncAttemptAt = &at
 	m.SyncAttempts++
@@ -104,7 +105,7 @@ type fakeGateway struct {
 	published []string
 }
 
-func (g *fakeGateway) Publish(_ context.Context, m *entities.Movement) (string, error) {
+func (g *fakeGateway) Publish(_ context.Context, m *dto.MovementDTO) (string, error) {
 	if g.err != nil {
 		return "", g.err
 	}
@@ -112,14 +113,14 @@ func (g *fakeGateway) Publish(_ context.Context, m *entities.Movement) (string, 
 	return "ledger-" + m.ID, nil
 }
 
-func pendingMovement(id string, timestamp time.Time) *entities.Movement {
-	return &entities.Movement{
+func pendingMovement(id string, timestamp time.Time) *dto.MovementDTO {
+	return &dto.MovementDTO{
 		ID:         id,
 		UserID:     "u1",
 		Amount:     -100,
 		Currency:   "usd",
-		Status:     entities.MovementStatusActive,
-		SyncStatus: entities.SyncStatusPending,
+		Status:     string(entities.MovementStatusActive),
+		SyncStatus: string(entities.SyncStatusPending),
 		Timestamp:  timestamp,
 	}
 }
@@ -136,13 +137,13 @@ func TestRunPassSyncsDueMovements(t *testing.T) {
 	if sum.Synced != 1 || sum.Failed != 0 {
 		t.Fatalf("summary = %+v, want 1 synced / 0 failed", sum)
 	}
-	if due.SyncStatus != entities.SyncStatusSynced {
+	if due.SyncStatus != string(entities.SyncStatusSynced) {
 		t.Errorf("due movement sync status = %q", due.SyncStatus)
 	}
 	if due.LedgerTransactionID == nil || *due.LedgerTransactionID != "ledger-due" {
 		t.Error("ledger transaction id not recorded")
 	}
-	if future.SyncStatus != entities.SyncStatusPending {
+	if future.SyncStatus != string(entities.SyncStatusPending) {
 		t.Error("future installment must not sync before its date")
 	}
 }
@@ -158,7 +159,7 @@ func TestRunPassRecordsFailures(t *testing.T) {
 	if sum.Synced != 0 || sum.Failed != 1 {
 		t.Fatalf("summary = %+v, want 0 synced / 1 failed", sum)
 	}
-	if m.SyncStatus != entities.SyncStatusFailed || m.SyncAttempts != 1 {
+	if m.SyncStatus != string(entities.SyncStatusFailed) || m.SyncAttempts != 1 {
 		t.Errorf("movement = %s attempts %d, want failed/1", m.SyncStatus, m.SyncAttempts)
 	}
 	if m.LastSyncError == nil || *m.LastSyncError != "connection refused" {
@@ -174,7 +175,7 @@ func TestRunPassRecordsFailures(t *testing.T) {
 	if sum := service.RunPassNow(context.Background()); sum.Synced != 1 {
 		t.Fatalf("manual pass should retry immediately, got %+v", sum)
 	}
-	if m.SyncStatus != entities.SyncStatusSynced {
+	if m.SyncStatus != string(entities.SyncStatusSynced) {
 		t.Errorf("movement status = %q, want synced after recovery", m.SyncStatus)
 	}
 }

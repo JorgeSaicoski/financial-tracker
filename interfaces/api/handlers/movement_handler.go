@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/JorgeSaicoski/financial-tracker/application/dto"
 	"github.com/JorgeSaicoski/financial-tracker/application/services"
 	"github.com/JorgeSaicoski/financial-tracker/application/usecases"
 	"github.com/JorgeSaicoski/financial-tracker/domain/entities"
@@ -15,7 +16,7 @@ import (
 
 // MovementHandler exposes financial-tracker's own API. It never talks to
 // the database or ledger-service directly - it only calls application
-// code, which depends on the domain repository interfaces.
+// code, which depends on the application repository interfaces.
 type MovementHandler interface {
 	CreateMovement(w http.ResponseWriter, r *http.Request)
 	GetMovement(w http.ResponseWriter, r *http.Request)
@@ -116,7 +117,7 @@ func (h *movementHandler) CreateMovement(w http.ResponseWriter, r *http.Request)
 			TotalAmount:  req.Amount,
 			Currency:     currency,
 			Description:  req.Description,
-			Category:     entities.Category(req.Category),
+			Category:     req.Category,
 			Installments: req.Installments,
 		})
 		if err != nil {
@@ -132,8 +133,8 @@ func (h *movementHandler) CreateMovement(w http.ResponseWriter, r *http.Request)
 		Amount:        req.Amount,
 		Currency:      currency,
 		Description:   req.Description,
-		Category:      entities.Category(req.Category),
-		PaymentMethod: entities.PaymentMethod(req.PaymentMethod),
+		Category:      req.Category,
+		PaymentMethod: req.PaymentMethod,
 		AccountID:     accountID,
 	})
 	if err != nil {
@@ -222,19 +223,13 @@ func (h *movementHandler) UpdateMovement(w http.ResponseWriter, r *http.Request)
 	}
 
 	input := usecases.UpdateMovementInput{
-		Description: req.Description,
-		AccountID:   req.AccountID,
-		Amount:      req.Amount,
-		Currency:    req.Currency,
-		Timestamp:   req.Timestamp,
-	}
-	if req.Category != nil {
-		category := entities.Category(*req.Category)
-		input.Category = &category
-	}
-	if req.PaymentMethod != nil {
-		paymentMethod := entities.PaymentMethod(*req.PaymentMethod)
-		input.PaymentMethod = &paymentMethod
+		Description:   req.Description,
+		Category:      req.Category,
+		PaymentMethod: req.PaymentMethod,
+		AccountID:     req.AccountID,
+		Amount:        req.Amount,
+		Currency:      req.Currency,
+		Timestamp:     req.Timestamp,
 	}
 
 	result, err := h.updateMovement.Execute(r.Context(), r.PathValue("id"), input)
@@ -375,17 +370,17 @@ func parseNonNegativeIntParam(r *http.Request, name string) (int, error) {
 
 var errInvalidParam = errors.New("invalid parameter")
 
-func toMovementResponse(m *entities.Movement) interfacedto.MovementResponse {
+func toMovementResponse(m *dto.MovementDTO) interfacedto.MovementResponse {
 	resp := interfacedto.MovementResponse{
 		ID:            m.ID,
 		UserID:        m.UserID,
 		Amount:        m.Amount,
 		Currency:      m.Currency,
 		Description:   m.Description,
-		Category:      string(m.Category),
-		PaymentMethod: string(m.PaymentMethod),
-		Status:        string(m.Status),
-		SyncStatus:    string(m.SyncStatus),
+		Category:      m.Category,
+		PaymentMethod: m.PaymentMethod,
+		Status:        m.Status,
+		SyncStatus:    m.SyncStatus,
 		Timestamp:     m.Timestamp,
 	}
 	if m.AccountID != nil {
@@ -424,17 +419,17 @@ func toCancelMovementResponse(result usecases.CancelMovementResult) interfacedto
 	return resp
 }
 
-func toPurchaseResponse(p *entities.CreditCardPurchase, movements []*entities.Movement) interfacedto.CreditCardPurchaseResponse {
+func toPurchaseResponse(p *dto.CreditCardPurchaseDTO, movements []*dto.MovementDTO) interfacedto.CreditCardPurchaseResponse {
 	resp := interfacedto.CreditCardPurchaseResponse{
 		ID:               p.ID,
 		UserID:           p.UserID,
 		Description:      p.Description,
-		Category:         string(p.Category),
+		Category:         p.Category,
 		TotalAmount:      p.TotalAmount,
 		Currency:         p.Currency,
 		InstallmentCount: p.InstallmentCount,
 		PurchaseDate:     p.PurchaseDate,
-		Status:           string(p.Status),
+		Status:           p.Status,
 	}
 	for _, m := range movements {
 		resp.Movements = append(resp.Movements, toMovementResponse(m))

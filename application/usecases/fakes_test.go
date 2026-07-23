@@ -6,6 +6,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/JorgeSaicoski/financial-tracker/application/dto"
 	"github.com/JorgeSaicoski/financial-tracker/application/repositories"
 	"github.com/JorgeSaicoski/financial-tracker/domain/entities"
 	apperrors "github.com/JorgeSaicoski/financial-tracker/pkg/errors"
@@ -41,8 +42,9 @@ func (f *fakeCurrencyRepo) Add(_ context.Context, code string) error {
 
 // fakeMovementRepo is an in-memory MovementRepository mirroring the
 // semantics the SQLite implementation guarantees (see its own tests).
+// It stores application/dto types, same as the real contract.
 type fakeMovementRepo struct {
-	byID              map[string]*entities.Movement
+	byID              map[string]*dto.MovementDTO
 	nextID            int
 	updateMetadataErr error
 	// createErr, if set, is returned by Create instead of inserting —
@@ -57,10 +59,10 @@ type fakeMovementRepo struct {
 }
 
 func newFakeMovementRepo() *fakeMovementRepo {
-	return &fakeMovementRepo{byID: map[string]*entities.Movement{}}
+	return &fakeMovementRepo{byID: map[string]*dto.MovementDTO{}}
 }
 
-func (f *fakeMovementRepo) add(m *entities.Movement) *entities.Movement {
+func (f *fakeMovementRepo) add(m *dto.MovementDTO) *dto.MovementDTO {
 	if m.ID == "" {
 		f.nextID++
 		m.ID = fmt.Sprintf("m-%d", f.nextID)
@@ -70,22 +72,22 @@ func (f *fakeMovementRepo) add(m *entities.Movement) *entities.Movement {
 	return m
 }
 
-func (f *fakeMovementRepo) Create(_ context.Context, m *entities.Movement) (*entities.Movement, error) {
+func (f *fakeMovementRepo) Create(_ context.Context, m *dto.MovementDTO) (*dto.MovementDTO, error) {
 	if f.createErr != nil {
 		return nil, f.createErr
 	}
 	return f.add(m), nil
 }
 
-func (f *fakeMovementRepo) CreateBatch(_ context.Context, movements []*entities.Movement) ([]*entities.Movement, error) {
+func (f *fakeMovementRepo) CreateBatch(_ context.Context, movements []*dto.MovementDTO) ([]*dto.MovementDTO, error) {
 	for _, m := range movements {
 		f.add(m)
 	}
 	return movements, nil
 }
 
-func (f *fakeMovementRepo) ListByTransferID(_ context.Context, transferID string) ([]*entities.Movement, error) {
-	var out []*entities.Movement
+func (f *fakeMovementRepo) ListByTransferID(_ context.Context, transferID string) ([]*dto.MovementDTO, error) {
+	var out []*dto.MovementDTO
 	for _, m := range f.byID {
 		if m.TransferID != nil && *m.TransferID == transferID {
 			cp := *m
@@ -96,7 +98,7 @@ func (f *fakeMovementRepo) ListByTransferID(_ context.Context, transferID string
 	return out, nil
 }
 
-func (f *fakeMovementRepo) GetByID(_ context.Context, id string) (*entities.Movement, error) {
+func (f *fakeMovementRepo) GetByID(_ context.Context, id string) (*dto.MovementDTO, error) {
 	m, ok := f.byID[id]
 	if !ok {
 		return nil, apperrors.ErrNotFound
@@ -105,8 +107,8 @@ func (f *fakeMovementRepo) GetByID(_ context.Context, id string) (*entities.Move
 	return &cp, nil
 }
 
-func (f *fakeMovementRepo) ListByUser(_ context.Context, userID string, currency *string, from, to *time.Time, _, _ int) ([]*entities.Movement, error) {
-	var out []*entities.Movement
+func (f *fakeMovementRepo) ListByUser(_ context.Context, userID string, currency *string, from, to *time.Time, _, _ int) ([]*dto.MovementDTO, error) {
+	var out []*dto.MovementDTO
 	for _, m := range f.byID {
 		if m.UserID != userID {
 			continue
@@ -129,7 +131,7 @@ func (f *fakeMovementRepo) ListByUser(_ context.Context, userID string, currency
 func (f *fakeMovementRepo) NetByAccount(_ context.Context, accountID string, after, until *time.Time) (int64, error) {
 	var net int64
 	for _, m := range f.byID {
-		if m.AccountID == nil || *m.AccountID != accountID || m.Status != entities.MovementStatusActive {
+		if m.AccountID == nil || *m.AccountID != accountID || m.Status != string(entities.MovementStatusActive) {
 			continue
 		}
 		if after != nil && !m.Timestamp.After(*after) {
@@ -143,8 +145,8 @@ func (f *fakeMovementRepo) NetByAccount(_ context.Context, accountID string, aft
 	return net, nil
 }
 
-func (f *fakeMovementRepo) ListByCreditCardPurchase(_ context.Context, purchaseID string) ([]*entities.Movement, error) {
-	var out []*entities.Movement
+func (f *fakeMovementRepo) ListByCreditCardPurchase(_ context.Context, purchaseID string) ([]*dto.MovementDTO, error) {
+	var out []*dto.MovementDTO
 	for _, m := range f.byID {
 		if m.CreditCardPurchaseID != nil && *m.CreditCardPurchaseID == purchaseID {
 			cp := *m
@@ -154,10 +156,10 @@ func (f *fakeMovementRepo) ListByCreditCardPurchase(_ context.Context, purchaseI
 	return out, nil
 }
 
-func (f *fakeMovementRepo) ListPendingSync(_ context.Context, now time.Time, retryCooldown time.Duration) ([]*entities.Movement, error) {
-	var out []*entities.Movement
+func (f *fakeMovementRepo) ListPendingSync(_ context.Context, now time.Time, retryCooldown time.Duration) ([]*dto.MovementDTO, error) {
+	var out []*dto.MovementDTO
 	for _, m := range f.byID {
-		if m.Status != entities.MovementStatusActive || m.SyncStatus == entities.SyncStatusSynced {
+		if m.Status != string(entities.MovementStatusActive) || m.SyncStatus == string(entities.SyncStatusSynced) {
 			continue
 		}
 		if m.Timestamp.After(now) {
@@ -177,7 +179,7 @@ func (f *fakeMovementRepo) MarkSynced(_ context.Context, id, ledgerTransactionID
 	if !ok {
 		return apperrors.ErrNotFound
 	}
-	m.SyncStatus = entities.SyncStatusSynced
+	m.SyncStatus = string(entities.SyncStatusSynced)
 	m.LedgerTransactionID = &ledgerTransactionID
 	m.SyncedAt = &at
 	m.LastSyncAttemptAt = &at
@@ -191,14 +193,14 @@ func (f *fakeMovementRepo) MarkSyncFailed(_ context.Context, id, syncErr string,
 	if !ok {
 		return apperrors.ErrNotFound
 	}
-	m.SyncStatus = entities.SyncStatusFailed
+	m.SyncStatus = string(entities.SyncStatusFailed)
 	m.LastSyncError = &syncErr
 	m.LastSyncAttemptAt = &at
 	m.SyncAttempts++
 	return nil
 }
 
-func (f *fakeMovementRepo) UpdateMetadata(_ context.Context, id, description string, category entities.Category, paymentMethod entities.PaymentMethod, accountID *string) error {
+func (f *fakeMovementRepo) UpdateMetadata(_ context.Context, id, description, category, paymentMethod string, accountID *string) error {
 	if f.updateMetadataErr != nil {
 		return f.updateMetadataErr
 	}
@@ -229,11 +231,11 @@ func (f *fakeMovementRepo) Void(_ context.Context, id string) error {
 	if !ok {
 		return apperrors.ErrNotFound
 	}
-	m.Status = entities.MovementStatusVoided
+	m.Status = string(entities.MovementStatusVoided)
 	return nil
 }
 
-func (f *fakeMovementRepo) CreateReversal(_ context.Context, reversal *entities.Movement) (*entities.Movement, error) {
+func (f *fakeMovementRepo) CreateReversal(_ context.Context, reversal *dto.MovementDTO) (*dto.MovementDTO, error) {
 	if f.createReversalErrForID != "" && *reversal.CancelsMovementID == f.createReversalErrForID {
 		return nil, fmt.Errorf("forced failure reversing %s", f.createReversalErrForID)
 	}
@@ -241,7 +243,7 @@ func (f *fakeMovementRepo) CreateReversal(_ context.Context, reversal *entities.
 	if !ok {
 		return nil, apperrors.ErrNotFound
 	}
-	if original.ReversedByMovementID != nil || original.Status != entities.MovementStatusActive {
+	if original.ReversedByMovementID != nil || original.Status != string(entities.MovementStatusActive) {
 		return nil, apperrors.ErrConflict
 	}
 	reversal = f.add(reversal)
@@ -253,7 +255,7 @@ func (f *fakeMovementRepo) CreateReversal(_ context.Context, reversal *entities.
 // guarantee: fn's writes only stick if it returns nil, otherwise the
 // repo's state is restored to what it was before fn ran.
 func (f *fakeMovementRepo) Transact(_ context.Context, fn func(tx repositories.MovementRepository) error) error {
-	snapshot := make(map[string]*entities.Movement, len(f.byID))
+	snapshot := make(map[string]*dto.MovementDTO, len(f.byID))
 	for id, m := range f.byID {
 		cp := *m
 		snapshot[id] = &cp
@@ -266,16 +268,16 @@ func (f *fakeMovementRepo) Transact(_ context.Context, fn func(tx repositories.M
 }
 
 type fakePurchaseRepo struct {
-	byID      map[string]*entities.CreditCardPurchase
+	byID      map[string]*dto.CreditCardPurchaseDTO
 	movements *fakeMovementRepo
 	nextID    int
 }
 
 func newFakePurchaseRepo(movements *fakeMovementRepo) *fakePurchaseRepo {
-	return &fakePurchaseRepo{byID: map[string]*entities.CreditCardPurchase{}, movements: movements}
+	return &fakePurchaseRepo{byID: map[string]*dto.CreditCardPurchaseDTO{}, movements: movements}
 }
 
-func (f *fakePurchaseRepo) CreateWithInstallments(_ context.Context, purchase *entities.CreditCardPurchase, installments []*entities.Movement) (*entities.CreditCardPurchase, []*entities.Movement, error) {
+func (f *fakePurchaseRepo) CreateWithInstallments(_ context.Context, purchase *dto.CreditCardPurchaseDTO, installments []*dto.MovementDTO) (*dto.CreditCardPurchaseDTO, []*dto.MovementDTO, error) {
 	if purchase.ID == "" {
 		f.nextID++
 		purchase.ID = fmt.Sprintf("p-%d", f.nextID)
@@ -289,7 +291,7 @@ func (f *fakePurchaseRepo) CreateWithInstallments(_ context.Context, purchase *e
 	return purchase, installments, nil
 }
 
-func (f *fakePurchaseRepo) GetByID(_ context.Context, id string) (*entities.CreditCardPurchase, error) {
+func (f *fakePurchaseRepo) GetByID(_ context.Context, id string) (*dto.CreditCardPurchaseDTO, error) {
 	p, ok := f.byID[id]
 	if !ok {
 		return nil, apperrors.ErrNotFound
@@ -303,7 +305,7 @@ func (f *fakePurchaseRepo) MarkCancelled(_ context.Context, id string) error {
 	if !ok {
 		return apperrors.ErrNotFound
 	}
-	p.Status = entities.CreditCardPurchaseStatusCancelled
+	p.Status = string(entities.CreditCardPurchaseStatusCancelled)
 	return nil
 }
 
@@ -315,19 +317,19 @@ func (f *fakeSyncTrigger) TriggerAsync() { f.calls++ }
 
 // fakeAccountRepo is an in-memory AccountRepository.
 type fakeAccountRepo struct {
-	byID      map[string]*entities.Account
-	snapshots map[string][]*entities.AccountSnapshot
+	byID      map[string]*dto.AccountDTO
+	snapshots map[string][]*dto.AccountSnapshotDTO
 	nextID    int
 }
 
 func newFakeAccountRepo() *fakeAccountRepo {
 	return &fakeAccountRepo{
-		byID:      map[string]*entities.Account{},
-		snapshots: map[string][]*entities.AccountSnapshot{},
+		byID:      map[string]*dto.AccountDTO{},
+		snapshots: map[string][]*dto.AccountSnapshotDTO{},
 	}
 }
 
-func (f *fakeAccountRepo) Create(_ context.Context, account *entities.Account) (*entities.Account, error) {
+func (f *fakeAccountRepo) Create(_ context.Context, account *dto.AccountDTO) (*dto.AccountDTO, error) {
 	if account.ID == "" {
 		f.nextID++
 		account.ID = fmt.Sprintf("a-%d", f.nextID)
@@ -337,7 +339,7 @@ func (f *fakeAccountRepo) Create(_ context.Context, account *entities.Account) (
 	return account, nil
 }
 
-func (f *fakeAccountRepo) GetByID(_ context.Context, id string) (*entities.Account, error) {
+func (f *fakeAccountRepo) GetByID(_ context.Context, id string) (*dto.AccountDTO, error) {
 	a, ok := f.byID[id]
 	if !ok {
 		return nil, apperrors.ErrNotFound
@@ -346,8 +348,8 @@ func (f *fakeAccountRepo) GetByID(_ context.Context, id string) (*entities.Accou
 	return &cp, nil
 }
 
-func (f *fakeAccountRepo) ListByUser(_ context.Context, userID string) ([]*entities.Account, error) {
-	var out []*entities.Account
+func (f *fakeAccountRepo) ListByUser(_ context.Context, userID string) ([]*dto.AccountDTO, error) {
+	var out []*dto.AccountDTO
 	for _, a := range f.byID {
 		if a.UserID != userID {
 			continue
@@ -358,7 +360,7 @@ func (f *fakeAccountRepo) ListByUser(_ context.Context, userID string) ([]*entit
 	return out, nil
 }
 
-func (f *fakeAccountRepo) AddSnapshot(_ context.Context, snapshot *entities.AccountSnapshot) (*entities.AccountSnapshot, error) {
+func (f *fakeAccountRepo) AddSnapshot(_ context.Context, snapshot *dto.AccountSnapshotDTO) (*dto.AccountSnapshotDTO, error) {
 	if snapshot.ID == "" {
 		f.nextID++
 		snapshot.ID = fmt.Sprintf("s-%d", f.nextID)
@@ -368,8 +370,8 @@ func (f *fakeAccountRepo) AddSnapshot(_ context.Context, snapshot *entities.Acco
 	return snapshot, nil
 }
 
-func (f *fakeAccountRepo) LatestSnapshots(_ context.Context, accountID string, n int) ([]*entities.AccountSnapshot, error) {
-	snaps := append([]*entities.AccountSnapshot(nil), f.snapshots[accountID]...)
+func (f *fakeAccountRepo) LatestSnapshots(_ context.Context, accountID string, n int) ([]*dto.AccountSnapshotDTO, error) {
+	snaps := append([]*dto.AccountSnapshotDTO(nil), f.snapshots[accountID]...)
 	sort.Slice(snaps, func(i, j int) bool { return snaps[i].Timestamp.After(snaps[j].Timestamp) })
 	if len(snaps) > n {
 		snaps = snaps[:n]

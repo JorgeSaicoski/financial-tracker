@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/JorgeSaicoski/financial-tracker/application/dto"
 	"github.com/JorgeSaicoski/financial-tracker/application/repositories"
-	"github.com/JorgeSaicoski/financial-tracker/domain/entities"
 	apperrors "github.com/JorgeSaicoski/financial-tracker/pkg/errors"
 	"github.com/JorgeSaicoski/financial-tracker/pkg/id"
 )
@@ -29,60 +29,45 @@ func (uc *transferBetweenAccountsUseCase) Execute(ctx context.Context, input Tra
 		return TransferResult{}, fmt.Errorf("%w: source and destination accounts must differ", apperrors.ErrInvalidInput)
 	}
 
-	from, err := uc.ownedAccount(ctx, input.FromAccountID, input.UserID)
+	fromDTO, err := uc.ownedAccount(ctx, input.FromAccountID, input.UserID)
 	if err != nil {
 		return TransferResult{}, err
 	}
-	to, err := uc.ownedAccount(ctx, input.ToAccountID, input.UserID)
+	toDTO, err := uc.ownedAccount(ctx, input.ToAccountID, input.UserID)
 	if err != nil {
 		return TransferResult{}, err
-	}
-	if from.Currency != to.Currency {
-		// v1 doesn't know a conversion rate between the two; cross-currency
-		// transfers are a later ticket (needs BACK-11's exchange rates).
-		return TransferResult{}, fmt.Errorf("%w: cross-currency transfers aren't supported yet (%q vs %q)",
-			apperrors.ErrInvalidInput, from.Currency, to.Currency)
 	}
 
 	timestamp := input.Timestamp
 	if timestamp.IsZero() {
 		timestamp = time.Now().UTC()
 	}
-	now := time.Now().UTC()
-	transferID := id.NewUUID()
 
-	debit := &entities.Movement{
-		UserID:        input.UserID,
-		Amount:        -input.Amount,
-		Currency:      from.Currency,
-		Description:   input.Description,
-		Category:      entities.CategoryTransfer,
-		PaymentMethod: entities.PaymentMethodBankTransfer,
-		AccountID:     &from.ID,
-		TransferID:    &transferID,
-		Status:        entities.MovementStatusActive,
-		SyncStatus:    entities.SyncStatusPending,
-		Timestamp:     timestamp,
-		CreatedAt:     now,
+	// The single-account rules — same currency (v1 doesn't know a
+	// conversion rate; cross-currency needs BACK-11's exchange rates),
+	// positive amount, not the same account — live on the Account entity:
+	// each account produces the movement its side of the transfer creates.
+	from, to := fromDTO.ToEntity(), toDTO.ToEntity()
+	debit, err := from.Send(to, input.Amount, input.Description, timestamp)
+	if err != nil {
+		return TransferResult{}, fmt.Errorf("%w: %v", apperrors.ErrInvalidInput, err)
 	}
-	credit := &entities.Movement{
-		UserID:        input.UserID,
-		Amount:        input.Amount,
-		Currency:      to.Currency,
-		Description:   input.Description,
-		Category:      entities.CategoryTransfer,
-		PaymentMethod: entities.PaymentMethodBankTransfer,
-		AccountID:     &to.ID,
-		TransferID:    &transferID,
-		Status:        entities.MovementStatusActive,
-		SyncStatus:    entities.SyncStatusPending,
-		Timestamp:     timestamp,
-		CreatedAt:     now,
+	credit, err := to.Receive(from, input.Amount, input.Description, timestamp)
+	if err != nil {
+		return TransferResult{}, fmt.Errorf("%w: %v", apperrors.ErrInvalidInput, err)
 	}
+
+	// Linking the pair is cross-entity orchestration — the usecase's job,
+	// not either account's.
+	transferID := id.NewUUID()
+	debit.TransferID, credit.TransferID = &transferID, &transferID
 
 	// Both legs land in one transaction: a transfer with only one leg
 	// would silently create or destroy money.
-	created, err := uc.movements.CreateBatch(ctx, []*entities.Movement{debit, credit})
+	created, err := uc.movements.CreateBatch(ctx, []*dto.MovementDTO{
+		dto.MovementFromEntity(debit),
+		dto.MovementFromEntity(credit),
+	})
 	if err != nil {
 		return TransferResult{}, err
 	}
@@ -90,7 +75,7 @@ func (uc *transferBetweenAccountsUseCase) Execute(ctx context.Context, input Tra
 	return TransferResult{TransferID: transferID, Debit: created[0], Credit: created[1]}, nil
 }
 
-func (uc *transferBetweenAccountsUseCase) ownedAccount(ctx context.Context, accountID, userID string) (*entities.Account, error) {
+func (uc *transferBetweenAccountsUseCase) ownedAccount(ctx context.Context, accountID, userID string) (*dto.AccountDTO, error) {
 	account, err := uc.accounts.GetByID(ctx, accountID)
 	if apperrors.Is(err, apperrors.ErrNotFound) {
 		return nil, fmt.Errorf("%w: account not found", apperrors.ErrInvalidInput)

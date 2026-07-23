@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
+	"github.com/JorgeSaicoski/financial-tracker/application/dto"
 	"github.com/JorgeSaicoski/financial-tracker/application/repositories"
-	"github.com/JorgeSaicoski/financial-tracker/domain/entities"
 	apperrors "github.com/JorgeSaicoski/financial-tracker/pkg/errors"
 )
 
@@ -30,7 +30,7 @@ func (uc *reportAccountBalanceUseCase) Execute(ctx context.Context, accountID st
 	}
 
 	now := time.Now().UTC()
-	if _, err := uc.accounts.AddSnapshot(ctx, &entities.AccountSnapshot{
+	if _, err := uc.accounts.AddSnapshot(ctx, &dto.AccountSnapshotDTO{
 		AccountID: account.ID,
 		Balance:   balance,
 		Timestamp: now,
