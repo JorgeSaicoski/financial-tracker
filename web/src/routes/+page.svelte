@@ -333,6 +333,53 @@
 		</strong>
 	</section>
 
+	<section class="cashflow card">
+		<div class="section-head">
+			<h2>Cashflow</h2>
+			<div class="range">
+				<input type="date" bind:value={cashflowFrom} aria-label="From" />
+				<span>→</span>
+				<input type="date" bind:value={cashflowTo} aria-label="To" />
+				<button class="ghost" onclick={handleCashflow} disabled={cashflowLoading}>
+					{cashflowLoading ? '…' : 'Calculate'}
+				</button>
+			</div>
+		</div>
+
+		{#if cashflow}
+			{#if cashflow.totals.length === 0}
+				<p class="empty small">No movements in this period.</p>
+			{:else}
+				{#each cashflow.totals as flow (flow.currency)}
+					<div class="flow-row total">
+						<span class="flow-name">{flow.currency.toUpperCase()}</span>
+						<span class="flow-in">+{formatAmount(flow.in, flow.currency)}</span>
+						<span class="flow-out">−{formatAmount(flow.out, flow.currency)}</span>
+						<span class="flow-net" class:credit={flow.net > 0} class:debit={flow.net < 0}>
+							{formatAmount(flow.net, flow.currency)}
+						</span>
+					</div>
+				{/each}
+				{#if cashflow.by_account.length > 1 || cashflow.by_account.some((f) => f.account_id)}
+					<div class="flow-breakdown">
+						{#each cashflow.by_account as flow (`${flow.account_id}|${flow.currency}`)}
+							<div class="flow-row">
+								<span class="flow-name">{flow.name || 'No account'}</span>
+								<span class="flow-in">+{formatAmount(flow.in, flow.currency)}</span>
+								<span class="flow-out">−{formatAmount(flow.out, flow.currency)}</span>
+								<span class="flow-net" class:credit={flow.net > 0} class:debit={flow.net < 0}>
+									{formatAmount(flow.net, flow.currency)}
+								</span>
+							</div>
+						{/each}
+					</div>
+				{/if}
+			{/if}
+		{:else}
+			<p class="empty small">Pick a period and calculate to see money in vs money out.</p>
+		{/if}
+	</section>
+
 	<section class="accounts card">
 		<div class="section-head">
 			<h2>Accounts</h2>
@@ -481,53 +528,6 @@
 		<p class="message notice">{notice}</p>
 	{/if}
 
-	<section class="cashflow card">
-		<div class="section-head">
-			<h2>Cashflow</h2>
-			<div class="range">
-				<input type="date" bind:value={cashflowFrom} aria-label="From" />
-				<span>→</span>
-				<input type="date" bind:value={cashflowTo} aria-label="To" />
-				<button class="ghost" onclick={handleCashflow} disabled={cashflowLoading}>
-					{cashflowLoading ? '…' : 'Calculate'}
-				</button>
-			</div>
-		</div>
-
-		{#if cashflow}
-			{#if cashflow.totals.length === 0}
-				<p class="empty small">No movements in this period.</p>
-			{:else}
-				{#each cashflow.totals as flow (flow.currency)}
-					<div class="flow-row total">
-						<span class="flow-name">{flow.currency.toUpperCase()}</span>
-						<span class="flow-in">+{formatAmount(flow.in, flow.currency)}</span>
-						<span class="flow-out">−{formatAmount(flow.out, flow.currency)}</span>
-						<span class="flow-net" class:credit={flow.net > 0} class:debit={flow.net < 0}>
-							{formatAmount(flow.net, flow.currency)}
-						</span>
-					</div>
-				{/each}
-				{#if cashflow.by_account.length > 1 || cashflow.by_account.some((f) => f.account_id)}
-					<div class="flow-breakdown">
-						{#each cashflow.by_account as flow (`${flow.account_id}|${flow.currency}`)}
-							<div class="flow-row">
-								<span class="flow-name">{flow.name || 'No account'}</span>
-								<span class="flow-in">+{formatAmount(flow.in, flow.currency)}</span>
-								<span class="flow-out">−{formatAmount(flow.out, flow.currency)}</span>
-								<span class="flow-net" class:credit={flow.net > 0} class:debit={flow.net < 0}>
-									{formatAmount(flow.net, flow.currency)}
-								</span>
-							</div>
-						{/each}
-					</div>
-				{/if}
-			{/if}
-		{:else}
-			<p class="empty small">Pick a period and calculate to see money in vs money out.</p>
-		{/if}
-	</section>
-
 	{#if loading}
 		<p class="empty">Loading…</p>
 	{:else if movements.length === 0}
@@ -551,65 +551,25 @@
 </main>
 
 <style>
-	:global(body) {
-		margin: 0;
-		background: var(--bg);
-	}
-
 	main {
-		--bg: #f4f5f7;
-		--card: #ffffff;
-		--border: #e3e5e8;
-		--text: #1c1e21;
-		--muted: #6b7280;
-		--accent: #2563eb;
-		--accent-hover: #1d4ed8;
-		--green: #15803d;
-		--red: #b91c1c;
-		--amber-bg: #fef3c7;
-		--amber-text: #92400e;
-		--red-bg: #fee2e2;
-		--blue-bg: #dbeafe;
-		--blue-text: #1e40af;
-		--gray-bg: #e5e7eb;
-
 		max-width: 560px;
 		margin: 0 auto;
-		padding: 2rem 1rem 4rem;
-		font-family: system-ui, -apple-system, sans-serif;
-		color: var(--text);
-	}
-
-	@media (prefers-color-scheme: dark) {
-		main {
-			--bg: #101214;
-			--card: #1a1d21;
-			--border: #2c3138;
-			--text: #e6e8ea;
-			--muted: #9aa1a9;
-			--accent: #3b82f6;
-			--accent-hover: #60a5fa;
-			--green: #4ade80;
-			--red: #f87171;
-			--amber-bg: #453308;
-			--amber-text: #fcd34d;
-			--red-bg: #4c1414;
-			--blue-bg: #172a54;
-			--blue-text: #93c5fd;
-			--gray-bg: #32373d;
-		}
+		padding: var(--space-4) var(--space-2) var(--space-6);
+		font: var(--text-body);
+		color: var(--color-text-primary);
 	}
 
 	header {
 		display: flex;
 		justify-content: space-between;
 		align-items: center;
-		margin-bottom: 1.25rem;
+		margin-bottom: var(--space-3);
 	}
 
 	h1 {
-		font-size: 1.35rem;
+		font: var(--text-page-title);
 		margin: 0;
+		color: var(--color-primary);
 		letter-spacing: -0.02em;
 	}
 
@@ -619,16 +579,23 @@
 	}
 
 	.sync {
-		background: var(--card);
-		border: 1px solid var(--border);
-		color: var(--text);
-		border-radius: 8px;
-		padding: 0.45rem 0.9rem;
-		transition: border-color 0.15s;
+		background: var(--color-surface);
+		border: 1px solid var(--color-border);
+		color: var(--color-primary);
+		border-radius: var(--radius-control);
+		padding: 0.5rem 1rem;
+		font-weight: 600;
+		transition: border-color var(--transition-fast), color var(--transition-fast);
 	}
 
 	.sync:hover:not(:disabled) {
-		border-color: var(--accent);
+		border-color: var(--color-secondary);
+		color: var(--color-secondary);
+	}
+
+	.sync:focus-visible {
+		outline: none;
+		box-shadow: var(--focus-ring);
 	}
 
 	.sync:disabled {
@@ -640,45 +607,46 @@
 		display: flex;
 		justify-content: space-between;
 		align-items: center;
-		padding: 1.1rem 1.25rem;
-		background: var(--card);
-		border: 1px solid var(--border);
-		border-radius: 14px;
-		margin-bottom: 1.25rem;
+		gap: var(--space-2);
+		padding: var(--space-3) var(--space-3);
+		background: linear-gradient(135deg, var(--color-primary), var(--color-secondary));
+		border-radius: var(--radius-card);
+		box-shadow: var(--shadow-soft);
+		margin-bottom: var(--space-3);
+		color: #fff;
 	}
 
 	.balance-label {
 		display: block;
-		color: var(--muted);
-		font-size: 0.85rem;
+		color: rgba(255, 255, 255, 0.8);
+		font: var(--text-label);
 	}
 
 	.pending-note {
 		display: block;
-		margin-top: 0.2rem;
+		margin-top: 0.25rem;
 		font-size: 0.75rem;
-		color: var(--amber-text);
+		color: #fde68a;
 	}
 
 	.balance strong {
-		font-size: 1.75rem;
-		letter-spacing: -0.03em;
+		font: var(--text-amount);
+		font-size: 2rem;
+		font-variant-numeric: tabular-nums;
+		letter-spacing: -0.02em;
+		color: #fff;
 	}
 
 	.balance strong.negative {
-		color: var(--red);
-	}
-
-	.balance strong.positive {
-		color: var(--green);
+		color: #fecaca;
 	}
 
 	form {
-		background: var(--card);
-		border: 1px solid var(--border);
-		border-radius: 14px;
-		padding: 1rem;
-		margin-bottom: 1.25rem;
+		background: var(--color-surface);
+		border: 1px solid var(--color-border);
+		border-radius: var(--radius-card);
+		padding: var(--space-2);
+		margin-bottom: var(--space-3);
 		display: flex;
 		flex-direction: column;
 		gap: 0.6rem;
@@ -692,18 +660,20 @@
 	:global(input),
 	:global(select) {
 		font: inherit;
-		color: var(--text);
-		background: var(--bg);
-		border: 1px solid var(--border);
-		border-radius: 8px;
-		padding: 0.5rem 0.65rem;
+		color: var(--color-text-primary);
+		background: var(--color-bg);
+		border: 1px solid var(--color-border);
+		border-radius: var(--radius-control);
+		padding: 0.55rem 0.7rem;
 		min-width: 0;
+		transition: box-shadow var(--transition-fast), border-color var(--transition-fast);
 	}
 
 	:global(input:focus),
 	:global(select:focus) {
-		outline: 2px solid var(--accent);
-		outline-offset: -1px;
+		outline: none;
+		border-color: var(--color-secondary);
+		box-shadow: var(--focus-ring);
 	}
 
 	:global(.form-row input[type='number']),
@@ -716,7 +686,7 @@
 		display: flex;
 		align-items: center;
 		gap: 0.3rem;
-		color: var(--muted);
+		color: var(--color-text-secondary);
 	}
 
 	.installments input {
@@ -724,17 +694,22 @@
 	}
 
 	:global(.submit) {
-		background: var(--accent);
+		background: var(--color-primary);
 		color: #fff;
 		border: none;
-		border-radius: 8px;
-		padding: 0.6rem;
+		border-radius: var(--radius-control);
+		padding: 0.65rem;
 		font-weight: 600;
-		transition: background 0.15s;
+		transition: background var(--transition-fast);
 	}
 
 	:global(.submit:hover:not(:disabled)) {
-		background: var(--accent-hover);
+		background: var(--color-primary-hover);
+	}
+
+	:global(.submit:focus-visible) {
+		outline: none;
+		box-shadow: var(--focus-ring);
 	}
 
 	:global(.submit:disabled) {
@@ -743,34 +718,35 @@
 	}
 
 	:global(.message) {
-		border-radius: 10px;
+		border-radius: var(--radius-control);
 		padding: 0.6rem 0.9rem;
 		font-size: 0.9rem;
 	}
 
 	:global(.message.error) {
-		background: var(--red-bg);
-		color: var(--red);
+		background: var(--color-error-soft);
+		color: var(--color-expense);
 	}
 
 	:global(.message.notice) {
-		background: var(--blue-bg);
-		color: var(--blue-text);
+		background: var(--color-success-soft);
+		color: #166534;
 	}
 
 	.empty {
 		text-align: center;
-		color: var(--muted);
-		padding: 2rem 0;
+		color: var(--color-text-secondary);
+		padding: var(--space-3) 0;
 	}
 
 	.movements {
 		list-style: none;
 		padding: 0;
 		margin: 0;
-		background: var(--card);
-		border: 1px solid var(--border);
-		border-radius: 14px;
+		background: var(--color-surface);
+		border: 1px solid var(--color-border);
+		border-radius: var(--radius-card);
+		box-shadow: var(--shadow-soft);
 		overflow: hidden;
 	}
 
@@ -780,8 +756,8 @@
 		height: 2rem;
 		display: grid;
 		place-items: center;
-		background: var(--bg);
-		border-radius: 10px;
+		background: var(--color-bg);
+		border-radius: var(--radius-control);
 		flex-shrink: 0;
 	}
 
@@ -802,7 +778,7 @@
 
 	.meta {
 		font-size: 0.78rem;
-		color: var(--muted);
+		color: var(--color-text-secondary);
 		display: flex;
 		align-items: center;
 		gap: 0.4rem;
@@ -810,42 +786,43 @@
 	}
 
 	.chip {
+		font: var(--text-label);
 		font-size: 0.68rem;
-		font-weight: 600;
-		padding: 0.1rem 0.45rem;
-		border-radius: 99px;
+		padding: 0.15rem 0.5rem;
+		border-radius: var(--radius-pill);
 		white-space: nowrap;
 	}
 
 	.amount {
-		font-weight: 600;
+		font-weight: 700;
 		font-variant-numeric: tabular-nums;
 		white-space: nowrap;
 	}
 
 	.cancel {
 		background: none;
-		border: 1px solid var(--border);
-		color: var(--muted);
-		border-radius: 7px;
-		padding: 0.25rem 0.5rem;
+		border: 1px solid var(--color-border);
+		color: var(--color-text-secondary);
+		border-radius: var(--radius-control);
+		padding: 0.3rem 0.6rem;
 		font-size: 0.75rem;
 		transition:
-			color 0.15s,
-			border-color 0.15s;
+			color var(--transition-fast),
+			border-color var(--transition-fast);
 	}
 
 	.cancel:hover {
-		color: var(--red);
-		border-color: var(--red);
+		color: var(--color-expense);
+		border-color: var(--color-expense);
 	}
 
 	:global(.card) {
-		background: var(--card);
-		border: 1px solid var(--border);
-		border-radius: 14px;
-		padding: 1rem;
-		margin-bottom: 1.25rem;
+		background: var(--color-surface);
+		border: 1px solid var(--color-border);
+		border-radius: var(--radius-card);
+		box-shadow: var(--shadow-soft);
+		padding: var(--space-2);
+		margin-bottom: var(--space-3);
 	}
 
 	:global(.section-head) {
@@ -857,33 +834,41 @@
 	}
 
 	:global(.section-head h2) {
-		font-size: 0.95rem;
+		font: var(--text-section-title);
+		font-size: 1.05rem;
 		margin: 0;
+		color: var(--color-text-primary);
 		letter-spacing: -0.01em;
 	}
 
 	:global(.ghost) {
 		background: none;
-		border: 1px solid var(--border);
-		color: var(--muted);
-		border-radius: 8px;
-		padding: 0.35rem 0.7rem;
+		border: 1px solid var(--color-border);
+		color: var(--color-text-secondary);
+		border-radius: var(--radius-control);
+		padding: 0.4rem 0.75rem;
 		font-size: 0.8rem;
+		font-weight: 500;
 		transition:
-			color 0.15s,
-			border-color 0.15s;
+			color var(--transition-fast),
+			border-color var(--transition-fast);
 	}
 
 	:global(.ghost:hover:not(:disabled)) {
-		color: var(--accent);
-		border-color: var(--accent);
+		color: var(--color-secondary);
+		border-color: var(--color-secondary);
+	}
+
+	:global(.ghost:focus-visible) {
+		outline: none;
+		box-shadow: var(--focus-ring);
 	}
 
 	.add-account {
 		display: flex;
 		gap: 0.6rem;
 		flex-wrap: wrap;
-		margin-top: 0.8rem;
+		margin-top: var(--space-2);
 		background: none;
 		border: none;
 		padding: 0;
@@ -905,15 +890,15 @@
 	.account-list {
 		list-style: none;
 		padding: 0;
-		margin: 0.8rem 0 0;
+		margin: var(--space-2) 0 0;
 	}
 
 	.account-list li {
 		display: flex;
 		align-items: center;
 		gap: 0.75rem;
-		padding: 0.55rem 0;
-		border-bottom: 1px solid var(--border);
+		padding: 0.6rem 0;
+		border-bottom: 1px solid var(--color-border);
 	}
 
 	.account-list li:last-child {
@@ -921,23 +906,27 @@
 		padding-bottom: 0;
 	}
 
+	.account-list .amount {
+		margin-left: auto;
+	}
+
 	.chip.return-pos {
-		background: var(--blue-bg);
-		color: var(--green);
+		background: var(--color-success-soft);
+		color: #166534;
 	}
 
 	.chip.return-neg {
-		background: var(--red-bg);
-		color: var(--red);
+		background: var(--color-error-soft);
+		color: var(--color-expense);
 	}
 
 	:global(.fixed-currency) {
 		display: flex;
 		align-items: center;
 		padding: 0 0.65rem;
-		color: var(--muted);
-		border: 1px dashed var(--border);
-		border-radius: 8px;
+		color: var(--color-text-secondary);
+		border: 1px dashed var(--color-border);
+		border-radius: var(--radius-control);
 		font-size: 0.85rem;
 	}
 
@@ -951,7 +940,7 @@
 		display: flex;
 		align-items: center;
 		gap: 0.4rem;
-		color: var(--muted);
+		color: var(--color-text-secondary);
 		flex-wrap: wrap;
 	}
 
@@ -965,8 +954,8 @@
 		grid-template-columns: 1fr auto auto auto;
 		gap: 0.9rem;
 		align-items: baseline;
-		padding: 0.45rem 0;
-		border-bottom: 1px solid var(--border);
+		padding: 0.5rem 0;
+		border-bottom: 1px solid var(--color-border);
 		font-variant-numeric: tabular-nums;
 		font-size: 0.88rem;
 	}
@@ -976,7 +965,7 @@
 	}
 
 	.flow-row.total {
-		font-weight: 600;
+		font-weight: 700;
 	}
 
 	.flow-row.total:first-of-type {
@@ -990,29 +979,29 @@
 	}
 
 	.flow-in {
-		color: var(--green);
+		color: var(--color-income);
 	}
 
 	.flow-out {
-		color: var(--red);
+		color: var(--color-expense);
 	}
 
 	.flow-net.credit {
-		color: var(--green);
+		color: var(--color-income);
 	}
 
 	.flow-net.debit {
-		color: var(--red);
+		color: var(--color-expense);
 	}
 
 	.flow-breakdown {
 		margin-top: 0.3rem;
 		padding-left: 0.9rem;
-		border-left: 2px solid var(--border);
+		border-left: 2px solid var(--color-border);
 	}
 
 	.flow-breakdown .flow-row {
 		font-size: 0.8rem;
-		color: var(--muted);
+		color: var(--color-text-secondary);
 	}
 </style>

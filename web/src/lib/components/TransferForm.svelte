@@ -117,6 +117,6 @@
 	.hint {
 		margin: 0;
 		font-size: 0.78rem;
-		color: var(--muted);
+		color: var(--color-text-secondary);
 	}
 </style>
