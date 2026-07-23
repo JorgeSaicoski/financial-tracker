@@ -1,5 +1,7 @@
 # financial-tracker
 
+[![CI](https://github.com/JorgeSaicoski/financial-tracker/actions/workflows/ci.yml/badge.svg)](https://github.com/JorgeSaicoski/financial-tracker/actions/workflows/ci.yml)
+
 Personal finance tracker. Records every movement (income/expense) a user makes.
 
 > Contributing? The **[contributing/](contributing/)** folder walks through
