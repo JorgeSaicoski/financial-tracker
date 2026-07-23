@@ -11,6 +11,7 @@ func NewRouter(
 	accountHandler handlers.AccountHandler,
 	currencyHandler handlers.CurrencyHandler,
 	transferHandler handlers.TransferHandler,
+	allowedOrigin string,
 ) http.Handler {
 	mux := http.NewServeMux()
 
@@ -39,15 +40,16 @@ func NewRouter(
 	mux.HandleFunc("POST /transfers", transferHandler.CreateTransfer)
 	mux.HandleFunc("POST /transfers/{id}/cancel", transferHandler.CancelTransfer)
 
-	return withCORS(mux)
+	return withCORS(mux, allowedOrigin)
 }
 
-// withCORS is a permissive, dev-only CORS layer so the Svelte app (running
-// on its own port) can call this API directly. Tighten this before any
-// non-local deployment.
-func withCORS(next http.Handler) http.Handler {
+// withCORS allows one configured origin (see cmd/api's CORS_ALLOWED_ORIGIN,
+// defaulted to "*" for local dev where the Svelte dev server runs on its
+// own port). Once INFRA-03's reverse proxy puts the frontend and API
+// behind the same origin, deploy/compose.yaml locks this to that origin.
+func withCORS(next http.Handler, allowedOrigin string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 

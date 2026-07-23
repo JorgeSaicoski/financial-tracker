@@ -44,18 +44,22 @@ tag or point it at a fork if needed, e.g.
 ```bash
 cd deploy
 cp .env.example .env
-# edit .env: set FT_POSTGRES_PASSWORD and LEDGER_POSTGRES_PASSWORD to real
-# secrets (or point them at your secrets manager of choice — anything that
-# lands in .env works, nothing is hardcoded in compose.yaml), and adjust
-# DEFAULT_USER_ID/PUBLIC_API_URL for your deployment.
+# edit .env: set FT_POSTGRES_PASSWORD, LEDGER_POSTGRES_PASSWORD, and
+# AUTHENTIK_POSTGRES_PASSWORD/AUTHENTIK_SECRET_KEY to real secrets (or
+# point them at your secrets manager of choice — anything that lands in
+# .env works, nothing is hardcoded in compose.yaml), and adjust
+# DEFAULT_USER_ID/APP_HOSTNAME/PUBLIC_API_URL for your deployment.
 podman-compose --profile ledger up -d --build   # or drop --profile ledger — see above
 ```
 
-This starts, in dependency order: `ft-postgres` (and `ledger-postgres` if
-`--profile ledger` is given, both healthchecked before anything depending
-on them starts), `ledger-service` (same profile), `financial-tracker`
-(API, `DB_DRIVER=postgres`), and `web` (production SvelteKit build via
-`@sveltejs/adapter-node`, not `npm run dev`).
+This starts, in dependency order: `ft-postgres` and `authentik-postgres`
+(and `ledger-postgres` if `--profile ledger` is given, all healthchecked
+before anything depending on them starts), `ledger-service` (same
+profile), `authentik-server` + `authentik-worker` (identity provider —
+see "Authentik" below), `financial-tracker` (API, `DB_DRIVER=postgres`),
+`web` (production SvelteKit build via `@sveltejs/adapter-node`, not `npm
+run dev`), and `caddy` (the reverse proxy — see "Networking" below for
+the URL map).
 
 ```bash
 podman-compose down          # stop everything; data volumes survive
@@ -64,35 +68,101 @@ podman-compose logs -f
 podman-compose ps
 ```
 
-## Networking: no host ports by default
+## Networking: one entry point (caddy)
 
-Only Postgres, ledger-service, financial-tracker, and web talk to each
-other over the compose-internal network — **nothing publishes a host port**
-in this file. That's deliberate: INFRA-03 adds the reverse proxy that will
-be the one thing exposed to the outside world (mapped to 8080/8443, not
-raw 80/443), fronting both `financial-tracker` and `web`. Until INFRA-03
-lands, this stack is not reachable from a browser.
+Postgres, ledger-service, Authentik, financial-tracker, and web only talk
+to each other over the compose-internal network — **`caddy` is the only
+service publishing host ports** (`8080:80`, `8443:443`; deliberately not
+raw 80/443). It reverse-proxies everything else:
 
-### Verifying without a proxy yet
+| URL | Routes to |
+|---|---|
+| `https://${APP_HOSTNAME}:8443/` | `web` (the SvelteKit app) |
+| `https://${APP_HOSTNAME}:8443/api/*` | `financial-tracker` (prefix stripped) |
+| `https://auth.${APP_HOSTNAME}:8443/` | `authentik-server` |
+
+TLS is Caddy's automatic internal CA (self-signed) by default — see
+`deploy/Caddyfile`'s comments for swapping in a real cert or ACME email.
+Same-origin end state: `financial-tracker`'s `CORS_ALLOWED_ORIGIN` is
+locked to `https://${APP_HOSTNAME}:8443` (see `compose.yaml`), not `*`.
+
+**No real DNS?** Add both hostnames to `/etc/hosts` pointing at the
+Podman host, e.g.:
+```
+127.0.0.1 financial-tracker.local auth.financial-tracker.local
+```
+and trust Caddy's internal CA locally, or click through the browser's
+self-signed warning.
+
+### Bypassing the proxy for local debugging
 
 ```bash
 podman exec financial-tracker-api wget -qO- http://localhost:8081/movements
 ```
 
 or temporarily uncomment the `ports:` block under `financial-tracker`
-and/or `web` in `compose.yaml` for local testing — remove it again once
-INFRA-03's proxy is in place (don't leave both a direct port and the proxy
-open in a real deployment).
+and/or `web` in `compose.yaml` — remove it again afterward (don't leave
+both a direct port and the proxy open in a real deployment).
+
+## Authentik (identity provider)
+
+`authentik-server` + `authentik-worker` (no separate Redis — Authentik
+dropped that dependency in release 2025.10, so Postgres + server + worker
+is the current minimum stack) provide the OIDC login BACK-02/FRONT-04
+(Phase 2) authenticate against. `deploy/authentik/blueprints/
+financial-tracker.yaml` is bind-mounted into both containers and
+auto-applied by the worker on startup, creating the OAuth2/OIDC Provider
+and Application automatically — no manual "create a provider" clicking.
+
+**Sub claim decision:** the provider's Subject mode is set to "Based on
+the User's UUID" (`sub_mode: user_uuid` in the blueprint), so the OIDC
+`sub` claim Authentik issues is already a lowercase UUID — exactly what
+`DEFAULT_USER_ID`/ledger-service require today. BACK-02 can consume `sub`
+directly with no transformation.
+
+### One-time setup (still manual — Authentik requires it)
+
+1. Bring the stack up (`podman-compose --profile ledger up -d --build`)
+   and wait for `authentik-server`/`authentik-worker` to report healthy:
+   `podman-compose logs -f authentik-server`.
+2. Visit Authentik's initial-setup flow to create the admin account:
+   `https://auth.${APP_HOSTNAME}:8443/if/flow/initial-setup/` (add an
+   `/etc/hosts` entry first if you don't have real DNS — see
+   "Networking" above).
+3. Confirm the blueprint applied: Admin interface → **Customization →
+   Blueprints** should show `financial-tracker OAuth2 provider +
+   application` as applied; **Applications → Applications** should list
+   `financial-tracker`. If it didn't apply (check
+   `podman-compose logs authentik-worker` for blueprint errors — field
+   names occasionally shift between Authentik releases), create the
+   provider/application by hand instead: Admin interface → **Applications
+   → Providers → Create → OAuth2/OpenID Provider** (client type
+   **Public**, authorization flow `default-provider-authorization-
+   explicit-consent`, Subject mode **Based on the User's UUID**, redirect
+   URI matching `PUBLIC_OIDC_REDIRECT_URI` from `.env`), then
+   **Applications → Applications → Create**, linking to that provider.
+4. Values BACK-02/FRONT-04 need, once implemented:
+   - `OIDC_ISSUER_URL` = `https://auth.${APP_HOSTNAME}:8443/application/o/financial-tracker/`
+   - `PUBLIC_OIDC_CLIENT_ID` = the same `.env` value the blueprint used
+     (default `financial-tracker`)
 
 ## Rootless-Podman / SELinux notes
 
-- No bind mounts in this file (ledger-postgres's init/migration SQL is
-  baked into its image at build time instead — see above), so there's no
-  `:z`/`:Z` relabeling to worry about. The named volumes (`ft_postgres_data`,
-  `ledger_postgres_data`) don't need it either — SELinux labeling only
+- Two read-only bind mounts: `./Caddyfile` (into `caddy`) and
+  `./authentik/blueprints` (into `authentik-server`/`authentik-worker`).
+  Both are `:ro`, which SELinux's default container policy (`container_file_t`
+  via `:z`) doesn't strictly require for read access on most rootless
+  Podman setups — if you hit an SELinux denial reading either, add `:z`
+  (shared label; fine here since nothing else needs these paths) to the
+  mount in `compose.yaml`. Everything else (ledger-postgres's
+  init/migration SQL) is baked into its image at build time instead — see
+  above. The named volumes (`ft_postgres_data`, `ledger_postgres_data`,
+  `authentik_postgres_data`, `authentik_media`, `caddy_data`,
+  `caddy_config`) don't need relabeling either way — SELinux labeling only
   matters for host-path bind mounts.
-- No privileged ports are opened by this file (see above), so no
-  `CAP_NET_BIND_SERVICE` concerns.
+- No privileged ports (<1024) are opened by this file — `caddy`'s
+  `8080`/`8443` are both unprivileged — so no `CAP_NET_BIND_SERVICE`
+  concerns.
 - The `postgres:*-alpine` images and `financial-tracker-web` (Node) run as
   their upstream non-root default user. `financial-tracker-api` and
   `ledger-service` are `alpine:latest`-based with no `USER` set, so they
@@ -108,17 +178,21 @@ open in a real deployment).
 **Quick: `podman generate systemd`** (works today, no extra files):
 ```bash
 podman-compose up -d
-podman generate systemd --new --files --name financial-tracker-api
-podman generate systemd --new --files --name financial-tracker-web
-podman generate systemd --new --files --name ledger-service
-podman generate systemd --new --files --name financial-tracker-postgres
-podman generate systemd --new --files --name ledger-postgres
+for name in financial-tracker-postgres authentik-postgres ledger-postgres \
+  ledger-service authentik-server authentik-worker \
+  financial-tracker-api financial-tracker-web financial-tracker-caddy \
+  financial-tracker-backup; do
+  podman generate systemd --new --files --name "$name"
+done
 mkdir -p ~/.config/systemd/user
 mv container-*.service ~/.config/systemd/user/
 systemctl --user daemon-reload
-systemctl --user enable --now container-financial-tracker-postgres.service \
+systemctl --user enable --now \
+  container-financial-tracker-postgres.service container-authentik-postgres.service \
   container-ledger-postgres.service container-ledger-service.service \
-  container-financial-tracker-api.service container-financial-tracker-web.service
+  container-authentik-server.service container-authentik-worker.service \
+  container-financial-tracker-api.service container-financial-tracker-web.service \
+  container-financial-tracker-caddy.service container-financial-tracker-backup.service
 loginctl enable-linger "$USER"   # let user services start without a login session
 ```
 
@@ -132,18 +206,90 @@ rebuilds without manual regeneration.
 ## Migrating existing SQLite data
 
 If you have existing data in the SQLite-backed dev/standalone deployment,
-the supported path is `cmd/migrate-sqlite` (**not implemented yet — tracked
-as BACK-06**; this stack works standalone with an empty Postgres database
-in the meantime). Once it lands, the procedure is:
+the supported path is `cmd/migrate-sqlite` — it copies every table
+(currencies, accounts, account snapshots, credit-card purchases,
+movements) in one Postgres transaction, preserving ids, timestamps, sync
+state, and every link (reversals, installments, transfers). Re-importing
+via CSV instead would silently drop all of that.
 
 1. Stop whatever is writing to the SQLite file (dev stack, standalone
    binary, etc.) — no live writers during migration.
 2. Bring up this stack's Postgres only: `podman-compose up -d ft-postgres`.
-3. Run `cmd/migrate-sqlite` pointed at the SQLite file and this stack's
-   `DATABASE_URL` (from `.env`).
-4. Start the rest of the stack: `podman-compose up -d`.
+3. From the repo root, run:
+   ```bash
+   go run ./cmd/migrate-sqlite \
+     --db-path /path/to/financial-tracker.db \
+     --database-url "$DATABASE_URL"   # same value as ft-postgres's DSN in .env
+   ```
+   It refuses to run if the target already has movements/accounts/
+   snapshots/purchases (a prior migration, most likely) — pass `--force`
+   only if you're deliberately re-running into a target you know is safe
+   to write into; it does **not** wipe the target first, so a `--force`
+   run into data that doesn't already match will fail on the first id
+   collision rather than silently merging.
+4. Check the printed per-table source/target counts match (the command
+   also exits non-zero on any mismatch) and spot-check a balance or two
+   against the old deployment before relying on the new one.
+5. Start the rest of the stack: `podman-compose up -d`.
 
 ## Backups
 
-Not covered here — see INFRA-04 (Postgres backups + tested restore),
-which builds on the `ft_postgres_data` volume this file creates.
+The `backup` service (`deploy/backup/`) dumps all three databases daily at
+03:00 UTC and prunes old dumps, writing to the `backup_data` volume as
+`gzip`-compressed, timestamped files: `financial_tracker_<UTC
+timestamp>.sql.gz`, `authentik_<...>.sql.gz`, and — only when
+`--profile ledger` is running — `ledger_<...>.sql.gz` (unreachable is
+logged and skipped, not a failure, the rest of the time). Retention is
+independent for two tiers: the newest `BACKUP_DAILY_RETENTION` (default 7)
+plain dumps, and the newest `BACKUP_WEEKLY_RETENTION` (default 4) Sunday
+dumps kept separately under `backup_data/weekly/`.
+
+**Mechanism: sidecar container with cron, not a host systemd timer.**
+Same reasoning INFRA-01 gave for podman-compose over `podman kube play` —
+this whole stack is defined in `compose.yaml` alone; a host-level systemd
+timer would be a second mechanism to keep in sync with it. `deploy/backup/
+Dockerfile`'s `crond` runs in the foreground as the container's PID 1, so
+`podman logs financial-tracker-backup` shows every run (including
+failures — the job exits non-zero if a required target's dump fails).
+
+**Off-host copying of `backup_data` is the operator's job** — this only
+protects against database corruption/accidental deletion on the same
+host, not host loss. Mount it, `rsync` it, whatever fits your setup; not
+automated here.
+
+### Running a backup on demand
+
+```bash
+podman exec financial-tracker-backup /usr/local/bin/backup.sh
+```
+
+### Restore procedure
+
+Restoring into a **fresh** stack (the scenario this is actually for — a
+lost/corrupted host):
+
+1. Bring up just the Postgres containers, empty:
+   ```bash
+   podman-compose up -d ft-postgres authentik-postgres   # add ledger-postgres too if you run --profile ledger
+   ```
+2. For each database, in any order (they're independent), pick the dump
+   to restore from `backup_data` (or `backup_data/weekly` for an
+   older one) and:
+   ```bash
+   # financial-tracker
+   gunzip -c /path/to/backup_data/financial_tracker_<timestamp>.sql.gz | \
+     podman exec -i financial-tracker-postgres psql -U "$FT_POSTGRES_USER" -d "$FT_POSTGRES_DB"
+
+   # Authentik
+   gunzip -c /path/to/backup_data/authentik_<timestamp>.sql.gz | \
+     podman exec -i authentik-postgres psql -U "$AUTHENTIK_POSTGRES_USER" -d "$AUTHENTIK_POSTGRES_DB"
+
+   # ledger-service (only if you run --profile ledger)
+   gunzip -c /path/to/backup_data/ledger_<timestamp>.sql.gz | \
+     podman exec -i ledger-postgres psql -U "$LEDGER_POSTGRES_USER" -d "$LEDGER_POSTGRES_DB"
+   ```
+3. Start the rest of the stack: `podman-compose up -d`.
+4. Verify: movement count and a balance spot-check in financial-tracker
+   (`GET /movements`/`GET /cashflow` against a known-good number from
+   before the loss) and that logging into Authentik with an existing user
+   still works.

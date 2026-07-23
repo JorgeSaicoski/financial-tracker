@@ -28,6 +28,10 @@ func main() {
 	defaultUserID := envOr("DEFAULT_USER_ID", "00000000-0000-0000-0000-000000000001")
 	defaultCurrency := envOr("DEFAULT_CURRENCY", "usd")
 	port := envOr("PORT", "8081")
+	// "*" for local dev (Svelte dev server on its own port); INFRA-03's
+	// proxy sets this to the proxied origin in deploy/compose.yaml once
+	// frontend+API share one hostname.
+	corsAllowedOrigin := envOr("CORS_ALLOWED_ORIGIN", "*")
 	dbPath := envOr("DB_PATH", "./data/financial-tracker.db")
 	dbDriver := envOr("DB_DRIVER", "sqlite")
 
@@ -133,7 +137,7 @@ func main() {
 	currencyHandler := handlers.NewCurrencyHandler(listCurrencies, addCurrency, log)
 	transferHandler := handlers.NewTransferHandler(transferBetweenAccounts, cancelTransfer, defaultUserID, log)
 
-	router := api.NewRouter(movementHandler, accountHandler, currencyHandler, transferHandler)
+	router := api.NewRouter(movementHandler, accountHandler, currencyHandler, transferHandler, corsAllowedOrigin)
 
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
