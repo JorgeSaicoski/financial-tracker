@@ -61,10 +61,13 @@ func (uc *updateMovementUseCase) Execute(ctx context.Context, id string, input U
 	category := orDefault(input.Category, movement.Category)
 	paymentMethod := orDefault(input.PaymentMethod, movement.PaymentMethod)
 	amount := orDefault(input.Amount, movement.Amount)
-	currency := movement.Currency
-	if input.Currency != nil {
-		currency = strings.ToLower(strings.TrimSpace(*input.Currency))
+currency := movement.Currency
+if input.Currency != nil {
+	currency = strings.ToLower(strings.TrimSpace(*input.Currency))
+	if currency == "" {
+		return UpdateMovementResult{}, fmt.Errorf("%w: currency is required", apperrors.ErrInvalidInput)
 	}
+}
 	timestamp := orDefault(input.Timestamp, movement.Timestamp)
 
 	accountID := movement.AccountID
