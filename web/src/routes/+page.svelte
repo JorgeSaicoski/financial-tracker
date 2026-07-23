@@ -3,6 +3,7 @@
 	import {
 		listMovements,
 		createMovement,
+		updateMovement,
 		cancelMovement,
 		cancelCreditCardPurchase,
 		getCategories,
@@ -12,8 +13,20 @@
 		createAccount,
 		reportAccountBalance,
 		getCashflow,
+		createTransfer,
+		cancelTransfer,
 		syncNow
 	} from '$lib/api.js';
+	import {
+		formatAmount,
+		labelFor,
+		localDate,
+		accountTypeIcons,
+		categoryIcons,
+		paymentMethodLabels
+	} from '$lib/format.js';
+	import MovementRow from '$lib/components/MovementRow.svelte';
+	import TransferForm from '$lib/components/TransferForm.svelte';
 
 	let movements = $state([]);
 	let balance = $state(0);
@@ -44,36 +57,11 @@
 	let accountCurrencyInput = $state('usd');
 	let addingAccount = $state(false);
 
-	const localDate = (d) =>
-		`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 	const now = new Date();
 	let cashflowFrom = $state(localDate(new Date(now.getFullYear(), now.getMonth(), 1)));
 	let cashflowTo = $state(localDate(now));
 	let cashflow = $state(null);
 	let cashflowLoading = $state(false);
-
-	const categoryIcons = {
-		food: '🍽️',
-		transport: '🚌',
-		housing: '🏠',
-		utilities: '💡',
-		health: '🏥',
-		entertainment: '🎬',
-		shopping: '🛍️',
-		education: '📚',
-		income: '💰',
-		transfer: '🔁',
-		other: '📦'
-	};
-
-	const paymentMethodLabels = {
-		cash: 'Cash',
-		debit_card: 'Debit card',
-		credit_card: 'Credit card',
-		pix: 'Pix',
-		bank_transfer: 'Bank transfer',
-		other: 'Other'
-	};
 
 	const isCreditCard = $derived(paymentMethodInput === 'credit_card');
 	const splittingInstallments = $derived(isCreditCard && Number(installmentsInput) > 1);
@@ -81,35 +69,6 @@
 		movements.filter((m) => m.status === 'active' && m.sync_status !== 'synced').length
 	);
 	const selectedAccount = $derived(accounts.find((a) => a.id === accountInput));
-
-	const accountTypeIcons = {
-		bank: '🏦',
-		investment: '📈',
-		crypto: '🪙',
-		cash: '💵',
-		other: '📦'
-	};
-
-	function formatAmount(cents, currency) {
-		// Intl only knows ISO 4217 codes; btc & friends fall back to a
-		// plain "0.00 BTC" rendering.
-		try {
-			return new Intl.NumberFormat('en-US', {
-				style: 'currency',
-				currency: currency.toUpperCase()
-			}).format(cents / 100);
-		} catch {
-			return `${(cents / 100).toFixed(2)} ${currency.toUpperCase()}`;
-		}
-	}
-
-	function accountName(id) {
-		return accounts.find((a) => a.id === id)?.name;
-	}
-
-	function labelFor(category) {
-		return category.charAt(0).toUpperCase() + category.slice(1);
-	}
 
 	async function load() {
 		error = '';
@@ -283,12 +242,12 @@
 		}
 	}
 
-	async function handleCancelPurchase(movement) {
+	async function handleCancelPurchase(purchaseId) {
 		if (!confirm('Cancel ALL installments of this purchase?')) return;
 		error = '';
 		notice = '';
 		try {
-			const result = await cancelCreditCardPurchase(movement.credit_card_purchase_id);
+			const result = await cancelCreditCardPurchase(purchaseId);
 			notice = `Purchase cancelled: ${result.voided.length} voided, ${result.reversals.length} reversed`;
 			await load();
 		} catch (err) {
@@ -314,11 +273,33 @@
 		}
 	}
 
-	function rowState(movement) {
-		if (movement.status === 'voided') return 'voided';
-		if (movement.cancels_movement_id) return 'reversal';
-		if (movement.reversed_by_movement_id) return 'reversed';
-		return 'active';
+	async function handleUpdateMovement(id, patch) {
+		const result = await updateMovement(id, patch);
+		notice = result.replacement
+			? 'Correction recorded: the original was reversed and a replacement created with the new values'
+			: 'Movement updated';
+		await load();
+		return result;
+	}
+
+	async function handleCreateTransfer(input) {
+		const result = await createTransfer(input);
+		notice = 'Transfer complete';
+		await load();
+		return result;
+	}
+
+	async function handleCancelTransfer(transferId) {
+		if (!confirm('Cancel this transfer? Both legs will be voided or reversed as needed.')) return;
+		error = '';
+		notice = '';
+		try {
+			await cancelTransfer(transferId);
+			notice = 'Transfer cancelled (both legs)';
+			await load();
+		} catch (err) {
+			error = err.message;
+		}
 	}
 
 	onMount(() => {
@@ -421,6 +402,8 @@
 			</ul>
 		{/if}
 	</section>
+
+	<TransferForm {accounts} onCreate={handleCreateTransfer} />
 
 	<form onsubmit={handleSubmit}>
 		<div class="form-row">
@@ -548,64 +531,16 @@
 	{:else}
 		<ul class="movements">
 			{#each movements as movement (movement.id)}
-				{@const state = rowState(movement)}
-				<li class={state}>
-					<span class="icon" title={labelFor(movement.category)}>
-						{categoryIcons[movement.category] ?? '📦'}
-					</span>
-					<div class="details">
-						<span class="title">
-							{movement.description || labelFor(movement.category)}
-							{#if movement.installment_number}
-								<span class="chip installment">#{movement.installment_number}</span>
-							{/if}
-						</span>
-						<span class="meta">
-							{new Date(movement.timestamp).toLocaleDateString(undefined, {
-								day: 'numeric',
-								month: 'short',
-								year: 'numeric'
-							})}
-							· {paymentMethodLabels[movement.payment_method] ?? movement.payment_method}
-							{#if movement.account_id && accountName(movement.account_id)}
-								<span class="chip account-chip">{accountName(movement.account_id)}</span>
-							{/if}
-							{#if state === 'voided'}
-								<span class="chip voided-chip">voided</span>
-							{:else if state === 'reversal'}
-								<span class="chip reversal-chip">reversal</span>
-							{:else if state === 'reversed'}
-								<span class="chip reversed-chip">reversed</span>
-							{/if}
-							{#if movement.status === 'active'}
-								{#if movement.sync_status === 'pending'}
-									<span class="chip sync-pending" title="Not yet in ledger-service">pending sync</span>
-								{:else if movement.sync_status === 'failed'}
-									<span class="chip sync-failed" title="Last sync attempt failed; will retry">sync failed</span>
-								{/if}
-							{/if}
-						</span>
-					</div>
-					<span class="amount" class:credit={movement.amount > 0} class:debit={movement.amount < 0}>
-						{formatAmount(movement.amount, movement.currency)}
-					</span>
-					{#if state === 'active'}
-						<div class="actions">
-							<button
-								class="cancel"
-								title="Cancel this movement"
-								onclick={() => handleCancel(movement)}>✕</button
-							>
-							{#if movement.credit_card_purchase_id}
-								<button
-									class="cancel all"
-									title="Cancel the whole purchase (all installments)"
-									onclick={() => handleCancelPurchase(movement)}>✕ all</button
-								>
-							{/if}
-						</div>
-					{/if}
-				</li>
+				<MovementRow
+					{movement}
+					{accounts}
+					{categories}
+					{paymentMethods}
+					onCancel={handleCancel}
+					onCancelPurchase={handleCancelPurchase}
+					onCancelTransfer={handleCancelTransfer}
+					onSave={handleUpdateMovement}
+				/>
 			{/each}
 		</ul>
 	{/if}
@@ -674,7 +609,7 @@
 		letter-spacing: -0.02em;
 	}
 
-	button {
+	:global(button) {
 		font: inherit;
 		cursor: pointer;
 	}
@@ -745,13 +680,13 @@
 		gap: 0.6rem;
 	}
 
-	.form-row {
+	:global(.form-row) {
 		display: flex;
 		gap: 0.6rem;
 	}
 
-	input,
-	select {
+	:global(input),
+	:global(select) {
 		font: inherit;
 		color: var(--text);
 		background: var(--bg);
@@ -761,15 +696,15 @@
 		min-width: 0;
 	}
 
-	input:focus,
-	select:focus {
+	:global(input:focus),
+	:global(select:focus) {
 		outline: 2px solid var(--accent);
 		outline-offset: -1px;
 	}
 
-	.form-row input[type='number'],
-	.form-row input[type='text'],
-	.form-row select {
+	:global(.form-row input[type='number']),
+	:global(.form-row input[type='text']),
+	:global(.form-row select) {
 		flex: 1;
 	}
 
@@ -784,7 +719,7 @@
 		width: 4rem;
 	}
 
-	.submit {
+	:global(.submit) {
 		background: var(--accent);
 		color: #fff;
 		border: none;
@@ -794,27 +729,27 @@
 		transition: background 0.15s;
 	}
 
-	.submit:hover:not(:disabled) {
+	:global(.submit:hover:not(:disabled)) {
 		background: var(--accent-hover);
 	}
 
-	.submit:disabled {
+	:global(.submit:disabled) {
 		opacity: 0.6;
 		cursor: default;
 	}
 
-	.message {
+	:global(.message) {
 		border-radius: 10px;
 		padding: 0.6rem 0.9rem;
 		font-size: 0.9rem;
 	}
 
-	.message.error {
+	:global(.message.error) {
 		background: var(--red-bg);
 		color: var(--red);
 	}
 
-	.message.notice {
+	:global(.message.notice) {
 		background: var(--blue-bg);
 		color: var(--blue-text);
 	}
@@ -833,27 +768,6 @@
 		border: 1px solid var(--border);
 		border-radius: 14px;
 		overflow: hidden;
-	}
-
-	.movements li {
-		display: flex;
-		align-items: center;
-		gap: 0.75rem;
-		padding: 0.7rem 1rem;
-		border-bottom: 1px solid var(--border);
-	}
-
-	.movements li:last-child {
-		border-bottom: none;
-	}
-
-	.movements li.voided {
-		opacity: 0.55;
-	}
-
-	.movements li.voided .title,
-	.movements li.voided .amount {
-		text-decoration: line-through;
 	}
 
 	.icon {
@@ -899,51 +813,10 @@
 		white-space: nowrap;
 	}
 
-	.chip.installment {
-		background: var(--gray-bg);
-		color: var(--muted);
-		font-size: 0.72rem;
-		vertical-align: middle;
-	}
-
-	.chip.sync-pending {
-		background: var(--amber-bg);
-		color: var(--amber-text);
-	}
-
-	.chip.sync-failed {
-		background: var(--red-bg);
-		color: var(--red);
-	}
-
-	.chip.voided-chip,
-	.chip.reversed-chip {
-		background: var(--gray-bg);
-		color: var(--muted);
-	}
-
-	.chip.reversal-chip {
-		background: var(--blue-bg);
-		color: var(--blue-text);
-	}
-
 	.amount {
 		font-weight: 600;
 		font-variant-numeric: tabular-nums;
 		white-space: nowrap;
-	}
-
-	.amount.credit {
-		color: var(--green);
-	}
-
-	.amount.debit {
-		color: var(--red);
-	}
-
-	.actions {
-		display: flex;
-		gap: 0.3rem;
 	}
 
 	.cancel {
@@ -963,7 +836,7 @@
 		border-color: var(--red);
 	}
 
-	.card {
+	:global(.card) {
 		background: var(--card);
 		border: 1px solid var(--border);
 		border-radius: 14px;
@@ -971,7 +844,7 @@
 		margin-bottom: 1.25rem;
 	}
 
-	.section-head {
+	:global(.section-head) {
 		display: flex;
 		justify-content: space-between;
 		align-items: center;
@@ -979,13 +852,13 @@
 		flex-wrap: wrap;
 	}
 
-	.section-head h2 {
+	:global(.section-head h2) {
 		font-size: 0.95rem;
 		margin: 0;
 		letter-spacing: -0.01em;
 	}
 
-	.ghost {
+	:global(.ghost) {
 		background: none;
 		border: 1px solid var(--border);
 		color: var(--muted);
@@ -997,7 +870,7 @@
 			border-color 0.15s;
 	}
 
-	.ghost:hover:not(:disabled) {
+	:global(.ghost:hover:not(:disabled)) {
 		color: var(--accent);
 		border-color: var(--accent);
 	}
@@ -1054,12 +927,7 @@
 		color: var(--red);
 	}
 
-	.chip.account-chip {
-		background: var(--gray-bg);
-		color: var(--muted);
-	}
-
-	.fixed-currency {
+	:global(.fixed-currency) {
 		display: flex;
 		align-items: center;
 		padding: 0 0.65rem;
@@ -1069,7 +937,7 @@
 		font-size: 0.85rem;
 	}
 
-	.empty.small {
+	:global(.empty.small) {
 		padding: 0.9rem 0 0.2rem;
 		font-size: 0.85rem;
 		text-align: left;

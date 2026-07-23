@@ -17,47 +17,10 @@ async function request(path, options = {}) {
 	return body;
 }
 
+// --- Movements ---
+
 export function listMovements() {
 	return request('/movements');
-}
-
-export function getCategories() {
-	return request('/categories');
-}
-
-export function getCurrencies() {
-	return request('/currencies');
-}
-
-export function addCurrency(code) {
-	return request('/currencies', {
-		method: 'POST',
-		body: JSON.stringify({ code })
-	});
-}
-
-export function listAccounts() {
-	return request('/accounts');
-}
-
-export function createAccount({ name, type, currency }) {
-	return request('/accounts', {
-		method: 'POST',
-		body: JSON.stringify({ name, type, currency })
-	});
-}
-
-// balance is in the smallest currency unit, like movement amounts.
-export function reportAccountBalance(id, balance) {
-	return request(`/accounts/${id}/balance`, {
-		method: 'POST',
-		body: JSON.stringify({ balance })
-	});
-}
-
-// from/to as YYYY-MM-DD; to is inclusive.
-export function getCashflow(from, to) {
-	return request(`/cashflow?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
 }
 
 export function createMovement({
@@ -83,6 +46,15 @@ export function createMovement({
 	});
 }
 
+// patch is a partial UpdateMovementRequest body: only include the fields
+// that should change. account_id: '' explicitly clears the account.
+export function updateMovement(id, patch) {
+	return request(`/movements/${id}`, {
+		method: 'PATCH',
+		body: JSON.stringify(patch)
+	});
+}
+
 export function cancelMovement(id) {
 	return request(`/movements/${id}/cancel`, { method: 'POST' });
 }
@@ -91,6 +63,64 @@ export function cancelCreditCardPurchase(id) {
 	return request(`/credit-card-purchases/${id}/cancel`, { method: 'POST' });
 }
 
+export function getCategories() {
+	return request('/categories');
+}
+
+// from/to as YYYY-MM-DD; to is inclusive.
+export function getCashflow(from, to) {
+	return request(`/cashflow?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+}
+
 export function syncNow() {
 	return request('/sync', { method: 'POST' });
+}
+
+// --- Accounts ---
+
+export function listAccounts() {
+	return request('/accounts');
+}
+
+export function createAccount({ name, type, currency }) {
+	return request('/accounts', {
+		method: 'POST',
+		body: JSON.stringify({ name, type, currency })
+	});
+}
+
+// balance is in the smallest currency unit, like movement amounts.
+export function reportAccountBalance(id, balance) {
+	return request(`/accounts/${id}/balance`, {
+		method: 'POST',
+		body: JSON.stringify({ balance })
+	});
+}
+
+// --- Transfers ---
+
+// from_account_id/to_account_id must hold the same currency (v1); amount is
+// positive in that shared currency, timestamp is an ISO string.
+export function createTransfer({ from_account_id, to_account_id, amount, description, timestamp }) {
+	return request('/transfers', {
+		method: 'POST',
+		body: JSON.stringify({ from_account_id, to_account_id, amount, description, timestamp })
+	});
+}
+
+export function cancelTransfer(id) {
+	return request(`/transfers/${id}/cancel`, { method: 'POST' });
+}
+
+// --- Currencies ---
+
+export function getCurrencies() {
+	return request('/currencies');
+}
+
+export function addCurrency(code) {
+	return request('/currencies', {
+		method: 'POST',
+		body: JSON.stringify({ code })
+	});
 }
