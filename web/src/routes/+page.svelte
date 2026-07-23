@@ -285,6 +285,8 @@
 	}
 
 	async function handleCreateTransfer(input) {
+		error = '';
+		notice = '';
 		const result = await createTransfer(input);
 		notice = 'Transfer complete';
 		await load();
