@@ -48,7 +48,10 @@ func (a *Account) Receive(from *Account, amount int64, description string, times
 }
 
 func (a *Account) validateTransfer(other *Account, amount int64) error {
-	if other == nil || a.ID == other.ID {
+	if other == nil {
+		return errors.New("other account is required")
+	}
+	if a.ID != "" && other.ID != "" && a.ID == other.ID {
 		return errors.New("cannot transfer to the same account")
 	}
 	if a.Currency != other.Currency {
