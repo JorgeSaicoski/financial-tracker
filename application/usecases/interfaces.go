@@ -1,43 +1,46 @@
 // interfaces.go gathers every use-case contract of the application layer
 // in one place: the *UseCase interfaces the handlers depend on, and the
-// Input/Result types that cross the boundary with them. Implementations
-// live in the sibling files, one per use case.
+// Input/Result types that cross the boundary with them. Everything is
+// expressed in application/dto types and primitives — never domain
+// entities, which stay inside usecase implementations and the domain
+// layer. Implementations live in the sibling files, one per use case.
 package usecases
 
 import (
 	"context"
 	"time"
 
-	"github.com/JorgeSaicoski/financial-tracker/domain/entities"
+	"github.com/JorgeSaicoski/financial-tracker/application/dto"
 )
 
 // ---- Movements ----
 
 // CreateMovementInput carries the caller-supplied fields for a single
 // movement. Category and PaymentMethod default to "other" when empty so
-// pre-existing clients that only send an amount keep working.
+// pre-existing clients that only send an amount keep working; both are
+// validated against the domain's fixed lists inside the usecase.
 type CreateMovementInput struct {
 	UserID        string
 	Amount        int64
 	Currency      string
 	Description   string
-	Category      entities.Category
-	PaymentMethod entities.PaymentMethod
+	Category      string
+	PaymentMethod string
 	AccountID     *string
 }
 
 type CreateMovementUseCase interface {
-	Execute(ctx context.Context, input CreateMovementInput) (*entities.Movement, error)
+	Execute(ctx context.Context, input CreateMovementInput) (*dto.MovementDTO, error)
 }
 
 type GetMovementUseCase interface {
-	Execute(ctx context.Context, id string) (*entities.Movement, error)
+	Execute(ctx context.Context, id string) (*dto.MovementDTO, error)
 }
 
 // ListMovementsResult also carries the computed balance, since
 // ledger-service deliberately leaves that calculation to consumers.
 type ListMovementsResult struct {
-	Movements []*entities.Movement
+	Movements []*dto.MovementDTO
 	Balance   int64
 }
 
@@ -50,8 +53,8 @@ type ListMovementsUseCase interface {
 // stays active and gains a compensating Reversal, mirroring
 // ledger-service's no-delete rule.
 type CancelMovementResult struct {
-	Movement *entities.Movement
-	Reversal *entities.Movement
+	Movement *dto.MovementDTO
+	Reversal *dto.MovementDTO
 }
 
 type CancelMovementUseCase interface {
@@ -66,8 +69,8 @@ type CancelMovementUseCase interface {
 // reversal + a replacement instead (see UpdateMovementResult).
 type UpdateMovementInput struct {
 	Description   *string
-	Category      *entities.Category
-	PaymentMethod *entities.PaymentMethod
+	Category      *string
+	PaymentMethod *string
 	AccountID     *string // a pointer to "" clears the account
 	Amount        *int64
 	Currency      *string
@@ -83,9 +86,9 @@ type UpdateMovementInput struct {
 // CancelMovementResult's shape for the same reason (ledger-service never
 // deletes).
 type UpdateMovementResult struct {
-	Movement    *entities.Movement
-	Reversal    *entities.Movement
-	Replacement *entities.Movement
+	Movement    *dto.MovementDTO
+	Reversal    *dto.MovementDTO
+	Replacement *dto.MovementDTO
 }
 
 type UpdateMovementUseCase interface {
@@ -113,8 +116,8 @@ type TransferBetweenAccountsInput struct {
 // net worth.
 type TransferResult struct {
 	TransferID string
-	Debit      *entities.Movement
-	Credit     *entities.Movement
+	Debit      *dto.MovementDTO
+	Credit     *dto.MovementDTO
 }
 
 type TransferBetweenAccountsUseCase interface {
@@ -140,21 +143,21 @@ type CreateCreditCardPurchaseInput struct {
 	TotalAmount  int64
 	Currency     string
 	Description  string
-	Category     entities.Category
+	Category     string
 	Installments int
 }
 
 type CreateCreditCardPurchaseUseCase interface {
-	Execute(ctx context.Context, input CreateCreditCardPurchaseInput) (*entities.CreditCardPurchase, []*entities.Movement, error)
+	Execute(ctx context.Context, input CreateCreditCardPurchaseInput) (*dto.CreditCardPurchaseDTO, []*dto.MovementDTO, error)
 }
 
 // CancelCreditCardPurchaseResult reports what happened to each
 // installment: due/synced ones got reversals, not-yet-due ones were just
 // voided (they never reached ledger-service).
 type CancelCreditCardPurchaseResult struct {
-	Purchase  *entities.CreditCardPurchase
-	Voided    []*entities.Movement
-	Reversals []*entities.Movement
+	Purchase  *dto.CreditCardPurchaseDTO
+	Voided    []*dto.MovementDTO
+	Reversals []*dto.MovementDTO
 }
 
 type CancelCreditCardPurchaseUseCase interface {
@@ -164,17 +167,18 @@ type CancelCreditCardPurchaseUseCase interface {
 // ---- Accounts ----
 
 // CreateAccountInput carries the caller-supplied fields for a new
-// account. Type defaults to "other" when empty; Currency must already be
+// account. Type defaults to "other" when empty and is validated against
+// the domain's fixed list in the usecase; Currency must already be
 // registered (POST /currencies first for a new one).
 type CreateAccountInput struct {
 	UserID   string
 	Name     string
-	Type     entities.AccountType
+	Type     string
 	Currency string
 }
 
 type CreateAccountUseCase interface {
-	Execute(ctx context.Context, input CreateAccountInput) (*entities.Account, error)
+	Execute(ctx context.Context, input CreateAccountInput) (*dto.AccountDTO, error)
 }
 
 // AccountView is an account plus everything derivable about its money:
@@ -189,7 +193,7 @@ type CreateAccountUseCase interface {
 //     changed beyond what movements explain — the account's yield or
 //     interest over LastReturnFrom..LastReturnTo. Needs two snapshots.
 type AccountView struct {
-	Account              *entities.Account
+	Account              *dto.AccountDTO
 	EstimatedBalance     int64
 	ReportedBalance      *int64
 	ReportedAt           *time.Time

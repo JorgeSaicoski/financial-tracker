@@ -61,7 +61,7 @@ func (h *accountHandler) CreateAccount(w http.ResponseWriter, r *http.Request) {
 	account, err := h.createAccount.Execute(r.Context(), usecases.CreateAccountInput{
 		UserID:   userID,
 		Name:     req.Name,
-		Type:     entities.AccountType(req.Type),
+		Type:     req.Type,
 		Currency: req.Currency,
 	})
 	if err != nil {
@@ -123,7 +123,7 @@ func toAccountResponse(v usecases.AccountView) interfacedto.AccountResponse {
 		ID:                   v.Account.ID,
 		UserID:               v.Account.UserID,
 		Name:                 v.Account.Name,
-		Type:                 string(v.Account.Type),
+		Type:                 v.Account.Type,
 		Currency:             v.Account.Currency,
 		CreatedAt:            v.Account.CreatedAt,
 		EstimatedBalance:     v.EstimatedBalance,

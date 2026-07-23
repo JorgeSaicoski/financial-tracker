@@ -8,15 +8,17 @@ package services
 import (
 	"context"
 
-	"github.com/JorgeSaicoski/financial-tracker/domain/entities"
+	"github.com/JorgeSaicoski/financial-tracker/application/dto"
 )
 
 // LedgerGateway is the port the sync service needs from the outside
 // world: publish one movement, get back the id ledger-service assigned.
 // Implemented by infrastructure/ledgerservice — application code never
-// imports infrastructure.
+// imports infrastructure. Expressed in application/dto, like every
+// application contract: the adapter narrows the DTO to ledger-service's
+// wire format on its side of the boundary.
 type LedgerGateway interface {
-	Publish(ctx context.Context, movement *entities.Movement) (ledgerTransactionID string, err error)
+	Publish(ctx context.Context, movement *dto.MovementDTO) (ledgerTransactionID string, err error)
 }
 
 // Summary is the result of one sync pass.

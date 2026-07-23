@@ -41,7 +41,7 @@ func (uc *listMovementsUseCase) Execute(ctx context.Context, userID string, curr
 	// ledger-service's own records would.
 	var balance int64
 	for _, m := range movements {
-		if m.Status == entities.MovementStatusVoided {
+		if m.Status == string(entities.MovementStatusVoided) {
 			continue
 		}
 		balance += m.Amount

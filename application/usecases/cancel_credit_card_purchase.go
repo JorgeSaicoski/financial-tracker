@@ -33,7 +33,7 @@ func (uc *cancelCreditCardPurchaseUseCase) Execute(ctx context.Context, id strin
 	if err != nil {
 		return CancelCreditCardPurchaseResult{}, err
 	}
-	if purchase.Status == entities.CreditCardPurchaseStatusCancelled {
+	if purchase.Status == string(entities.CreditCardPurchaseStatusCancelled) {
 		return CancelCreditCardPurchaseResult{}, apperrors.ErrConflict
 	}
 
@@ -44,7 +44,7 @@ func (uc *cancelCreditCardPurchaseUseCase) Execute(ctx context.Context, id strin
 
 	result := CancelCreditCardPurchaseResult{Purchase: purchase}
 	for _, installment := range installments {
-		if installment.IsCancelled() {
+		if installment.ToEntity().IsCancelled() {
 			// Individually cancelled earlier — nothing more to do for it.
 			continue
 		}
@@ -62,7 +62,7 @@ func (uc *cancelCreditCardPurchaseUseCase) Execute(ctx context.Context, id strin
 	if err := uc.purchases.MarkCancelled(ctx, id); err != nil {
 		return CancelCreditCardPurchaseResult{}, err
 	}
-	purchase.Status = entities.CreditCardPurchaseStatusCancelled
+	purchase.Status = string(entities.CreditCardPurchaseStatusCancelled)
 
 	if len(result.Reversals) > 0 {
 		uc.sync.TriggerAsync()

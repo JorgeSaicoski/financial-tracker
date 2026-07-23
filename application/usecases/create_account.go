@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/JorgeSaicoski/financial-tracker/application/dto"
 	"github.com/JorgeSaicoski/financial-tracker/application/repositories"
 	"github.com/JorgeSaicoski/financial-tracker/domain/entities"
 	apperrors "github.com/JorgeSaicoski/financial-tracker/pkg/errors"
@@ -21,13 +22,13 @@ func NewCreateAccount(accounts repositories.AccountRepository, currencies reposi
 	return &createAccountUseCase{accounts: accounts, currencies: currencies}
 }
 
-func (uc *createAccountUseCase) Execute(ctx context.Context, input CreateAccountInput) (*entities.Account, error) {
+func (uc *createAccountUseCase) Execute(ctx context.Context, input CreateAccountInput) (*dto.AccountDTO, error) {
 	name := strings.TrimSpace(input.Name)
 	if input.UserID == "" || name == "" {
 		return nil, fmt.Errorf("%w: account name is required", apperrors.ErrInvalidInput)
 	}
 
-	accountType := input.Type
+	accountType := entities.AccountType(input.Type)
 	if accountType == "" {
 		accountType = entities.AccountTypeOther
 	}
@@ -54,13 +55,13 @@ func (uc *createAccountUseCase) Execute(ctx context.Context, input CreateAccount
 		}
 	}
 
-	return uc.accounts.Create(ctx, &entities.Account{
+	return uc.accounts.Create(ctx, dto.AccountFromEntity(&entities.Account{
 		UserID:    input.UserID,
 		Name:      name,
 		Type:      accountType,
 		Currency:  currency,
 		CreatedAt: time.Now().UTC(),
-	})
+	}))
 }
 
 func contains(list []string, s string) bool {

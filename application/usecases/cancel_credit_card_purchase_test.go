@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/JorgeSaicoski/financial-tracker/application/dto"
 	"github.com/JorgeSaicoski/financial-tracker/domain/entities"
 	apperrors "github.com/JorgeSaicoski/financial-tracker/pkg/errors"
 )
@@ -12,7 +13,7 @@ import (
 // seedPurchase creates a purchase whose first installment is already
 // synced to ledger-service and the rest are still pending (the usual
 // shape: only due installments sync).
-func seedPurchase(t *testing.T, movements *fakeMovementRepo, purchases *fakePurchaseRepo) *entities.CreditCardPurchase {
+func seedPurchase(t *testing.T, movements *fakeMovementRepo, purchases *fakePurchaseRepo) *dto.CreditCardPurchaseDTO {
 	t.Helper()
 	uc := NewCreateCreditCardPurchase(purchases)
 	purchase, installments, err := uc.Execute(context.Background(), CreateCreditCardPurchaseInput{
@@ -50,7 +51,7 @@ func TestCancelPurchaseReversesSyncedAndVoidsRest(t *testing.T) {
 	if len(result.Voided) != 2 {
 		t.Fatalf("voided = %d, want 2 (the unsynced installments)", len(result.Voided))
 	}
-	if result.Purchase.Status != entities.CreditCardPurchaseStatusCancelled {
+	if result.Purchase.Status != string(entities.CreditCardPurchaseStatusCancelled) {
 		t.Errorf("purchase status = %q, want cancelled", result.Purchase.Status)
 	}
 	if trigger.calls != 1 {
@@ -58,7 +59,7 @@ func TestCancelPurchaseReversesSyncedAndVoidsRest(t *testing.T) {
 	}
 
 	stored, _ := purchases.GetByID(context.Background(), purchase.ID)
-	if stored.Status != entities.CreditCardPurchaseStatusCancelled {
+	if stored.Status != string(entities.CreditCardPurchaseStatusCancelled) {
 		t.Error("purchase not persisted as cancelled")
 	}
 }
@@ -73,7 +74,7 @@ func TestCancelPurchaseSkipsAlreadyCancelledInstallments(t *testing.T) {
 	installments, _ := movements.ListByCreditCardPurchase(context.Background(), purchase.ID)
 	var syncedID string
 	for _, m := range installments {
-		if m.IsSynced() {
+		if m.ToEntity().IsSynced() {
 			syncedID = m.ID
 		}
 	}

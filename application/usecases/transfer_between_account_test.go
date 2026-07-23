@@ -5,13 +5,14 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/JorgeSaicoski/financial-tracker/application/dto"
 	"github.com/JorgeSaicoski/financial-tracker/domain/entities"
 	apperrors "github.com/JorgeSaicoski/financial-tracker/pkg/errors"
 )
 
-func mustCreateAccount(t *testing.T, accounts *fakeAccountRepo, userID, currency string) *entities.Account {
+func mustCreateAccount(t *testing.T, accounts *fakeAccountRepo, userID, currency string) *dto.AccountDTO {
 	t.Helper()
-	a, err := accounts.Create(context.Background(), &entities.Account{UserID: userID, Currency: currency})
+	a, err := accounts.Create(context.Background(), &dto.AccountDTO{UserID: userID, Currency: currency})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +44,7 @@ func TestTransferBetweenAccountsHappyPath(t *testing.T) {
 	if *result.Debit.TransferID != result.TransferID || *result.Credit.TransferID != result.TransferID {
 		t.Error("legs not linked by transfer id")
 	}
-	if result.Debit.Category != entities.CategoryTransfer || result.Credit.Category != entities.CategoryTransfer {
+	if result.Debit.Category != string(entities.CategoryTransfer) || result.Credit.Category != string(entities.CategoryTransfer) {
 		t.Error("legs must be categorized as transfer")
 	}
 
@@ -172,7 +173,7 @@ func TestCancelTransferCancelsBothLegsPerSyncStatus(t *testing.T) {
 			}
 
 			if tc.wantDebitVoided {
-				if result.Debit.Movement.Status != entities.MovementStatusVoided || result.Debit.Reversal != nil {
+				if result.Debit.Movement.Status != string(entities.MovementStatusVoided) || result.Debit.Reversal != nil {
 					t.Errorf("debit should be voided: %+v", result.Debit)
 				}
 			} else {
@@ -181,7 +182,7 @@ func TestCancelTransferCancelsBothLegsPerSyncStatus(t *testing.T) {
 				}
 			}
 			if tc.wantCreditVoided {
-				if result.Credit.Movement.Status != entities.MovementStatusVoided || result.Credit.Reversal != nil {
+				if result.Credit.Movement.Status != string(entities.MovementStatusVoided) || result.Credit.Reversal != nil {
 					t.Errorf("credit should be voided: %+v", result.Credit)
 				}
 			} else {

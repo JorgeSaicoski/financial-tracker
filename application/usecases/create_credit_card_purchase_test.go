@@ -77,14 +77,14 @@ func TestCreatePurchaseInstallmentShape(t *testing.T) {
 	uc, movements := newPurchaseUseCase()
 	purchase, installments, err := uc.Execute(context.Background(), CreateCreditCardPurchaseInput{
 		UserID: "u1", TotalAmount: -900, Currency: "usd", Installments: 3, Description: "tv",
-		Category: entities.CategoryShopping,
+		Category: string(entities.CategoryShopping),
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	for i, m := range installments {
-		if m.PaymentMethod != entities.PaymentMethodCreditCard {
+		if m.PaymentMethod != string(entities.PaymentMethodCreditCard) {
 			t.Errorf("installment %d payment method = %q", i+1, m.PaymentMethod)
 		}
 		if m.InstallmentNumber == nil || *m.InstallmentNumber != i+1 {
@@ -93,7 +93,7 @@ func TestCreatePurchaseInstallmentShape(t *testing.T) {
 		if m.CreditCardPurchaseID == nil || *m.CreditCardPurchaseID != purchase.ID {
 			t.Errorf("installment %d not linked to purchase", i+1)
 		}
-		if m.SyncStatus != entities.SyncStatusPending || m.Status != entities.MovementStatusActive {
+		if m.SyncStatus != string(entities.SyncStatusPending) || m.Status != string(entities.MovementStatusActive) {
 			t.Errorf("installment %d state = %s/%s", i+1, m.Status, m.SyncStatus)
 		}
 		// One per month starting the purchase month.

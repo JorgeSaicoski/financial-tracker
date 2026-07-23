@@ -33,7 +33,7 @@ func (uc *cancelTransferUseCase) Execute(ctx context.Context, transferID string)
 	if len(legs) != 2 || legs[0].Amount >= 0 || legs[1].Amount <= 0 {
 		return CancelTransferResult{}, apperrors.ErrNotFound
 	}
-	if legs[0].IsCancelled() && legs[1].IsCancelled() {
+	if legs[0].ToEntity().IsCancelled() && legs[1].ToEntity().IsCancelled() {
 		return CancelTransferResult{}, apperrors.ErrConflict
 	}
 
@@ -44,7 +44,7 @@ func (uc *cancelTransferUseCase) Execute(ctx context.Context, transferID string)
 		anySynced = false // reset in case the callback is ever re-invoked
 		for _, leg := range legs {
 			one := CancelMovementResult{Movement: leg}
-			if !leg.IsCancelled() {
+			if !leg.ToEntity().IsCancelled() {
 				var cancelErr error
 				one, cancelErr = cancelOne(ctx, tx, leg)
 				if cancelErr != nil {
