@@ -132,16 +132,31 @@ rebuilds without manual regeneration.
 ## Migrating existing SQLite data
 
 If you have existing data in the SQLite-backed dev/standalone deployment,
-the supported path is `cmd/migrate-sqlite` (**not implemented yet — tracked
-as BACK-06**; this stack works standalone with an empty Postgres database
-in the meantime). Once it lands, the procedure is:
+the supported path is `cmd/migrate-sqlite` — it copies every table
+(currencies, accounts, account snapshots, credit-card purchases,
+movements) in one Postgres transaction, preserving ids, timestamps, sync
+state, and every link (reversals, installments, transfers). Re-importing
+via CSV instead would silently drop all of that.
 
 1. Stop whatever is writing to the SQLite file (dev stack, standalone
    binary, etc.) — no live writers during migration.
 2. Bring up this stack's Postgres only: `podman-compose up -d ft-postgres`.
-3. Run `cmd/migrate-sqlite` pointed at the SQLite file and this stack's
-   `DATABASE_URL` (from `.env`).
-4. Start the rest of the stack: `podman-compose up -d`.
+3. From the repo root, run:
+   ```bash
+   go run ./cmd/migrate-sqlite \
+     --db-path /path/to/financial-tracker.db \
+     --database-url "$DATABASE_URL"   # same value as ft-postgres's DSN in .env
+   ```
+   It refuses to run if the target already has movements/accounts/
+   snapshots/purchases (a prior migration, most likely) — pass `--force`
+   only if you're deliberately re-running into a target you know is safe
+   to write into; it does **not** wipe the target first, so a `--force`
+   run into data that doesn't already match will fail on the first id
+   collision rather than silently merging.
+4. Check the printed per-table source/target counts match (the command
+   also exits non-zero on any mismatch) and spot-check a balance or two
+   against the old deployment before relying on the new one.
+5. Start the rest of the stack: `podman-compose up -d`.
 
 ## Backups
 
