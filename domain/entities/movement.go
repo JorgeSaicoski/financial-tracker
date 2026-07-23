@@ -22,6 +22,12 @@ type Movement struct {
 	// part of what syncs to ledger-service.
 	AccountID *string
 
+	// TransferID links the two movement rows (debit + credit) that make
+	// up one account-to-account transfer; nil for a plain movement.
+	// Local-only, like AccountID: the two legs sync independently and net
+	// to zero in ledger-service, which never learns they're linked.
+	TransferID *string
+
 	// Set only when the movement is one installment of a credit-card
 	// purchase that was split (installments > 1).
 	CreditCardPurchaseID *string

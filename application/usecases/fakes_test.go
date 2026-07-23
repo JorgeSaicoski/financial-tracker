@@ -6,6 +6,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/JorgeSaicoski/financial-tracker/application/repositories"
 	"github.com/JorgeSaicoski/financial-tracker/domain/entities"
 	apperrors "github.com/JorgeSaicoski/financial-tracker/pkg/errors"
 )
@@ -41,8 +42,9 @@ func (f *fakeCurrencyRepo) Add(_ context.Context, code string) error {
 // fakeMovementRepo is an in-memory MovementRepository mirroring the
 // semantics the SQLite implementation guarantees (see its own tests).
 type fakeMovementRepo struct {
-	byID   map[string]*entities.Movement
-	nextID int
+	byID              map[string]*entities.Movement
+	nextID            int
+	updateMetadataErr error
 }
 
 func newFakeMovementRepo() *fakeMovementRepo {
@@ -61,6 +63,25 @@ func (f *fakeMovementRepo) add(m *entities.Movement) *entities.Movement {
 
 func (f *fakeMovementRepo) Create(_ context.Context, m *entities.Movement) (*entities.Movement, error) {
 	return f.add(m), nil
+}
+
+func (f *fakeMovementRepo) CreateBatch(_ context.Context, movements []*entities.Movement) ([]*entities.Movement, error) {
+	for _, m := range movements {
+		f.add(m)
+	}
+	return movements, nil
+}
+
+func (f *fakeMovementRepo) ListByTransferID(_ context.Context, transferID string) ([]*entities.Movement, error) {
+	var out []*entities.Movement
+	for _, m := range f.byID {
+		if m.TransferID != nil && *m.TransferID == transferID {
+			cp := *m
+			out = append(out, &cp)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Amount < out[j].Amount })
+	return out, nil
 }
 
 func (f *fakeMovementRepo) GetByID(_ context.Context, id string) (*entities.Movement, error) {
@@ -165,6 +186,32 @@ func (f *fakeMovementRepo) MarkSyncFailed(_ context.Context, id, syncErr string,
 	return nil
 }
 
+func (f *fakeMovementRepo) UpdateMetadata(_ context.Context, id, description string, category entities.Category, paymentMethod entities.PaymentMethod, accountID *string) error {
+	if f.updateMetadataErr != nil {
+		return f.updateMetadataErr
+	}
+	m, ok := f.byID[id]
+	if !ok {
+		return apperrors.ErrNotFound
+	}
+	m.Description = description
+	m.Category = category
+	m.PaymentMethod = paymentMethod
+	m.AccountID = accountID
+	return nil
+}
+
+func (f *fakeMovementRepo) UpdateFinancial(_ context.Context, id string, amount int64, currency string, timestamp time.Time) error {
+	m, ok := f.byID[id]
+	if !ok {
+		return apperrors.ErrNotFound
+	}
+	m.Amount = amount
+	m.Currency = currency
+	m.Timestamp = timestamp
+	return nil
+}
+
 func (f *fakeMovementRepo) Void(_ context.Context, id string) error {
 	m, ok := f.byID[id]
 	if !ok {
@@ -185,6 +232,10 @@ func (f *fakeMovementRepo) CreateReversal(_ context.Context, reversal *entities.
 	reversal = f.add(reversal)
 	original.ReversedByMovementID = &reversal.ID
 	return reversal, nil
+}
+
+func (f *fakeMovementRepo) Transact(_ context.Context, fn func(tx repositories.MovementRepository) error) error {
+	return fn(f)
 }
 
 type fakePurchaseRepo struct {

@@ -47,6 +47,13 @@ func (uc *getCashflowUseCase) Execute(ctx context.Context, userID string, from, 
 		if m.Status == entities.MovementStatusVoided {
 			continue
 		}
+		// A transfer moves money between the user's own accounts — it's
+		// neither income nor expense, so it's excluded from cashflow
+		// entirely (its two legs would otherwise inflate both In and Out
+		// while netting to zero, which is misleading, not neutral).
+		if m.Category == entities.CategoryTransfer {
+			continue
+		}
 
 		total, ok := totals[m.Currency]
 		if !ok {

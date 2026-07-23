@@ -1,0 +1,232 @@
+package usecases
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"github.com/JorgeSaicoski/financial-tracker/domain/entities"
+	apperrors "github.com/JorgeSaicoski/financial-tracker/pkg/errors"
+)
+
+func mustCreateAccount(t *testing.T, accounts *fakeAccountRepo, userID, currency string) *entities.Account {
+	t.Helper()
+	a, err := accounts.Create(context.Background(), &entities.Account{UserID: userID, Currency: currency})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return a
+}
+
+func TestTransferBetweenAccountsHappyPath(t *testing.T) {
+	movements := newFakeMovementRepo()
+	accounts := newFakeAccountRepo()
+	from := mustCreateAccount(t, accounts, "u1", "usd")
+	to := mustCreateAccount(t, accounts, "u1", "usd")
+
+	uc := NewTransferBetweenAccounts(movements, accounts)
+	result, err := uc.Execute(context.Background(), TransferBetweenAccountsInput{
+		UserID: "u1", FromAccountID: from.ID, ToAccountID: to.ID, Amount: 500, Description: "moving cash",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.TransferID == "" {
+		t.Fatal("expected a transfer id")
+	}
+	if result.Debit.Amount != -500 || result.Credit.Amount != 500 {
+		t.Errorf("legs = %d/%d, want -500/500", result.Debit.Amount, result.Credit.Amount)
+	}
+	if *result.Debit.AccountID != from.ID || *result.Credit.AccountID != to.ID {
+		t.Error("legs not tied to the right accounts")
+	}
+	if *result.Debit.TransferID != result.TransferID || *result.Credit.TransferID != result.TransferID {
+		t.Error("legs not linked by transfer id")
+	}
+	if result.Debit.Category != entities.CategoryTransfer || result.Credit.Category != entities.CategoryTransfer {
+		t.Error("legs must be categorized as transfer")
+	}
+
+	// Net worth unchanged: both accounts' balances move, but they sum to
+	// zero across the pair.
+	fromNet, _ := movements.NetByAccount(context.Background(), from.ID, nil, nil)
+	toNet, _ := movements.NetByAccount(context.Background(), to.ID, nil, nil)
+	if fromNet != -500 || toNet != 500 {
+		t.Errorf("account nets = %d/%d, want -500/500", fromNet, toNet)
+	}
+	if fromNet+toNet != 0 {
+		t.Errorf("net worth changed: %d", fromNet+toNet)
+	}
+}
+
+func TestTransferBetweenAccountsRejectsCurrencyMismatch(t *testing.T) {
+	movements := newFakeMovementRepo()
+	accounts := newFakeAccountRepo()
+	from := mustCreateAccount(t, accounts, "u1", "usd")
+	to := mustCreateAccount(t, accounts, "u1", "brl")
+
+	uc := NewTransferBetweenAccounts(movements, accounts)
+	_, err := uc.Execute(context.Background(), TransferBetweenAccountsInput{
+		UserID: "u1", FromAccountID: from.ID, ToAccountID: to.ID, Amount: 100,
+	})
+	if !errors.Is(err, apperrors.ErrInvalidInput) {
+		t.Fatalf("want ErrInvalidInput, got %v", err)
+	}
+}
+
+func TestTransferBetweenAccountsRejectsSameAccount(t *testing.T) {
+	movements := newFakeMovementRepo()
+	accounts := newFakeAccountRepo()
+	account := mustCreateAccount(t, accounts, "u1", "usd")
+
+	uc := NewTransferBetweenAccounts(movements, accounts)
+	_, err := uc.Execute(context.Background(), TransferBetweenAccountsInput{
+		UserID: "u1", FromAccountID: account.ID, ToAccountID: account.ID, Amount: 100,
+	})
+	if !errors.Is(err, apperrors.ErrInvalidInput) {
+		t.Fatalf("want ErrInvalidInput, got %v", err)
+	}
+}
+
+func TestTransferBetweenAccountsRejectsUnknownOrForeignAccount(t *testing.T) {
+	movements := newFakeMovementRepo()
+	accounts := newFakeAccountRepo()
+	mine := mustCreateAccount(t, accounts, "u1", "usd")
+	someoneElses := mustCreateAccount(t, accounts, "u2", "usd")
+
+	uc := NewTransferBetweenAccounts(movements, accounts)
+
+	if _, err := uc.Execute(context.Background(), TransferBetweenAccountsInput{
+		UserID: "u1", FromAccountID: mine.ID, ToAccountID: "does-not-exist", Amount: 100,
+	}); !errors.Is(err, apperrors.ErrInvalidInput) {
+		t.Errorf("unknown destination: want ErrInvalidInput, got %v", err)
+	}
+
+	if _, err := uc.Execute(context.Background(), TransferBetweenAccountsInput{
+		UserID: "u1", FromAccountID: mine.ID, ToAccountID: someoneElses.ID, Amount: 100,
+	}); !errors.Is(err, apperrors.ErrInvalidInput) {
+		t.Errorf("foreign destination: want ErrInvalidInput, got %v", err)
+	}
+}
+
+func TestTransferBetweenAccountsRejectsNonPositiveAmount(t *testing.T) {
+	movements := newFakeMovementRepo()
+	accounts := newFakeAccountRepo()
+	from := mustCreateAccount(t, accounts, "u1", "usd")
+	to := mustCreateAccount(t, accounts, "u1", "usd")
+
+	uc := NewTransferBetweenAccounts(movements, accounts)
+	for _, amount := range []int64{0, -100} {
+		if _, err := uc.Execute(context.Background(), TransferBetweenAccountsInput{
+			UserID: "u1", FromAccountID: from.ID, ToAccountID: to.ID, Amount: amount,
+		}); !errors.Is(err, apperrors.ErrInvalidInput) {
+			t.Errorf("amount %d: want ErrInvalidInput, got %v", amount, err)
+		}
+	}
+}
+
+func TestCancelTransferCancelsBothLegsPerSyncStatus(t *testing.T) {
+	cases := []struct {
+		name             string
+		debitSynced      bool
+		creditSynced     bool
+		wantDebitVoided  bool
+		wantCreditVoided bool
+		wantSyncTrigger  bool
+	}{
+		{"both pending", false, false, true, true, false},
+		{"both synced", true, true, false, false, true},
+		{"debit synced only", true, false, false, true, true},
+		{"credit synced only", false, true, true, false, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			movements := newFakeMovementRepo()
+			accounts := newFakeAccountRepo()
+			from := mustCreateAccount(t, accounts, "u1", "usd")
+			to := mustCreateAccount(t, accounts, "u1", "usd")
+
+			transferUC := NewTransferBetweenAccounts(movements, accounts)
+			transfer, err := transferUC.Execute(context.Background(), TransferBetweenAccountsInput{
+				UserID: "u1", FromAccountID: from.ID, ToAccountID: to.ID, Amount: 500,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.debitSynced {
+				if err := movements.MarkSynced(context.Background(), transfer.Debit.ID, "ledger-d", transfer.Debit.Timestamp); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.creditSynced {
+				if err := movements.MarkSynced(context.Background(), transfer.Credit.ID, "ledger-c", transfer.Credit.Timestamp); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			trigger := &fakeSyncTrigger{}
+			result, err := NewCancelTransfer(movements, trigger).Execute(context.Background(), transfer.TransferID)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if tc.wantDebitVoided {
+				if result.Debit.Movement.Status != entities.MovementStatusVoided || result.Debit.Reversal != nil {
+					t.Errorf("debit should be voided: %+v", result.Debit)
+				}
+			} else {
+				if result.Debit.Reversal == nil {
+					t.Errorf("debit should be reversed: %+v", result.Debit)
+				}
+			}
+			if tc.wantCreditVoided {
+				if result.Credit.Movement.Status != entities.MovementStatusVoided || result.Credit.Reversal != nil {
+					t.Errorf("credit should be voided: %+v", result.Credit)
+				}
+			} else {
+				if result.Credit.Reversal == nil {
+					t.Errorf("credit should be reversed: %+v", result.Credit)
+				}
+			}
+			if (trigger.calls > 0) != tc.wantSyncTrigger {
+				t.Errorf("sync trigger calls = %d, want triggered=%v", trigger.calls, tc.wantSyncTrigger)
+			}
+
+			// Whichever way each leg was cancelled, the pair still nets
+			// to zero: cancelling a transfer must never change net worth.
+			fromNet, _ := movements.NetByAccount(context.Background(), from.ID, nil, nil)
+			toNet, _ := movements.NetByAccount(context.Background(), to.ID, nil, nil)
+			if fromNet+toNet != 0 {
+				t.Errorf("net worth changed after cancel: %d + %d != 0", fromNet, toNet)
+			}
+		})
+	}
+}
+
+func TestCancelTransferMissingID(t *testing.T) {
+	movements := newFakeMovementRepo()
+	uc := NewCancelTransfer(movements, &fakeSyncTrigger{})
+	if _, err := uc.Execute(context.Background(), "nope"); !errors.Is(err, apperrors.ErrNotFound) {
+		t.Fatalf("want ErrNotFound, got %v", err)
+	}
+}
+
+func TestCancelMovementRejectsDirectSingleLegCancel(t *testing.T) {
+	movements := newFakeMovementRepo()
+	accounts := newFakeAccountRepo()
+	from := mustCreateAccount(t, accounts, "u1", "usd")
+	to := mustCreateAccount(t, accounts, "u1", "usd")
+
+	transfer, err := NewTransferBetweenAccounts(movements, accounts).Execute(context.Background(), TransferBetweenAccountsInput{
+		UserID: "u1", FromAccountID: from.ID, ToAccountID: to.ID, Amount: 500,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	uc := NewCancelMovement(movements, &fakeSyncTrigger{})
+	if _, err := uc.Execute(context.Background(), transfer.Debit.ID); !errors.Is(err, apperrors.ErrConflict) {
+		t.Fatalf("want ErrConflict, got %v", err)
+	}
+}

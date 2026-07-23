@@ -37,6 +37,33 @@ type MovementResponse struct {
 	InstallmentNumber    int    `json:"installment_number,omitempty"`
 	CancelsMovementID    string `json:"cancels_movement_id,omitempty"`
 	ReversedByMovementID string `json:"reversed_by_movement_id,omitempty"`
+	TransferID           string `json:"transfer_id,omitempty"`
+}
+
+// UpdateMovementRequest is the API request body for PATCH /movements/{id}.
+// A field absent from the JSON body leaves that value unchanged; an
+// explicit "account_id": "" clears the account. Description, category,
+// payment_method and account_id are metadata (always editable); amount,
+// currency and timestamp are financial (see the UpdateMovement use case for
+// what happens when they're edited on an already-synced movement).
+type UpdateMovementRequest struct {
+	Description   *string    `json:"description,omitempty"`
+	Category      *string    `json:"category,omitempty"`
+	PaymentMethod *string    `json:"payment_method,omitempty"`
+	AccountID     *string    `json:"account_id,omitempty"`
+	Amount        *int64     `json:"amount,omitempty"`
+	Currency      *string    `json:"currency,omitempty"`
+	Timestamp     *time.Time `json:"timestamp,omitempty"`
+}
+
+// UpdateMovementResponse: Reversal/Replacement are present only when the
+// edit touched an already-synced movement's financial fields — the
+// original (Movement) stayed as-is other than the reversal link, Reversal
+// compensates it, and Replacement carries the corrected values.
+type UpdateMovementResponse struct {
+	Movement    MovementResponse  `json:"movement"`
+	Reversal    *MovementResponse `json:"reversal,omitempty"`
+	Replacement *MovementResponse `json:"replacement,omitempty"`
 }
 
 type ListMovementsResponse struct {

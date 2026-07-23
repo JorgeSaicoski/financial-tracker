@@ -7,6 +7,7 @@ import (
 	"time"
 
 	interfacedto "github.com/JorgeSaicoski/financial-tracker/interfaces/dto"
+	apperrors "github.com/JorgeSaicoski/financial-tracker/pkg/errors"
 	"github.com/JorgeSaicoski/financial-tracker/pkg/logger"
 )
 
@@ -25,6 +26,33 @@ func writeError(log logger.Logger, w http.ResponseWriter, status int, message st
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(interfacedto.ErrorResponse{Error: message}); err != nil {
 		log.Error("failed to encode error response: %v", err)
+	}
+}
+
+// writeUsecaseError maps the four apperrors sentinels to their HTTP
+// status, shared by every handler so a given error kind always produces
+// the same response shape. ErrConflict keeps the historical "already
+// cancelled" wording when the usecase returned the bare sentinel (cancel
+// endpoints predate wrapped conflict messages); a wrapped message (e.g.
+// "this movement is one leg of a transfer...") is shown as-is.
+func writeUsecaseError(log logger.Logger, w http.ResponseWriter, action string, err error) {
+	switch {
+	case apperrors.Is(err, apperrors.ErrInvalidInput):
+		writeError(log, w, http.StatusBadRequest, err.Error())
+	case apperrors.Is(err, apperrors.ErrNotFound):
+		writeError(log, w, http.StatusNotFound, "not found")
+	case apperrors.Is(err, apperrors.ErrConflict):
+		msg := "already cancelled"
+		if err.Error() != apperrors.ErrConflict.Error() {
+			msg = err.Error()
+		}
+		writeError(log, w, http.StatusConflict, msg)
+	case apperrors.Is(err, apperrors.ErrUpstream):
+		log.Error("%s failed: %v", action, err)
+		writeError(log, w, http.StatusBadGateway, "upstream ledger service error")
+	default:
+		log.Error("%s failed: %v", action, err)
+		writeError(log, w, http.StatusInternalServerError, "internal error")
 	}
 }
 

@@ -58,6 +58,7 @@ func main() {
 	createPurchase := usecases.NewCreateCreditCardPurchase(purchaseRepo)
 	getMovement := usecases.NewGetMovement(movementRepo)
 	listMovements := usecases.NewListMovements(movementRepo)
+	updateMovement := usecases.NewUpdateMovement(movementRepo, accountRepo, syncService)
 	cancelMovement := usecases.NewCancelMovement(movementRepo, syncService)
 	cancelPurchase := usecases.NewCancelCreditCardPurchase(purchaseRepo, movementRepo, syncService)
 	getCashflow := usecases.NewGetCashflow(movementRepo, accountRepo)
@@ -66,12 +67,15 @@ func main() {
 	reportBalance := usecases.NewReportAccountBalance(accountRepo, movementRepo)
 	listCurrencies := usecases.NewListCurrencies(currencyRepo)
 	addCurrency := usecases.NewAddCurrency(currencyRepo)
+	transferBetweenAccounts := usecases.NewTransferBetweenAccounts(movementRepo, accountRepo)
+	cancelTransfer := usecases.NewCancelTransfer(movementRepo, syncService)
 
 	movementHandler := handlers.NewMovementHandler(
 		createMovement,
 		createPurchase,
 		getMovement,
 		listMovements,
+		updateMovement,
 		cancelMovement,
 		cancelPurchase,
 		getCashflow,
@@ -82,8 +86,9 @@ func main() {
 	)
 	accountHandler := handlers.NewAccountHandler(createAccount, listAccounts, reportBalance, defaultUserID, log)
 	currencyHandler := handlers.NewCurrencyHandler(listCurrencies, addCurrency, log)
+	transferHandler := handlers.NewTransferHandler(transferBetweenAccounts, cancelTransfer, defaultUserID, log)
 
-	router := api.NewRouter(movementHandler, accountHandler, currencyHandler)
+	router := api.NewRouter(movementHandler, accountHandler, currencyHandler, transferHandler)
 
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
@@ -91,7 +96,7 @@ func main() {
 
 	addr := ":" + port
 	log.Info("financial-tracker API listening on %s (db %s, syncing to ledger-service at %s every %s)", addr, dbPath, ledgerServiceURL, syncInterval)
-	log.Info("endpoints: POST /movements | GET /movements | POST /movements/{id}/cancel | POST /credit-card-purchases/{id}/cancel | POST /sync | GET /categories | GET /cashflow | GET|POST /accounts | POST /accounts/{id}/balance | GET|POST /currencies")
+	log.Info("endpoints: POST /movements | GET /movements | PATCH /movements/{id} | POST /movements/{id}/cancel | POST /credit-card-purchases/{id}/cancel | POST /sync | GET /categories | GET /cashflow | GET|POST /accounts | POST /accounts/{id}/balance | GET|POST /currencies | POST /transfers | POST /transfers/{id}/cancel")
 
 	if err := http.ListenAndServe(addr, router); err != nil {
 		log.Error("server failed: %v", err)

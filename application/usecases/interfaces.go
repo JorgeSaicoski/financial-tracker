@@ -58,6 +58,81 @@ type CancelMovementUseCase interface {
 	Execute(ctx context.Context, id string) (CancelMovementResult, error)
 }
 
+// UpdateMovementInput carries a PATCH /movements/{id} partial body — a nil
+// field means "leave unchanged". Description/Category/PaymentMethod/
+// AccountID are metadata: local-only, always editable regardless of sync
+// status. Amount/Currency/Timestamp are financial: editable in place only
+// before the movement syncs; once synced, editing them produces a
+// reversal + a replacement instead (see UpdateMovementResult).
+type UpdateMovementInput struct {
+	Description   *string
+	Category      *entities.Category
+	PaymentMethod *entities.PaymentMethod
+	AccountID     *string // a pointer to "" clears the account
+	Amount        *int64
+	Currency      *string
+	Timestamp     *time.Time
+}
+
+// UpdateMovementResult reports how the edit was carried out. A
+// metadata-only edit, or a financial edit on a not-yet-synced movement,
+// updates Movement in place (Reversal/Replacement nil). A financial edit
+// on an already-synced movement leaves Movement untouched other than the
+// reversal link and returns the compensating Reversal plus the
+// Replacement movement carrying the corrected values — mirroring
+// CancelMovementResult's shape for the same reason (ledger-service never
+// deletes).
+type UpdateMovementResult struct {
+	Movement    *entities.Movement
+	Reversal    *entities.Movement
+	Replacement *entities.Movement
+}
+
+type UpdateMovementUseCase interface {
+	Execute(ctx context.Context, id string, input UpdateMovementInput) (UpdateMovementResult, error)
+}
+
+// ---- Transfers ----
+
+// TransferBetweenAccountsInput describes a move of money between two of
+// the user's own accounts. Amount is always positive: the debit leg gets
+// -Amount, the credit leg +Amount. A zero Timestamp means "now". v1 is
+// same-currency only.
+type TransferBetweenAccountsInput struct {
+	UserID        string
+	FromAccountID string
+	ToAccountID   string
+	Amount        int64
+	Description   string
+	Timestamp     time.Time
+}
+
+// TransferResult carries both legs of a transfer, linked by TransferID:
+// Debit is the negative leg on FromAccountID, Credit the positive leg on
+// ToAccountID. Together they net to zero, so the transfer never changes
+// net worth.
+type TransferResult struct {
+	TransferID string
+	Debit      *entities.Movement
+	Credit     *entities.Movement
+}
+
+type TransferBetweenAccountsUseCase interface {
+	Execute(ctx context.Context, input TransferBetweenAccountsInput) (TransferResult, error)
+}
+
+// CancelTransferResult reports what happened to each leg — same
+// voided/reversal shape as CancelMovementResult, one per leg, since each
+// leg is cancelled independently based on its own sync status.
+type CancelTransferResult struct {
+	Debit  CancelMovementResult
+	Credit CancelMovementResult
+}
+
+type CancelTransferUseCase interface {
+	Execute(ctx context.Context, transferID string) (CancelTransferResult, error)
+}
+
 // ---- Credit card purchases ----
 
 type CreateCreditCardPurchaseInput struct {

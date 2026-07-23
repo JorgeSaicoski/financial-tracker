@@ -227,6 +227,104 @@ func TestCreateReversalLinksAtomically(t *testing.T) {
 	}
 }
 
+func TestMovementUpdateMetadataAndFinancial(t *testing.T) {
+	db := openTestDB(t)
+	repo := NewMovementRepository(db)
+	ctx := context.Background()
+
+	created, err := repo.Create(ctx, testMovement(-450))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	account, err := NewAccountRepository(db).Create(ctx, &entities.Account{
+		UserID: created.UserID, Name: "wallet", Type: entities.AccountTypeCash,
+		Currency: "usd", CreatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := repo.UpdateMetadata(ctx, created.ID, "renamed", entities.CategoryTransport, entities.PaymentMethodPix, &account.ID); err != nil {
+		t.Fatalf("update metadata: %v", err)
+	}
+	got, err := repo.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Description != "renamed" || got.Category != entities.CategoryTransport ||
+		got.PaymentMethod != entities.PaymentMethodPix || got.AccountID == nil || *got.AccountID != account.ID {
+		t.Errorf("metadata not persisted: %+v", got)
+	}
+	if got.Amount != -450 {
+		t.Errorf("financial fields must be untouched by UpdateMetadata: %+v", got)
+	}
+
+	newTimestamp := created.Timestamp.Add(24 * time.Hour)
+	if err := repo.UpdateFinancial(ctx, created.ID, -900, "brl", newTimestamp); err != nil {
+		t.Fatalf("update financial: %v", err)
+	}
+	got, err = repo.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Amount != -900 || got.Currency != "brl" || !got.Timestamp.Equal(newTimestamp) {
+		t.Errorf("financial fields not persisted: %+v", got)
+	}
+	if got.Description != "renamed" {
+		t.Errorf("metadata must be untouched by UpdateFinancial: %+v", got)
+	}
+
+	if err := repo.UpdateMetadata(ctx, "missing", "x", entities.CategoryOther, entities.PaymentMethodOther, nil); !errors.Is(err, apperrors.ErrNotFound) {
+		t.Errorf("update metadata on missing id: want ErrNotFound, got %v", err)
+	}
+	if err := repo.UpdateFinancial(ctx, "missing", -1, "usd", time.Now()); !errors.Is(err, apperrors.ErrNotFound) {
+		t.Errorf("update financial on missing id: want ErrNotFound, got %v", err)
+	}
+}
+
+func TestMovementCreateBatchAtomicity(t *testing.T) {
+	repo := NewMovementRepository(openTestDB(t))
+	ctx := context.Background()
+
+	transferID := "transfer-1"
+	debit := testMovement(-500)
+	debit.TransferID = &transferID
+	credit := testMovement(500)
+	credit.TransferID = &transferID
+
+	created, err := repo.CreateBatch(ctx, []*entities.Movement{debit, credit})
+	if err != nil {
+		t.Fatalf("create batch: %v", err)
+	}
+
+	legs, err := repo.ListByTransferID(ctx, transferID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(legs) != 2 || legs[0].Amount != -500 || legs[1].Amount != 500 {
+		t.Fatalf("legs = %+v, want debit then credit", legs)
+	}
+	if legs[0].ID != created[0].ID || legs[1].ID != created[1].ID {
+		t.Error("returned movements don't match what was persisted")
+	}
+
+	// Second leg fails (duplicate ID collides with the first, already
+	// committed row) — the first leg of this new batch must not survive
+	// either, or the transfer would create money out of nowhere.
+	dupID := debit.ID
+	firstOfSecondBatch := testMovement(-100)
+	secondOfSecondBatch := testMovement(100)
+	secondOfSecondBatch.ID = dupID
+
+	if _, err := repo.CreateBatch(ctx, []*entities.Movement{firstOfSecondBatch, secondOfSecondBatch}); err == nil {
+		t.Fatal("expected the batch to fail on the colliding second leg")
+	}
+	if _, err := repo.GetByID(ctx, firstOfSecondBatch.ID); !errors.Is(err, apperrors.ErrNotFound) {
+		t.Errorf("first leg of the failed batch must have rolled back, got %v", err)
+	}
+}
+
 func TestPurchaseCreateWithInstallments(t *testing.T) {
 	db := openTestDB(t)
 	purchases := NewCreditCardPurchaseRepository(db)
