@@ -518,7 +518,7 @@ type scannable interface {
 	Scan(dest ...any) error
 }
 
-// scanMovement adapts one movements row to the application layer's
+// scanMovement adapts one movement row to the application layer's
 // MovementDTO — the contract this repository implements. The row shape
 // stays private to this package.
 func scanMovement(row scannable) (*dto.MovementDTO, error) {
