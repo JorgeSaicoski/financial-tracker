@@ -13,6 +13,17 @@
 </div>
 
 <style>
+	:global(*),
+	:global(*::before),
+	:global(*::after) {
+		box-sizing: border-box;
+	}
+
+	:global(body) {
+		margin: 0;
+		background: var(--color-bg);
+	}
+
 	.app-shell {
 		display: flex;
 		flex-direction: column;
