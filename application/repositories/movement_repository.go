@@ -58,4 +58,10 @@ type MovementRepository interface {
 	// original's ReversedByMovementID. Returns ErrConflict if the
 	// original is already reversed.
 	CreateReversal(ctx context.Context, reversal *entities.Movement) (*entities.Movement, error)
+
+	// Transact executes fn inside a single database transaction. If fn
+	// returns an error the transaction is rolled back; otherwise it is
+	// committed. The MovementRepository passed to fn must only be used
+	// within fn.
+	Transact(ctx context.Context, fn func(tx MovementRepository) error) error
 }

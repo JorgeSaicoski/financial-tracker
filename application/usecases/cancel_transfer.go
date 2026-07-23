@@ -36,22 +36,30 @@ func (uc *cancelTransferUseCase) Execute(ctx context.Context, transferID string)
 
 	var result CancelTransferResult
 	anySynced := false
-	for _, leg := range legs {
-		one := CancelMovementResult{Movement: leg}
-		if !leg.IsCancelled() {
-			one, err = cancelOne(ctx, uc.movements, leg)
-			if err != nil {
-				return CancelTransferResult{}, err
+
+	err = uc.movements.Transact(ctx, func(tx repositories.MovementRepository) error {
+		for _, leg := range legs {
+			one := CancelMovementResult{Movement: leg}
+			if !leg.IsCancelled() {
+				var cancelErr error
+				one, cancelErr = cancelOne(ctx, tx, leg)
+				if cancelErr != nil {
+					return cancelErr
+				}
+				if one.Reversal != nil {
+					anySynced = true
+				}
 			}
-			if one.Reversal != nil {
-				anySynced = true
+			if leg.Amount < 0 {
+				result.Debit = one
+			} else {
+				result.Credit = one
 			}
 		}
-		if leg.Amount < 0 {
-			result.Debit = one
-		} else {
-			result.Credit = one
-		}
+		return nil
+	})
+	if err != nil {
+		return CancelTransferResult{}, err
 	}
 
 	if anySynced {

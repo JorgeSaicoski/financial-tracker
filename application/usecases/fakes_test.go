@@ -6,6 +6,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/JorgeSaicoski/financial-tracker/application/repositories"
 	"github.com/JorgeSaicoski/financial-tracker/domain/entities"
 	apperrors "github.com/JorgeSaicoski/financial-tracker/pkg/errors"
 )
@@ -231,6 +232,10 @@ func (f *fakeMovementRepo) CreateReversal(_ context.Context, reversal *entities.
 	reversal = f.add(reversal)
 	original.ReversedByMovementID = &reversal.ID
 	return reversal, nil
+}
+
+func (f *fakeMovementRepo) Transact(_ context.Context, fn func(tx repositories.MovementRepository) error) error {
+	return fn(f)
 }
 
 type fakePurchaseRepo struct {

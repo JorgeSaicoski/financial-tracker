@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/JorgeSaicoski/financial-tracker/application/repositories"
 	"github.com/JorgeSaicoski/financial-tracker/domain/entities"
 	apperrors "github.com/JorgeSaicoski/financial-tracker/pkg/errors"
 	"github.com/JorgeSaicoski/financial-tracker/pkg/logger"
@@ -50,6 +51,9 @@ func (f *fakeRepo) NetByAccount(context.Context, string, *time.Time, *time.Time)
 	panic("not used")
 }
 func (f *fakeRepo) CreateReversal(context.Context, *entities.Movement) (*entities.Movement, error) {
+	panic("not used")
+}
+func (f *fakeRepo) Transact(_ context.Context, fn func(repositories.MovementRepository) error) error {
 	panic("not used")
 }
 
