@@ -45,12 +45,13 @@ func main() {
 	// only reached by the background sync, so requests keep working while
 	// it's down.
 	var (
-		db           *sql.DB
-		err          error
-		movementRepo repositories.MovementRepository
-		purchaseRepo repositories.CreditCardPurchaseRepository
-		accountRepo  repositories.AccountRepository
-		currencyRepo repositories.CurrencyRepository
+		db               *sql.DB
+		err              error
+		movementRepo     repositories.MovementRepository
+		purchaseRepo     repositories.CreditCardPurchaseRepository
+		accountRepo      repositories.AccountRepository
+		currencyRepo     repositories.CurrencyRepository
+		exchangeRateRepo repositories.ExchangeRateRepository
 	)
 
 	switch dbDriver {
@@ -79,6 +80,7 @@ func main() {
 		purchaseRepo = postgresql.NewCreditCardPurchaseRepository(db)
 		accountRepo = postgresql.NewAccountRepository(db)
 		currencyRepo = postgresql.NewCurrencyRepository(db)
+		exchangeRateRepo = postgresql.NewExchangeRateRepository(db)
 	case "sqlite":
 		db, err = sqlite.Open(dbPath)
 		if err != nil {
@@ -93,6 +95,7 @@ func main() {
 		purchaseRepo = sqlite.NewCreditCardPurchaseRepository(db)
 		accountRepo = sqlite.NewAccountRepository(db)
 		currencyRepo = sqlite.NewCurrencyRepository(db)
+		exchangeRateRepo = sqlite.NewExchangeRateRepository(db)
 	default:
 		log.Error("unknown DB_DRIVER %q (want sqlite or postgres)", dbDriver)
 		os.Exit(1)
@@ -118,6 +121,9 @@ func main() {
 	addCurrency := usecases.NewAddCurrency(currencyRepo)
 	transferBetweenAccounts := usecases.NewTransferBetweenAccounts(movementRepo, accountRepo)
 	cancelTransfer := usecases.NewCancelTransfer(movementRepo, syncService)
+	setExchangeRate := usecases.NewSetExchangeRate(exchangeRateRepo, currencyRepo)
+	listExchangeRates := usecases.NewListExchangeRates(exchangeRateRepo)
+	deleteExchangeRate := usecases.NewDeleteExchangeRate(exchangeRateRepo)
 
 	movementHandler := handlers.NewMovementHandler(
 		createMovement,
@@ -136,8 +142,9 @@ func main() {
 	accountHandler := handlers.NewAccountHandler(createAccount, listAccounts, reportBalance, defaultUserID, log)
 	currencyHandler := handlers.NewCurrencyHandler(listCurrencies, addCurrency, log)
 	transferHandler := handlers.NewTransferHandler(transferBetweenAccounts, cancelTransfer, defaultUserID, log)
+	exchangeRateHandler := handlers.NewExchangeRateHandler(setExchangeRate, listExchangeRates, deleteExchangeRate, defaultUserID, log)
 
-	router := api.NewRouter(movementHandler, accountHandler, currencyHandler, transferHandler, corsAllowedOrigin)
+	router := api.NewRouter(movementHandler, accountHandler, currencyHandler, transferHandler, exchangeRateHandler, corsAllowedOrigin)
 
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
@@ -149,7 +156,7 @@ func main() {
 	}
 	addr := ":" + port
 	log.Info("financial-tracker API listening on %s (db driver %s at %s, syncing to ledger-service at %s every %s)", addr, dbDriver, dbDescription, ledgerServiceURL, syncInterval)
-	log.Info("endpoints: POST /movements | GET /movements | PATCH /movements/{id} | POST /movements/{id}/cancel | POST /credit-card-purchases/{id}/cancel | POST /sync | GET /categories | GET /cashflow | GET|POST /accounts | POST /accounts/{id}/balance | GET|POST /currencies | POST /transfers | POST /transfers/{id}/cancel")
+	log.Info("endpoints: POST /movements | GET /movements | PATCH /movements/{id} | POST /movements/{id}/cancel | POST /credit-card-purchases/{id}/cancel | POST /sync | GET /categories | GET /cashflow | GET|POST /accounts | POST /accounts/{id}/balance | GET|POST /currencies | POST /transfers | POST /transfers/{id}/cancel | GET|POST /exchange-rates | DELETE /exchange-rates/{id}")
 
 	if err := http.ListenAndServe(addr, router); err != nil {
 		log.Error("server failed: %v", err)
