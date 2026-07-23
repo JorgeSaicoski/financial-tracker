@@ -1,8 +1,46 @@
 <script>
+	import { onMount, onDestroy, tick } from 'svelte';
+
 	let { title, onClose, children } = $props();
 
+	let modalEl;
+	let closeEl;
+	let lastActive;
+
+	onMount(async () => {
+		lastActive = document.activeElement;
+		await tick();
+		closeEl?.focus();
+	});
+
+	onDestroy(() => {
+		if (lastActive instanceof HTMLElement) lastActive.focus();
+	});
+
 	function handleKeydown(event) {
-		if (event.key === 'Escape') onClose();
+		if (event.key === 'Escape') {
+			event.preventDefault();
+			onClose();
+			return;
+		}
+
+		if (event.key !== 'Tab' || !modalEl) return;
+
+		const focusables = modalEl.querySelectorAll(
+			'a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])'
+		);
+		if (focusables.length === 0) return;
+
+		const first = focusables[0];
+		const last = focusables[focusables.length - 1];
+
+		if (event.shiftKey && document.activeElement === first) {
+			event.preventDefault();
+			last.focus();
+		} else if (!event.shiftKey && document.activeElement === last) {
+			event.preventDefault();
+			first.focus();
+		}
 	}
 </script>
 
@@ -15,6 +53,7 @@
 <div class="overlay" onclick={onClose} role="presentation">
 	<div
 		class="modal"
+		bind:this={modalEl}
 		onclick={(event) => event.stopPropagation()}
 		role="dialog"
 		aria-modal="true"
@@ -22,7 +61,7 @@
 	>
 		<div class="modal-head">
 			<h2>{title}</h2>
-			<button class="close" type="button" onclick={onClose} aria-label="Close">✕</button>
+			<button bind:this={closeEl} class="close" type="button" onclick={onClose} aria-label="Close">✕</button>
 		</div>
 		{@render children()}
 	</div>
