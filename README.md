@@ -217,6 +217,12 @@ already set in `docker-compose.yml` — without it `npm install` fails with
    Opens on `:5173`. CORS is wide open in `interfaces/api/router.go` for
    local dev — tighten before deploying anywhere real.
 
+### Deploying (PostgreSQL, production images)
+
+The stack above is dev-only (SQLite, Svelte dev server). For a deployable
+Podman stack on PostgreSQL with production builds, see
+[`deploy/README.md`](deploy/README.md).
+
 ## Testing
 
 ```bash

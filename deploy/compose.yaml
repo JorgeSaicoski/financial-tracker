@@ -1,0 +1,130 @@
+# Deployable stack: financial-tracker + ledger-service, both on PostgreSQL,
+# rootless Podman. Unlike the repo-root docker-compose.yml (dev: SQLite,
+# Svelte dev server, wide-open CORS, requires a local ledger-service
+# checkout), this builds production images and keeps every service off the
+# host network except what's explicitly opened below. See deploy/README.md
+# for the up/down procedure, SELinux notes, and systemd/Quadlet persistence.
+#
+# ledger-service is optional (sync tolerates it being unreachable — see
+# root README's "Running locally" section) and is built straight from its
+# git repo, not a local checkout: bring it up with
+#   podman-compose --profile ledger up -d --build
+# or omit --profile ledger to run financial-tracker + web on their own.
+
+services:
+  ft-postgres:
+    image: docker.io/library/postgres:16-alpine
+    container_name: financial-tracker-postgres
+    environment:
+      POSTGRES_USER: ${FT_POSTGRES_USER}
+      POSTGRES_PASSWORD: ${FT_POSTGRES_PASSWORD}
+      POSTGRES_DB: ${FT_POSTGRES_DB}
+    volumes:
+      - ft_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${FT_POSTGRES_USER} -d ${FT_POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    # No host port: only financial-tracker talks to this, over the compose
+    # network. Nothing outside the stack needs direct DB access.
+
+  ledger-postgres:
+    # Built, not pulled plain: init-db.sh + the migration SQL are local
+    # copies of ledger-service's own files (see ledger-postgres/init-db.sh)
+    # instead of a bind mount from a sibling checkout — so this needs no
+    # local ledger-service checkout either. (podman-compose's
+    # dockerfile_inline doesn't work combined with a git-URL build
+    # context — it silently ignores the inline Dockerfile and builds the
+    # context repo's own Dockerfile instead, which is why this isn't
+    # sharing ledger-service's git context like the app build below does.)
+    build:
+      context: ./ledger-postgres
+    container_name: ledger-postgres
+    profiles: ["ledger"]
+    environment:
+      POSTGRES_USER: ${LEDGER_POSTGRES_USER}
+      POSTGRES_PASSWORD: ${LEDGER_POSTGRES_PASSWORD}
+      POSTGRES_DB: ${LEDGER_POSTGRES_DB}
+    volumes:
+      - ledger_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${LEDGER_POSTGRES_USER} -d ${LEDGER_POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    # No host port: same reasoning as ft-postgres. (Today's root
+    # docker-compose.yml publishes 5432 for local debugging; this
+    # production stack doesn't.)
+
+  ledger-service:
+    build:
+      context: ${LEDGER_SERVICE_GIT_URL:-https://github.com/JorgeSaicoski/ledger-service.git#main}
+      dockerfile: Dockerfile
+    container_name: ledger-service
+    profiles: ["ledger"]
+    environment:
+      DATABASE_URL: postgres://${LEDGER_POSTGRES_USER}:${LEDGER_POSTGRES_PASSWORD}@ledger-postgres:5432/${LEDGER_POSTGRES_DB}?sslmode=disable
+      PORT: 8080
+    depends_on:
+      ledger-postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    # No host port: financial-tracker reaches it at http://ledger-service:8080
+    # over the compose network; nothing external calls it directly.
+
+  financial-tracker:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: financial-tracker-api
+    environment:
+      DB_DRIVER: postgres
+      DATABASE_URL: postgres://${FT_POSTGRES_USER}:${FT_POSTGRES_PASSWORD}@ft-postgres:5432/${FT_POSTGRES_DB}?sslmode=disable
+      # Defaults to this stack's own ledger-service (only reachable when
+      # started with --profile ledger); point it at an external instance
+      # instead, or leave ledger-service stopped entirely — sync just
+      # retries on a cooldown and never blocks movements (see root README).
+      LEDGER_SERVICE_URL: ${LEDGER_SERVICE_URL:-http://ledger-service:8080}
+      PORT: 8081
+      # No auth yet (BACK-02/INFRA-02). This fallback identity stays
+      # relevant even after Authentik lands: a self-hosted single-user
+      # deployment can keep using it instead of standing up real accounts.
+      DEFAULT_USER_ID: ${DEFAULT_USER_ID}
+      DEFAULT_CURRENCY: ${DEFAULT_CURRENCY}
+      SYNC_INTERVAL: ${SYNC_INTERVAL:-30s}
+      SYNC_RETRY_COOLDOWN: ${SYNC_RETRY_COOLDOWN:-60s}
+    depends_on:
+      ft-postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    # Until INFRA-03's reverse proxy lands, this is unreachable from the
+    # host on purpose (see README's "Verifying without a proxy yet"
+    # section for how to check it's up). Uncomment to test directly:
+    # ports:
+    #   - "8081:8081"
+
+  web:
+    build:
+      context: ../web
+      dockerfile: Dockerfile
+    container_name: financial-tracker-web
+    environment:
+      PORT: 3000
+      # Browser-facing API URL. Until INFRA-03 puts both services behind
+      # one reverse-proxied domain, this needs to be reachable from
+      # wherever the browser runs — set it in deploy/.env.
+      PUBLIC_API_URL: ${PUBLIC_API_URL}
+    depends_on:
+      - financial-tracker
+    restart: unless-stopped
+    # Same as financial-tracker above: no host port until INFRA-03 fronts
+    # this. Uncomment to test directly:
+    # ports:
+    #   - "3000:3000"
+
+volumes:
+  ft_postgres_data:
+  ledger_postgres_data:
