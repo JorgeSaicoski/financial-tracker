@@ -79,6 +79,17 @@ cmd/api/main.go              wiring/entrypoint
 web/                         SvelteKit frontend
 ```
 
+Two things this diagram intentionally does **not** paper over — see
+`contributing/architecture.md` for both in full: there's no
+`application/dto` layer yet, so the repository/usecase contracts above
+are typed against `domain/entities` directly instead of an
+application-level DTO (a known gap against the CleanExampleGo reference,
+not an accepted variant of it); and single-entity business logic that
+should live as a method on an entity (e.g. an account producing the
+movement it sends/receives in a transfer) is currently inlined in
+usecases instead.
+```
+
 Every constructor returns its interface type, not the concrete struct —
 each layer depends on a contract instead of an implementation. Usecases
 know nothing about SQL or HTTP; `application/sync` reaches ledger-service

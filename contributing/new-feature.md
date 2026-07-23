@@ -7,8 +7,14 @@ the actual feature at `interfaces/api/handlers/currency_handler.go`
 et al. today; every file below is copy-pasted from the repo, not
 paraphrased.
 
-Before starting, read "Where contracts live" in [README.md](README.md) —
-steps 2, 4 and 5 below put each piece in its required place.
+Before starting, read [architecture.md](architecture.md) and "Where
+contracts live" in [README.md](README.md) — steps 2, 4 and 5 below put
+each piece in its required place. Currency has no domain entity, so this
+particular walkthrough doesn't hit the `application/dto` gap
+architecture.md describes — `CurrencyRepository` already takes/returns
+plain `string`s, not an entity. Features built around `Movement` or
+`Account` (most of them) do hit it; see that doc before typing a domain
+entity into a new contract.
 
 ## Step 1 — migration: `migrations/003_create_currencies_table.sql`
 

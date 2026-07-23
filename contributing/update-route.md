@@ -3,6 +3,13 @@
 **What changed:** `GET /movements` gained optional `from`/`to` interval
 filtering. Real diff, current code, in build order.
 
+**Architecture note:** the signature below (`[]*entities.Movement`) is
+the repo's current, real shape — and also the known `application/dto` gap
+described in [architecture.md](architecture.md): this contract should be
+typed against an application DTO, not the domain entity, per
+CleanExampleGo. Shown here as-is because it's real, current code, not
+because it's the target to copy into a *new* contract.
+
 ## 1. Repository interface — `application/repositories/movement_repository.go`
 
 Before:

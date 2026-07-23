@@ -51,8 +51,12 @@ Validation belongs in usecases, SQL correctness in
 backend bug by adding a workaround in the frontend. And if the fix
 involves a new interface, it goes where contracts live
 (`application/usecases/interfaces.go`, `application/repositories/`,
-`application/services/` — see [README.md](README.md)), never inline next
-to an implementation.
+`application/services/` — see [README.md](README.md) and
+[architecture.md](architecture.md)), never inline next to an
+implementation, and typed against an `application/dto` type rather than
+a domain entity if you're touching a repository/service contract (the
+existing code doesn't do this yet — see architecture.md — but a bug fix
+is not the place to silently perpetuate that gap into new signatures).
 
 ## 5. Verify twice
 
