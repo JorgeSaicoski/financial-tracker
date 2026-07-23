@@ -1,7 +1,6 @@
 /*
  * Financial-tracker design tokens.
- * Copy this file to web/src/lib/styles/tokens.css and import it once
- * globally (e.g. from +layout.svelte or app.html) if it isn't wired up yet.
+ * Import this file once globally (e.g. from +layout.svelte or app.html).
  * See ../design-tokens.md for the rationale behind each value.
  */
 
