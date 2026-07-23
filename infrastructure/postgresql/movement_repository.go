@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/JorgeSaicoski/financial-tracker/application/dto"
 	"github.com/JorgeSaicoski/financial-tracker/application/repositories"
 	"github.com/JorgeSaicoski/financial-tracker/domain/entities"
 	apperrors "github.com/JorgeSaicoski/financial-tracker/pkg/errors"
@@ -17,7 +18,7 @@ type movementRepository struct {
 	db *sql.DB
 }
 
-// NewMovementRepository returns the domain interface type, not the
+// NewMovementRepository returns the application interface type, not the
 // concrete struct, so callers depend only on the contract.
 func NewMovementRepository(db *sql.DB) repositories.MovementRepository {
 	return &movementRepository{db: db}
@@ -28,7 +29,7 @@ const movementColumns = `id, user_id, amount, currency, description, category, p
 	timestamp, sync_status, ledger_transaction_id, sync_attempts, last_sync_error, last_sync_attempt_at,
 	synced_at, created_at, account_id, transfer_id`
 
-func (r *movementRepository) Create(ctx context.Context, movement *entities.Movement) (*entities.Movement, error) {
+func (r *movementRepository) Create(ctx context.Context, movement *dto.MovementDTO) (*dto.MovementDTO, error) {
 	if movement.ID == "" {
 		movement.ID = id.NewUUID()
 	}
@@ -38,7 +39,7 @@ func (r *movementRepository) Create(ctx context.Context, movement *entities.Move
 	return movement, nil
 }
 
-func (r *movementRepository) CreateBatch(ctx context.Context, movements []*entities.Movement) ([]*entities.Movement, error) {
+func (r *movementRepository) CreateBatch(ctx context.Context, movements []*dto.MovementDTO) ([]*dto.MovementDTO, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("postgresql: begin batch: %w", err)
@@ -60,7 +61,7 @@ func (r *movementRepository) CreateBatch(ctx context.Context, movements []*entit
 	return movements, nil
 }
 
-func (r *movementRepository) GetByID(ctx context.Context, movementID string) (*entities.Movement, error) {
+func (r *movementRepository) GetByID(ctx context.Context, movementID string) (*dto.MovementDTO, error) {
 	row := r.db.QueryRowContext(ctx, `SELECT `+movementColumns+` FROM movements WHERE id = $1`, movementID)
 	m, err := scanMovement(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -69,7 +70,7 @@ func (r *movementRepository) GetByID(ctx context.Context, movementID string) (*e
 	return m, err
 }
 
-func (r *movementRepository) ListByUser(ctx context.Context, userID string, currency *string, from, to *time.Time, limit, offset int) ([]*entities.Movement, error) {
+func (r *movementRepository) ListByUser(ctx context.Context, userID string, currency *string, from, to *time.Time, limit, offset int) ([]*dto.MovementDTO, error) {
 	query := `SELECT ` + movementColumns + ` FROM movements WHERE user_id = $1`
 	args := []any{userID}
 	if currency != nil {
@@ -97,13 +98,13 @@ func (r *movementRepository) ListByUser(ctx context.Context, userID string, curr
 	return r.queryMovements(ctx, query, args...)
 }
 
-func (r *movementRepository) ListByCreditCardPurchase(ctx context.Context, purchaseID string) ([]*entities.Movement, error) {
+func (r *movementRepository) ListByCreditCardPurchase(ctx context.Context, purchaseID string) ([]*dto.MovementDTO, error) {
 	return r.queryMovements(ctx,
 		`SELECT `+movementColumns+` FROM movements WHERE credit_card_purchase_id = $1 ORDER BY installment_number ASC`,
 		purchaseID)
 }
 
-func (r *movementRepository) ListByTransferID(ctx context.Context, transferID string) ([]*entities.Movement, error) {
+func (r *movementRepository) ListByTransferID(ctx context.Context, transferID string) ([]*dto.MovementDTO, error) {
 	return r.queryMovements(ctx,
 		`SELECT `+movementColumns+` FROM movements WHERE transfer_id = $1 ORDER BY amount ASC`,
 		transferID)
@@ -128,7 +129,7 @@ func (r *movementRepository) NetByAccount(ctx context.Context, accountID string,
 	return net, nil
 }
 
-func (r *movementRepository) ListPendingSync(ctx context.Context, now time.Time, retryCooldown time.Duration) ([]*entities.Movement, error) {
+func (r *movementRepository) ListPendingSync(ctx context.Context, now time.Time, retryCooldown time.Duration) ([]*dto.MovementDTO, error) {
 	return r.queryMovements(ctx,
 		`SELECT `+movementColumns+` FROM movements
 		 WHERE status = 'active' AND sync_status IN ('pending', 'failed')
@@ -156,10 +157,10 @@ func (r *movementRepository) MarkSyncFailed(ctx context.Context, movementID, syn
 		syncErr, at, movementID)
 }
 
-func (r *movementRepository) UpdateMetadata(ctx context.Context, movementID, description string, category entities.Category, paymentMethod entities.PaymentMethod, accountID *string) error {
+func (r *movementRepository) UpdateMetadata(ctx context.Context, movementID, description, category, paymentMethod string, accountID *string) error {
 	return execOnRow(ctx, r.db,
 		`UPDATE movements SET description = $1, category = $2, payment_method = $3, account_id = $4 WHERE id = $5`,
-		nullString(description), string(category), string(paymentMethod), strOrNil(accountID), movementID)
+		nullString(description), category, paymentMethod, strOrNil(accountID), movementID)
 }
 
 func (r *movementRepository) UpdateFinancial(ctx context.Context, movementID string, amount int64, currency string, timestamp time.Time) error {
@@ -172,7 +173,7 @@ func (r *movementRepository) Void(ctx context.Context, movementID string) error 
 	return execOnRow(ctx, r.db, `UPDATE movements SET status = 'voided' WHERE id = $1`, movementID)
 }
 
-func (r *movementRepository) CreateReversal(ctx context.Context, reversal *entities.Movement) (*entities.Movement, error) {
+func (r *movementRepository) CreateReversal(ctx context.Context, reversal *dto.MovementDTO) (*dto.MovementDTO, error) {
 	if reversal.CancelsMovementID == nil {
 		return nil, fmt.Errorf("postgresql: reversal has no cancels_movement_id")
 	}
@@ -199,7 +200,7 @@ func (r *movementRepository) CreateReversal(ctx context.Context, reversal *entit
 // and movementRepositoryTx.CreateReversal: it must run inside a transaction
 // so the reversal insert and the original's reversed_by_movement_id update
 // commit (or roll back) together.
-func createReversalTx(ctx context.Context, tx *sql.Tx, reversal *entities.Movement) error {
+func createReversalTx(ctx context.Context, tx *sql.Tx, reversal *dto.MovementDTO) error {
 	var reversedBy sql.NullString
 	var status string
 	err := tx.QueryRowContext(ctx, `SELECT reversed_by_movement_id, status FROM movements WHERE id = $1`,
@@ -257,7 +258,7 @@ func (r *movementRepository) Transact(ctx context.Context, fn func(repositories.
 	return nil
 }
 
-func (r *movementRepository) queryMovements(ctx context.Context, query string, args ...any) ([]*entities.Movement, error) {
+func (r *movementRepository) queryMovements(ctx context.Context, query string, args ...any) ([]*dto.MovementDTO, error) {
 	return queryMovements(ctx, r.db, query, args...)
 }
 
@@ -270,7 +271,7 @@ type movementRepositoryTx struct {
 	tx *sql.Tx
 }
 
-func (r *movementRepositoryTx) Create(ctx context.Context, movement *entities.Movement) (*entities.Movement, error) {
+func (r *movementRepositoryTx) Create(ctx context.Context, movement *dto.MovementDTO) (*dto.MovementDTO, error) {
 	if movement.ID == "" {
 		movement.ID = id.NewUUID()
 	}
@@ -280,7 +281,7 @@ func (r *movementRepositoryTx) Create(ctx context.Context, movement *entities.Mo
 	return movement, nil
 }
 
-func (r *movementRepositoryTx) CreateBatch(ctx context.Context, movements []*entities.Movement) ([]*entities.Movement, error) {
+func (r *movementRepositoryTx) CreateBatch(ctx context.Context, movements []*dto.MovementDTO) ([]*dto.MovementDTO, error) {
 	for _, m := range movements {
 		if m.ID == "" {
 			m.ID = id.NewUUID()
@@ -292,7 +293,7 @@ func (r *movementRepositoryTx) CreateBatch(ctx context.Context, movements []*ent
 	return movements, nil
 }
 
-func (r *movementRepositoryTx) GetByID(ctx context.Context, movementID string) (*entities.Movement, error) {
+func (r *movementRepositoryTx) GetByID(ctx context.Context, movementID string) (*dto.MovementDTO, error) {
 	row := r.tx.QueryRowContext(ctx, `SELECT `+movementColumns+` FROM movements WHERE id = $1`, movementID)
 	m, err := scanMovement(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -301,7 +302,7 @@ func (r *movementRepositoryTx) GetByID(ctx context.Context, movementID string) (
 	return m, err
 }
 
-func (r *movementRepositoryTx) ListByUser(ctx context.Context, userID string, currency *string, from, to *time.Time, limit, offset int) ([]*entities.Movement, error) {
+func (r *movementRepositoryTx) ListByUser(ctx context.Context, userID string, currency *string, from, to *time.Time, limit, offset int) ([]*dto.MovementDTO, error) {
 	query := `SELECT ` + movementColumns + ` FROM movements WHERE user_id = $1`
 	args := []any{userID}
 	if currency != nil {
@@ -327,13 +328,13 @@ func (r *movementRepositoryTx) ListByUser(ctx context.Context, userID string, cu
 	return queryMovements(ctx, r.tx, query, args...)
 }
 
-func (r *movementRepositoryTx) ListByCreditCardPurchase(ctx context.Context, purchaseID string) ([]*entities.Movement, error) {
+func (r *movementRepositoryTx) ListByCreditCardPurchase(ctx context.Context, purchaseID string) ([]*dto.MovementDTO, error) {
 	return queryMovements(ctx, r.tx,
 		`SELECT `+movementColumns+` FROM movements WHERE credit_card_purchase_id = $1 ORDER BY installment_number ASC`,
 		purchaseID)
 }
 
-func (r *movementRepositoryTx) ListByTransferID(ctx context.Context, transferID string) ([]*entities.Movement, error) {
+func (r *movementRepositoryTx) ListByTransferID(ctx context.Context, transferID string) ([]*dto.MovementDTO, error) {
 	return queryMovements(ctx, r.tx,
 		`SELECT `+movementColumns+` FROM movements WHERE transfer_id = $1 ORDER BY amount ASC`,
 		transferID)
@@ -357,7 +358,7 @@ func (r *movementRepositoryTx) NetByAccount(ctx context.Context, accountID strin
 	return net, nil
 }
 
-func (r *movementRepositoryTx) ListPendingSync(ctx context.Context, now time.Time, retryCooldown time.Duration) ([]*entities.Movement, error) {
+func (r *movementRepositoryTx) ListPendingSync(ctx context.Context, now time.Time, retryCooldown time.Duration) ([]*dto.MovementDTO, error) {
 	return queryMovements(ctx, r.tx,
 		`SELECT `+movementColumns+` FROM movements
 		 WHERE status = 'active' AND sync_status IN ('pending', 'failed')
@@ -385,10 +386,10 @@ func (r *movementRepositoryTx) MarkSyncFailed(ctx context.Context, movementID, s
 		syncErr, at, movementID)
 }
 
-func (r *movementRepositoryTx) UpdateMetadata(ctx context.Context, movementID, description string, category entities.Category, paymentMethod entities.PaymentMethod, accountID *string) error {
+func (r *movementRepositoryTx) UpdateMetadata(ctx context.Context, movementID, description, category, paymentMethod string, accountID *string) error {
 	return execOnRow(ctx, r.tx,
 		`UPDATE movements SET description = $1, category = $2, payment_method = $3, account_id = $4 WHERE id = $5`,
-		nullString(description), string(category), string(paymentMethod), strOrNil(accountID), movementID)
+		nullString(description), category, paymentMethod, strOrNil(accountID), movementID)
 }
 
 func (r *movementRepositoryTx) UpdateFinancial(ctx context.Context, movementID string, amount int64, currency string, timestamp time.Time) error {
@@ -401,7 +402,7 @@ func (r *movementRepositoryTx) Void(ctx context.Context, movementID string) erro
 	return execOnRow(ctx, r.tx, `UPDATE movements SET status = 'voided' WHERE id = $1`, movementID)
 }
 
-func (r *movementRepositoryTx) CreateReversal(ctx context.Context, reversal *entities.Movement) (*entities.Movement, error) {
+func (r *movementRepositoryTx) CreateReversal(ctx context.Context, reversal *dto.MovementDTO) (*dto.MovementDTO, error) {
 	if reversal.CancelsMovementID == nil {
 		return nil, fmt.Errorf("postgresql: reversal has no cancels_movement_id")
 	}
@@ -446,14 +447,14 @@ func execOnRow(ctx context.Context, ex execer, query string, args ...any) error 
 	return nil
 }
 
-func queryMovements(ctx context.Context, q queryer, query string, args ...any) ([]*entities.Movement, error) {
+func queryMovements(ctx context.Context, q queryer, query string, args ...any) ([]*dto.MovementDTO, error) {
 	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("postgresql: query movements: %w", err)
 	}
 	defer rows.Close()
 
-	out := make([]*entities.Movement, 0)
+	out := make([]*dto.MovementDTO, 0)
 	for rows.Next() {
 		m, err := scanMovement(rows)
 		if err != nil {
@@ -464,15 +465,15 @@ func queryMovements(ctx context.Context, q queryer, query string, args ...any) (
 	return out, rows.Err()
 }
 
-func insertMovement(ctx context.Context, ex execer, m *entities.Movement) error {
+func insertMovement(ctx context.Context, ex execer, m *dto.MovementDTO) error {
 	_, err := ex.ExecContext(ctx,
 		`INSERT INTO movements (`+movementColumns+`)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)`,
 		m.ID, m.UserID, m.Amount, m.Currency,
-		nullString(m.Description), string(m.Category), string(m.PaymentMethod),
+		nullString(m.Description), m.Category, m.PaymentMethod,
 		strOrNil(m.CreditCardPurchaseID), intOrNil(m.InstallmentNumber),
-		string(m.Status), strOrNil(m.CancelsMovementID), strOrNil(m.ReversedByMovementID),
-		m.Timestamp, string(m.SyncStatus), strOrNil(m.LedgerTransactionID),
+		m.Status, strOrNil(m.CancelsMovementID), strOrNil(m.ReversedByMovementID),
+		m.Timestamp, m.SyncStatus, strOrNil(m.LedgerTransactionID),
 		m.SyncAttempts, strOrNil(m.LastSyncError), timeOrNil(m.LastSyncAttemptAt),
 		timeOrNil(m.SyncedAt), m.CreatedAt, strOrNil(m.AccountID), strOrNil(m.TransferID))
 	if err != nil {
@@ -486,24 +487,26 @@ type scannable interface {
 	Scan(dest ...any) error
 }
 
-func scanMovement(row scannable) (*entities.Movement, error) {
+// scanMovement adapts one movement row to the application layer's
+// MovementDTO — the contract this repository implements. The row shape
+// stays private to this package.
+func scanMovement(row scannable) (*dto.MovementDTO, error) {
 	var (
-		m                                       entities.Movement
-		description, lastSyncError              sql.NullString
-		category, paymentMethod, status, syncSt string
-		purchaseID, cancelsID, reversedByID     sql.NullString
-		ledgerTxID, accountID, transferID       sql.NullString
-		installmentNumber                       sql.NullInt64
-		syncAttempts                            int64
-		lastAttemptAt, syncedAt                 sql.NullTime
+		m                                   dto.MovementDTO
+		description, lastSyncError          sql.NullString
+		purchaseID, cancelsID, reversedByID sql.NullString
+		ledgerTxID, accountID, transferID   sql.NullString
+		installmentNumber                   sql.NullInt64
+		syncAttempts                        int64
+		lastAttemptAt, syncedAt             sql.NullTime
 	)
 
 	err := row.Scan(
 		&m.ID, &m.UserID, &m.Amount, &m.Currency,
-		&description, &category, &paymentMethod,
+		&description, &m.Category, &m.PaymentMethod,
 		&purchaseID, &installmentNumber,
-		&status, &cancelsID, &reversedByID,
-		&m.Timestamp, &syncSt, &ledgerTxID,
+		&m.Status, &cancelsID, &reversedByID,
+		&m.Timestamp, &m.SyncStatus, &ledgerTxID,
 		&syncAttempts, &lastSyncError, &lastAttemptAt,
 		&syncedAt, &m.CreatedAt, &accountID, &transferID)
 	if err != nil {
@@ -511,10 +514,6 @@ func scanMovement(row scannable) (*entities.Movement, error) {
 	}
 
 	m.Description = description.String
-	m.Category = entities.Category(category)
-	m.PaymentMethod = entities.PaymentMethod(paymentMethod)
-	m.Status = entities.MovementStatus(status)
-	m.SyncStatus = entities.SyncStatus(syncSt)
 	m.SyncAttempts = int(syncAttempts)
 	m.AccountID = stringPtr(accountID)
 	m.TransferID = stringPtr(transferID)
