@@ -44,18 +44,21 @@ tag or point it at a fork if needed, e.g.
 ```bash
 cd deploy
 cp .env.example .env
-# edit .env: set FT_POSTGRES_PASSWORD and LEDGER_POSTGRES_PASSWORD to real
-# secrets (or point them at your secrets manager of choice — anything that
-# lands in .env works, nothing is hardcoded in compose.yaml), and adjust
-# DEFAULT_USER_ID/PUBLIC_API_URL for your deployment.
+# edit .env: set FT_POSTGRES_PASSWORD, LEDGER_POSTGRES_PASSWORD, and
+# AUTHENTIK_POSTGRES_PASSWORD/AUTHENTIK_SECRET_KEY to real secrets (or
+# point them at your secrets manager of choice — anything that lands in
+# .env works, nothing is hardcoded in compose.yaml), and adjust
+# DEFAULT_USER_ID/APP_HOSTNAME/PUBLIC_API_URL for your deployment.
 podman-compose --profile ledger up -d --build   # or drop --profile ledger — see above
 ```
 
-This starts, in dependency order: `ft-postgres` (and `ledger-postgres` if
-`--profile ledger` is given, both healthchecked before anything depending
-on them starts), `ledger-service` (same profile), `financial-tracker`
-(API, `DB_DRIVER=postgres`), and `web` (production SvelteKit build via
-`@sveltejs/adapter-node`, not `npm run dev`).
+This starts, in dependency order: `ft-postgres` and `authentik-postgres`
+(and `ledger-postgres` if `--profile ledger` is given, all healthchecked
+before anything depending on them starts), `ledger-service` (same
+profile), `authentik-server` + `authentik-worker` (identity provider —
+see "Authentik" below), `financial-tracker` (API, `DB_DRIVER=postgres`),
+and `web` (production SvelteKit build via `@sveltejs/adapter-node`, not
+`npm run dev`).
 
 ```bash
 podman-compose down          # stop everything; data volumes survive
@@ -66,12 +69,13 @@ podman-compose ps
 
 ## Networking: no host ports by default
 
-Only Postgres, ledger-service, financial-tracker, and web talk to each
-other over the compose-internal network — **nothing publishes a host port**
-in this file. That's deliberate: INFRA-03 adds the reverse proxy that will
-be the one thing exposed to the outside world (mapped to 8080/8443, not
-raw 80/443), fronting both `financial-tracker` and `web`. Until INFRA-03
-lands, this stack is not reachable from a browser.
+Only Postgres, ledger-service, Authentik, financial-tracker, and web talk
+to each other over the compose-internal network — **nothing publishes a
+host port** in this file. That's deliberate: INFRA-03 adds the reverse
+proxy that will be the one thing exposed to the outside world (mapped to
+8080/8443, not raw 80/443), fronting `financial-tracker`, `web`, and
+`authentik-server`. Until INFRA-03 lands, this stack is not reachable from
+a browser.
 
 ### Verifying without a proxy yet
 
@@ -83,6 +87,52 @@ or temporarily uncomment the `ports:` block under `financial-tracker`
 and/or `web` in `compose.yaml` for local testing — remove it again once
 INFRA-03's proxy is in place (don't leave both a direct port and the proxy
 open in a real deployment).
+
+## Authentik (identity provider)
+
+`authentik-server` + `authentik-worker` (no separate Redis — Authentik
+dropped that dependency in release 2025.10, so Postgres + server + worker
+is the current minimum stack) provide the OIDC login BACK-02/FRONT-04
+(Phase 2) authenticate against. `deploy/authentik/blueprints/
+financial-tracker.yaml` is bind-mounted into both containers and
+auto-applied by the worker on startup, creating the OAuth2/OIDC Provider
+and Application automatically — no manual "create a provider" clicking.
+
+**Sub claim decision:** the provider's Subject mode is set to "Based on
+the User's UUID" (`sub_mode: user_uuid` in the blueprint), so the OIDC
+`sub` claim Authentik issues is already a lowercase UUID — exactly what
+`DEFAULT_USER_ID`/ledger-service require today. BACK-02 can consume `sub`
+directly with no transformation.
+
+### One-time setup (still manual — Authentik requires it)
+
+1. Bring the stack up (`podman-compose --profile ledger up -d --build`)
+   and wait for `authentik-server`/`authentik-worker` to report healthy:
+   `podman-compose logs -f authentik-server`.
+2. Visit Authentik's initial-setup flow to create the admin account.
+   Until INFRA-03's proxy is up, reach it directly: temporarily add
+   `ports: ["9000:9000"]` under `authentik-server` in `compose.yaml`,
+   `podman-compose up -d authentik-server`, then open
+   `http://localhost:9000/if/flow/initial-setup/`. Remove the port again
+   afterward (see "Verifying without a proxy yet" above for the same
+   pattern). Once INFRA-03 lands, this is reachable at
+   `https://auth.${APP_HOSTNAME}:8443/if/flow/initial-setup/` instead.
+3. Confirm the blueprint applied: Admin interface → **Customization →
+   Blueprints** should show `financial-tracker OAuth2 provider +
+   application` as applied; **Applications → Applications** should list
+   `financial-tracker`. If it didn't apply (check
+   `podman-compose logs authentik-worker` for blueprint errors — field
+   names occasionally shift between Authentik releases), create the
+   provider/application by hand instead: Admin interface → **Applications
+   → Providers → Create → OAuth2/OpenID Provider** (client type
+   **Public**, authorization flow `default-provider-authorization-
+   explicit-consent`, Subject mode **Based on the User's UUID**, redirect
+   URI matching `PUBLIC_OIDC_REDIRECT_URI` from `.env`), then
+   **Applications → Applications → Create**, linking to that provider.
+4. Values BACK-02/FRONT-04 need, once implemented:
+   - `OIDC_ISSUER_URL` = `https://auth.${APP_HOSTNAME}:8443/application/o/financial-tracker/`
+   - `PUBLIC_OIDC_CLIENT_ID` = the same `.env` value the blueprint used
+     (default `financial-tracker`)
 
 ## Rootless-Podman / SELinux notes
 

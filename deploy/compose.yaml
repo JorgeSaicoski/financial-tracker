@@ -75,6 +75,68 @@ services:
     # No host port: financial-tracker reaches it at http://ledger-service:8080
     # over the compose network; nothing external calls it directly.
 
+  authentik-postgres:
+    image: docker.io/library/postgres:16-alpine
+    container_name: authentik-postgres
+    environment:
+      POSTGRES_USER: ${AUTHENTIK_POSTGRES_USER}
+      POSTGRES_PASSWORD: ${AUTHENTIK_POSTGRES_PASSWORD}
+      POSTGRES_DB: ${AUTHENTIK_POSTGRES_DB}
+    volumes:
+      - authentik_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${AUTHENTIK_POSTGRES_USER} -d ${AUTHENTIK_POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    # No host port — same reasoning as ft-postgres above.
+
+  # authentik-server + authentik-worker: no redis service. Authentik
+  # dropped its mandatory Redis dependency in release 2025.10 (moved
+  # locking/background tasks onto Postgres) — the ticket's original
+  # "server, worker, postgres, redis" shape is stale; three containers is
+  # the current minimum stack. See deploy/README.md's Authentik section.
+  authentik-server:
+    image: ${AUTHENTIK_IMAGE:-ghcr.io/goauthentik/server}:${AUTHENTIK_TAG:-2026.2.6}
+    container_name: authentik-server
+    command: server
+    environment: &authentik-environment
+      AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
+      AUTHENTIK_POSTGRESQL__HOST: authentik-postgres
+      AUTHENTIK_POSTGRESQL__NAME: ${AUTHENTIK_POSTGRES_DB}
+      AUTHENTIK_POSTGRESQL__USER: ${AUTHENTIK_POSTGRES_USER}
+      AUTHENTIK_POSTGRESQL__PASSWORD: ${AUTHENTIK_POSTGRES_PASSWORD}
+      # Consumed by deploy/authentik/blueprints/financial-tracker.yaml's
+      # !Env tags — must match what BACK-02/FRONT-04 are given as
+      # PUBLIC_OIDC_CLIENT_ID / the frontend's OIDC redirect URI.
+      PUBLIC_OIDC_CLIENT_ID: ${PUBLIC_OIDC_CLIENT_ID:-financial-tracker}
+      PUBLIC_OIDC_REDIRECT_URI: https://${APP_HOSTNAME:-financial-tracker.local}:8443/auth/callback
+    volumes:
+      - authentik_media:/media
+      - ./authentik/blueprints:/blueprints/local:ro
+    depends_on:
+      authentik-postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    # No host port — INFRA-03's proxy is the only public entry point,
+    # reached internally at http://authentik-server:9000.
+
+  authentik-worker:
+    image: ${AUTHENTIK_IMAGE:-ghcr.io/goauthentik/server}:${AUTHENTIK_TAG:-2026.2.6}
+    container_name: authentik-worker
+    command: worker
+    environment: *authentik-environment
+    volumes:
+      - authentik_media:/media
+      - ./authentik/blueprints:/blueprints/local:ro
+    depends_on:
+      authentik-postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    # Blueprint discovery/apply (financial-tracker's OAuth2 provider +
+    # application) runs here, not on the server.
+
   financial-tracker:
     build:
       context: ..
@@ -128,3 +190,5 @@ services:
 volumes:
   ft_postgres_data:
   ledger_postgres_data:
+  authentik_postgres_data:
+  authentik_media:
