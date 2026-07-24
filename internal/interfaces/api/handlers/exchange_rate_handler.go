@@ -12,15 +12,6 @@ import (
 	"github.com/JorgeSaicoski/financial-tracker/internal/pkg/logger"
 )
 
-// ExchangeRateHandler exposes user-managed, historical exchange rates
-// against USD (BACK-11) — reference data the user maintains themselves,
-// no external rate API involved.
-type ExchangeRateHandler interface {
-	SetExchangeRate(w http.ResponseWriter, r *http.Request)
-	ListExchangeRates(w http.ResponseWriter, r *http.Request)
-	DeleteExchangeRate(w http.ResponseWriter, r *http.Request)
-}
-
 type exchangeRateHandler struct {
 	setRate    usecases.SetExchangeRateUseCase
 	listRates  usecases.ListExchangeRatesUseCase

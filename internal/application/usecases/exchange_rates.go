@@ -12,23 +12,6 @@ import (
 	apperrors "github.com/JorgeSaicoski/financial-tracker/internal/pkg/errors"
 )
 
-// SetExchangeRateInput carries a POST /exchange-rates body. EffectiveFrom
-// defaults to today (usecase fills it in when zero) and is normalized to
-// midnight UTC — rates are dated, not timestamped. UnitsPerUSD is a
-// decimal string ("5", "5.25"), never a float, so a value converted
-// through it stays exact. Posting the same (UserID, Currency,
-// EffectiveFrom) again replaces that row instead of creating a duplicate.
-type SetExchangeRateInput struct {
-	UserID        string
-	Currency      string
-	UnitsPerUSD   string
-	EffectiveFrom time.Time
-}
-
-type SetExchangeRateUseCase interface {
-	Execute(ctx context.Context, input SetExchangeRateInput) (*dto.ExchangeRateDTO, error)
-}
-
 type setExchangeRateUseCase struct {
 	rates      repositories.ExchangeRateRepository
 	currencies repositories.CurrencyRepository
@@ -84,20 +67,6 @@ func (uc *setExchangeRateUseCase) Execute(ctx context.Context, input SetExchange
 	})
 }
 
-// ExchangeRateGroup is one currency's current rate (nil if the user has
-// never set one) plus its full history, newest EffectiveFrom first.
-type ExchangeRateGroup struct {
-	Currency string
-	Current  *dto.ExchangeRateDTO
-	History  []*dto.ExchangeRateDTO
-}
-
-// ListExchangeRatesUseCase groups the user's full rate history by
-// currency, for GET /exchange-rates.
-type ListExchangeRatesUseCase interface {
-	Execute(ctx context.Context, userID string) ([]ExchangeRateGroup, error)
-}
-
 type listExchangeRatesUseCase struct {
 	rates repositories.ExchangeRateRepository
 }
@@ -140,12 +109,6 @@ func (uc *listExchangeRatesUseCase) Execute(ctx context.Context, userID string) 
 	return out, nil
 }
 
-// DeleteExchangeRateUseCase removes a rate row the user owns — fixing a
-// typo in history is legitimate, this is reference data, not movements.
-type DeleteExchangeRateUseCase interface {
-	Execute(ctx context.Context, userID, id string) error
-}
-
 type deleteExchangeRateUseCase struct {
 	rates repositories.ExchangeRateRepository
 }
@@ -160,17 +123,6 @@ func (uc *deleteExchangeRateUseCase) Execute(ctx context.Context, userID, id str
 		return apperrors.ErrInvalidInput
 	}
 	return uc.rates.Delete(ctx, userID, id)
-}
-
-// ToUSDUseCase converts amount (in currency's smallest unit) to USD's
-// smallest unit (cents), using the rate effective at or before "at" — the
-// row with the greatest EffectiveFrom <= at. Reused by BACK-12's
-// purchasing-power report and future cross-currency transfers. Returns an
-// error wrapping apperrors.ErrNotFound when no rate is known for currency
-// at that time, so callers can surface that instead of a silently wrong
-// number.
-type ToUSDUseCase interface {
-	Execute(ctx context.Context, userID string, amount int64, currency string, at time.Time) (int64, error)
 }
 
 type toUSDUseCase struct {
