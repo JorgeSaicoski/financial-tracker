@@ -14,10 +14,6 @@ import (
 // btc, usdt, ...) so they behave everywhere a currency string is used.
 var currencyCodePattern = regexp.MustCompile(`^[a-z0-9]{2,10}$`)
 
-type ListCurrenciesUseCase interface {
-	Execute(ctx context.Context) ([]string, error)
-}
-
 type listCurrenciesUseCase struct {
 	repo repositories.CurrencyRepository
 }
@@ -29,12 +25,6 @@ func NewListCurrencies(repo repositories.CurrencyRepository) ListCurrenciesUseCa
 
 func (uc *listCurrenciesUseCase) Execute(ctx context.Context) ([]string, error) {
 	return uc.repo.List(ctx)
-}
-
-// AddCurrencyUseCase registers a new currency code; adding an existing
-// code is a no-op. Returns the normalized (lowercased) code.
-type AddCurrencyUseCase interface {
-	Execute(ctx context.Context, code string) (string, error)
 }
 
 type addCurrencyUseCase struct {

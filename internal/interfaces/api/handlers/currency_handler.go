@@ -10,13 +10,6 @@ import (
 	"github.com/JorgeSaicoski/financial-tracker/internal/pkg/logger"
 )
 
-// CurrencyHandler exposes the user-extendable currency registry backing
-// the frontend's currency dropdown.
-type CurrencyHandler interface {
-	ListCurrencies(w http.ResponseWriter, r *http.Request)
-	AddCurrency(w http.ResponseWriter, r *http.Request)
-}
-
 type currencyHandler struct {
 	listCurrencies usecases.ListCurrenciesUseCase
 	addCurrency    usecases.AddCurrencyUseCase

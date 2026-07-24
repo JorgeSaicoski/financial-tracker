@@ -1,0 +1,252 @@
+package usecases
+
+import (
+	"context"
+	"time"
+
+	"github.com/JorgeSaicoski/financial-tracker/internal/application/dto"
+)
+
+// This file consolidates every use-case contract (interface plus its
+// Input/Result/View types) in one place, per this workspace's
+// CleanExampleGo-derived architecture rules — see AGENTS.md
+// ("Architecture — follow CleanExampleGo"). Implementations live one per
+// file, alongside their unexported struct and constructor.
+
+// CreateAccountInput carries the caller-supplied fields for a new
+// account. Type defaults to "other" when empty and is validated against
+// the domain's fixed list in the usecase; Currency must already be
+// registered (POST /currencies first for a new one).
+type CreateAccountInput struct {
+	UserID   string
+	Name     string
+	Type     string
+	Currency string
+}
+
+type CreateAccountUseCase interface {
+	Execute(ctx context.Context, input CreateAccountInput) (*dto.AccountDTO, error)
+}
+
+type CreateCreditCardPurchaseInput struct {
+	UserID       string
+	TotalAmount  int64
+	Currency     string
+	Description  string
+	Category     string
+	Installments int
+}
+
+type CreateCreditCardPurchaseUseCase interface {
+	Execute(ctx context.Context, input CreateCreditCardPurchaseInput) (*dto.CreditCardPurchaseDTO, []*dto.MovementDTO, error)
+}
+
+// CreateMovementInput carries the caller-supplied fields for a single
+// movement. Category and PaymentMethod default to "other" when empty so
+// pre-existing clients that only send an amount keep working; both are
+// validated against the domain's fixed lists inside the usecase.
+type CreateMovementInput struct {
+	UserID        string
+	Amount        int64
+	Currency      string
+	Description   string
+	Category      string
+	PaymentMethod string
+	AccountID     *string
+}
+
+type CreateMovementUseCase interface {
+	Execute(ctx context.Context, input CreateMovementInput) (*dto.MovementDTO, error)
+}
+
+type GetMovementUseCase interface {
+	Execute(ctx context.Context, id string) (*dto.MovementDTO, error)
+}
+
+// ListMovementsResult also carries the computed balance, since
+// ledger-service deliberately leaves that calculation to consumers.
+type ListMovementsResult struct {
+	Movements []*dto.MovementDTO
+	Balance   int64
+}
+
+type ListMovementsUseCase interface {
+	Execute(ctx context.Context, userID string, currency *string, from, to *time.Time, limit, offset int) (ListMovementsResult, error)
+}
+
+// UpdateMovementInput carries a PATCH /movements/{id} partial body — a nil
+// field means "leave unchanged". Description/Category/PaymentMethod/
+// AccountID are metadata: local-only, always editable regardless of sync
+// status. Amount/Currency/Timestamp are financial: editable in place only
+// before the movement syncs; once synced, editing them produces a
+// reversal + a replacement instead (see UpdateMovementResult).
+type UpdateMovementInput struct {
+	Description   *string
+	Category      *string
+	PaymentMethod *string
+	AccountID     *string // a pointer to "" clears the account
+	Amount        *int64
+	Currency      *string
+	Timestamp     *time.Time
+}
+
+// UpdateMovementResult reports how the edit was carried out. A
+// metadata-only edit, or a financial edit on a not-yet-synced movement,
+// updates Movement in place (Reversal/Replacement nil). A financial edit
+// on an already-synced movement leaves Movement untouched other than the
+// reversal link and returns the compensating Reversal plus the
+// Replacement movement carrying the corrected values — mirroring
+// CancelMovementResult's shape for the same reason (ledger-service never
+// deletes).
+type UpdateMovementResult struct {
+	Movement    *dto.MovementDTO
+	Reversal    *dto.MovementDTO
+	Replacement *dto.MovementDTO
+}
+
+type UpdateMovementUseCase interface {
+	Execute(ctx context.Context, id string, input UpdateMovementInput) (UpdateMovementResult, error)
+}
+
+// CancelMovementResult reports how the cancel was carried out: a
+// never-synced movement is voided in place (Reversal is nil); a synced one
+// stays active and gains a compensating Reversal, mirroring
+// ledger-service's no-delete rule.
+type CancelMovementResult struct {
+	Movement *dto.MovementDTO
+	Reversal *dto.MovementDTO
+}
+
+type CancelMovementUseCase interface {
+	Execute(ctx context.Context, id string) (CancelMovementResult, error)
+}
+
+// CancelCreditCardPurchaseResult reports what happened to each
+// installment: due/synced ones got reversals, not-yet-due ones were just
+// voided (they never reached ledger-service).
+type CancelCreditCardPurchaseResult struct {
+	Purchase  *dto.CreditCardPurchaseDTO
+	Voided    []*dto.MovementDTO
+	Reversals []*dto.MovementDTO
+}
+
+type CancelCreditCardPurchaseUseCase interface {
+	Execute(ctx context.Context, id string) (CancelCreditCardPurchaseResult, error)
+}
+
+// CancelTransferResult reports what happened to each leg — same
+// voided/reversal shape as CancelMovementResult, one per leg, since each
+// leg is cancelled independently based on its own sync status.
+type CancelTransferResult struct {
+	Debit  CancelMovementResult
+	Credit CancelMovementResult
+}
+
+type CancelTransferUseCase interface {
+	Execute(ctx context.Context, transferID string) (CancelTransferResult, error)
+}
+
+// TransferBetweenAccountsInput describes a move of money between two of
+// the user's own accounts. Amount is always positive: the debit leg gets
+// -Amount, the credit leg +Amount. A zero Timestamp means "now". v1 is
+// same-currency only.
+type TransferBetweenAccountsInput struct {
+	UserID        string
+	FromAccountID string
+	ToAccountID   string
+	Amount        int64
+	Description   string
+	Timestamp     time.Time
+}
+
+// TransferResult carries both legs of a transfer, linked by TransferID:
+// Debit is the negative leg on FromAccountID, Credit the positive leg on
+// ToAccountID. Together they net to zero, so the transfer never changes
+// net worth.
+type TransferResult struct {
+	TransferID string
+	Debit      *dto.MovementDTO
+	Credit     *dto.MovementDTO
+}
+
+type TransferBetweenAccountsUseCase interface {
+	Execute(ctx context.Context, input TransferBetweenAccountsInput) (TransferResult, error)
+}
+
+// AccountView is an account plus everything derivable about its money:
+//
+//   - ReportedBalance/ReportedAt: the latest user-reported snapshot (nil
+//     until the user reports one).
+//   - MovementsSinceReport: net of tracked movements after that snapshot
+//     (or all-time when there's no snapshot yet).
+//   - EstimatedBalance: reported + movements since — our best guess of
+//     what the account holds right now.
+//   - LastReturn: between the last two snapshots, how much the balance
+//     changed beyond what movements explain — the account's yield or
+//     interest over LastReturnFrom..LastReturnTo. Needs two snapshots.
+//
+// Shared by ListAccountsUseCase and ReportAccountBalanceUseCase — both
+// return the same shape via buildAccountView (list_accounts.go).
+type AccountView struct {
+	Account              *dto.AccountDTO
+	EstimatedBalance     int64
+	ReportedBalance      *int64
+	ReportedAt           *time.Time
+	MovementsSinceReport int64
+	LastReturn           *int64
+	LastReturnFrom       *time.Time
+	LastReturnTo         *time.Time
+}
+
+type ListAccountsUseCase interface {
+	Execute(ctx context.Context, userID string) ([]AccountView, error)
+}
+
+// ReportAccountBalanceUseCase records what the account really holds right
+// now (per the bank/broker/wallet), as a snapshot. The returned view then
+// exposes the account's return since the previous report.
+type ReportAccountBalanceUseCase interface {
+	Execute(ctx context.Context, accountID string, balance int64) (AccountView, error)
+}
+
+type ListCurrenciesUseCase interface {
+	Execute(ctx context.Context) ([]string, error)
+}
+
+// AddCurrencyUseCase registers a new currency code; adding an existing
+// code is a no-op. Returns the normalized (lowercased) code.
+type AddCurrencyUseCase interface {
+	Execute(ctx context.Context, code string) (string, error)
+}
+
+// CurrencyFlow aggregates the interval's money in / money out for one
+// currency. In and Out are both positive; Net = In - Out. Totals are kept
+// per currency because summing usd and btc together is meaningless.
+type CurrencyFlow struct {
+	Currency string
+	In       int64
+	Out      int64
+	Net      int64
+}
+
+// AccountFlow is the same breakdown for one account. AccountID/Name are
+// empty for movements that weren't assigned to any account.
+type AccountFlow struct {
+	AccountID string
+	Name      string
+	Currency  string
+	In        int64
+	Out       int64
+	Net       int64
+}
+
+type CashflowResult struct {
+	From      time.Time
+	To        time.Time
+	Totals    []CurrencyFlow
+	ByAccount []AccountFlow
+}
+
+type GetCashflowUseCase interface {
+	Execute(ctx context.Context, userID string, from, to time.Time) (CashflowResult, error)
+}

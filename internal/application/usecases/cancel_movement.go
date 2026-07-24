@@ -12,19 +12,6 @@ import (
 	apperrors "github.com/JorgeSaicoski/financial-tracker/internal/pkg/errors"
 )
 
-// CancelMovementResult reports how the cancel was carried out: a
-// never-synced movement is voided in place (Reversal is nil); a synced one
-// stays active and gains a compensating Reversal, mirroring
-// ledger-service's no-delete rule.
-type CancelMovementResult struct {
-	Movement *dto.MovementDTO
-	Reversal *dto.MovementDTO
-}
-
-type CancelMovementUseCase interface {
-	Execute(ctx context.Context, id string) (CancelMovementResult, error)
-}
-
 type cancelMovementUseCase struct {
 	repo repositories.MovementRepository
 	sync services.SyncTrigger

@@ -11,14 +11,6 @@ import (
 	"github.com/JorgeSaicoski/financial-tracker/internal/pkg/logger"
 )
 
-// AccountHandler exposes the accounts API: the places money sits, plus
-// user-reported balances that let us compute each account's return.
-type AccountHandler interface {
-	CreateAccount(w http.ResponseWriter, r *http.Request)
-	ListAccounts(w http.ResponseWriter, r *http.Request)
-	ReportBalance(w http.ResponseWriter, r *http.Request)
-}
-
 type accountHandler struct {
 	createAccount usecases.CreateAccountUseCase
 	listAccounts  usecases.ListAccountsUseCase

@@ -10,19 +10,6 @@ import (
 	apperrors "github.com/JorgeSaicoski/financial-tracker/internal/pkg/errors"
 )
 
-type CreateCreditCardPurchaseInput struct {
-	UserID       string
-	TotalAmount  int64
-	Currency     string
-	Description  string
-	Category     string
-	Installments int
-}
-
-type CreateCreditCardPurchaseUseCase interface {
-	Execute(ctx context.Context, input CreateCreditCardPurchaseInput) (*dto.CreditCardPurchaseDTO, []*dto.MovementDTO, error)
-}
-
 type createCreditCardPurchaseUseCase struct {
 	purchases repositories.CreditCardPurchaseRepository
 }
