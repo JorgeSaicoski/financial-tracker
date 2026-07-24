@@ -59,8 +59,12 @@ type CreateMovementUseCase interface {
 	Execute(ctx context.Context, input CreateMovementInput) (*dto.MovementDTO, error)
 }
 
+// GetMovementUseCase requires the caller's userID and returns
+// apperrors.ErrNotFound (not a distinguishable "forbidden") when the
+// movement exists but belongs to someone else — the API must not leak
+// whether an id exists at all to a caller who doesn't own it (BACK-02).
 type GetMovementUseCase interface {
-	Execute(ctx context.Context, id string) (*dto.MovementDTO, error)
+	Execute(ctx context.Context, userID, id string) (*dto.MovementDTO, error)
 }
 
 // ListMovementsResult also carries the computed balance, since
@@ -104,8 +108,11 @@ type UpdateMovementResult struct {
 	Replacement *dto.MovementDTO
 }
 
+// UpdateMovementUseCase requires the caller's userID and returns
+// apperrors.ErrNotFound when id belongs to someone else (BACK-02) — same
+// ownership rule as GetMovementUseCase.
 type UpdateMovementUseCase interface {
-	Execute(ctx context.Context, id string, input UpdateMovementInput) (UpdateMovementResult, error)
+	Execute(ctx context.Context, userID, id string, input UpdateMovementInput) (UpdateMovementResult, error)
 }
 
 // CancelMovementResult reports how the cancel was carried out: a
@@ -117,8 +124,11 @@ type CancelMovementResult struct {
 	Reversal *dto.MovementDTO
 }
 
+// CancelMovementUseCase requires the caller's userID and returns
+// apperrors.ErrNotFound when id belongs to someone else (BACK-02) — same
+// ownership rule as GetMovementUseCase.
 type CancelMovementUseCase interface {
-	Execute(ctx context.Context, id string) (CancelMovementResult, error)
+	Execute(ctx context.Context, userID, id string) (CancelMovementResult, error)
 }
 
 // CancelCreditCardPurchaseResult reports what happened to each
@@ -130,8 +140,11 @@ type CancelCreditCardPurchaseResult struct {
 	Reversals []*dto.MovementDTO
 }
 
+// CancelCreditCardPurchaseUseCase requires the caller's userID and
+// returns apperrors.ErrNotFound when id belongs to someone else
+// (BACK-02) — same ownership rule as GetMovementUseCase.
 type CancelCreditCardPurchaseUseCase interface {
-	Execute(ctx context.Context, id string) (CancelCreditCardPurchaseResult, error)
+	Execute(ctx context.Context, userID, id string) (CancelCreditCardPurchaseResult, error)
 }
 
 // CancelTransferResult reports what happened to each leg — same
@@ -142,8 +155,11 @@ type CancelTransferResult struct {
 	Credit CancelMovementResult
 }
 
+// CancelTransferUseCase requires the caller's userID and returns
+// apperrors.ErrNotFound when transferID belongs to someone else
+// (BACK-02) — same ownership rule as GetMovementUseCase.
 type CancelTransferUseCase interface {
-	Execute(ctx context.Context, transferID string) (CancelTransferResult, error)
+	Execute(ctx context.Context, userID, transferID string) (CancelTransferResult, error)
 }
 
 // TransferBetweenAccountsInput describes a move of money between two of
@@ -204,9 +220,12 @@ type ListAccountsUseCase interface {
 
 // ReportAccountBalanceUseCase records what the account really holds right
 // now (per the bank/broker/wallet), as a snapshot. The returned view then
-// exposes the account's return since the previous report.
+// exposes the account's return since the previous report. Requires the
+// caller's userID and returns apperrors.ErrNotFound when accountID
+// belongs to someone else (BACK-02) — same ownership rule as
+// GetMovementUseCase.
 type ReportAccountBalanceUseCase interface {
-	Execute(ctx context.Context, accountID string, balance int64) (AccountView, error)
+	Execute(ctx context.Context, userID, accountID string, balance int64) (AccountView, error)
 }
 
 type ListCurrenciesUseCase interface {

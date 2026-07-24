@@ -21,7 +21,7 @@ func TestUpdateMovementMetadataOnSyncedMovementEditsInPlace(t *testing.T) {
 	uc := NewUpdateMovement(repo, newFakeAccountRepo(), trigger)
 	newDescription := "corrected description"
 	newCategory := string(entities.CategoryTransport)
-	result, err := uc.Execute(context.Background(), "m1", UpdateMovementInput{
+	result, err := uc.Execute(context.Background(), "u1", "m1", UpdateMovementInput{
 		Description: &newDescription,
 		Category:    &newCategory,
 	})
@@ -53,7 +53,7 @@ func TestUpdateMovementAmountPreSyncEditsInPlace(t *testing.T) {
 	repo.add(activeMovement("m1", -500, entities.SyncStatusPending))
 
 	uc := NewUpdateMovement(repo, newFakeAccountRepo(), trigger)
-	result, err := uc.Execute(context.Background(), "m1", UpdateMovementInput{
+	result, err := uc.Execute(context.Background(), "u1", "m1", UpdateMovementInput{
 		Amount: int64Ptr(-750),
 	})
 	if err != nil {
@@ -83,7 +83,7 @@ func TestUpdateMovementPreSyncRollsBackFinancialUpdateWhenMetadataUpdateFails(t 
 
 	uc := NewUpdateMovement(repo, newFakeAccountRepo(), trigger)
 	newDescription := "corrected"
-	_, err := uc.Execute(context.Background(), "m1", UpdateMovementInput{
+	_, err := uc.Execute(context.Background(), "u1", "m1", UpdateMovementInput{
 		Amount:      int64Ptr(-750),
 		Description: &newDescription,
 	})
@@ -110,7 +110,7 @@ func TestUpdateMovementAmountPostSyncReversesAndRecreates(t *testing.T) {
 	repo.add(activeMovement("m1", -500, entities.SyncStatusSynced))
 
 	uc := NewUpdateMovement(repo, newFakeAccountRepo(), trigger)
-	result, err := uc.Execute(context.Background(), "m1", UpdateMovementInput{
+	result, err := uc.Execute(context.Background(), "u1", "m1", UpdateMovementInput{
 		Amount: int64Ptr(-750),
 	})
 	if err != nil {
@@ -171,7 +171,7 @@ func TestUpdateMovementPostSyncRollsBackReversalWhenReplacementCreationFails(t *
 	repo.createErr = errors.New("simulated write failure creating the replacement")
 
 	uc := NewUpdateMovement(repo, newFakeAccountRepo(), trigger)
-	_, err := uc.Execute(context.Background(), "m1", UpdateMovementInput{
+	_, err := uc.Execute(context.Background(), "u1", "m1", UpdateMovementInput{
 		Amount: int64Ptr(20000),
 	})
 	if !errors.Is(err, repo.createErr) {
@@ -215,7 +215,7 @@ func TestUpdateMovementPostSyncCombinedAmountAndMetadataEdit(t *testing.T) {
 	uc := NewUpdateMovement(repo, newFakeAccountRepo(), &fakeSyncTrigger{})
 	newDescription := "salary, corrected"
 	newCategory := string(entities.CategoryIncome)
-	result, err := uc.Execute(context.Background(), "m1", UpdateMovementInput{
+	result, err := uc.Execute(context.Background(), "u1", "m1", UpdateMovementInput{
 		Amount:      int64Ptr(20000),
 		Description: &newDescription,
 		Category:    &newCategory,
@@ -245,7 +245,7 @@ func TestUpdateMovementCurrencyOnlyPostSyncReversesAndRecreates(t *testing.T) {
 
 	uc := NewUpdateMovement(repo, newFakeAccountRepo(), &fakeSyncTrigger{})
 	newCurrency := "brl"
-	result, err := uc.Execute(context.Background(), "m1", UpdateMovementInput{
+	result, err := uc.Execute(context.Background(), "u1", "m1", UpdateMovementInput{
 		Currency: &newCurrency,
 	})
 	if err != nil {
@@ -266,7 +266,7 @@ func TestUpdateMovementRejectsVoidedMovement(t *testing.T) {
 	repo.add(voided)
 
 	uc := NewUpdateMovement(repo, newFakeAccountRepo(), &fakeSyncTrigger{})
-	if _, err := uc.Execute(context.Background(), "m1", UpdateMovementInput{Amount: int64Ptr(-1)}); !errors.Is(err, apperrors.ErrConflict) {
+	if _, err := uc.Execute(context.Background(), "u1", "m1", UpdateMovementInput{Amount: int64Ptr(-1)}); !errors.Is(err, apperrors.ErrConflict) {
 		t.Fatalf("want ErrConflict, got %v", err)
 	}
 }
@@ -279,7 +279,7 @@ func TestUpdateMovementRejectsReversedMovement(t *testing.T) {
 	repo.add(reversed)
 
 	uc := NewUpdateMovement(repo, newFakeAccountRepo(), &fakeSyncTrigger{})
-	if _, err := uc.Execute(context.Background(), "m1", UpdateMovementInput{Amount: int64Ptr(-1)}); !errors.Is(err, apperrors.ErrConflict) {
+	if _, err := uc.Execute(context.Background(), "u1", "m1", UpdateMovementInput{Amount: int64Ptr(-1)}); !errors.Is(err, apperrors.ErrConflict) {
 		t.Fatalf("want ErrConflict, got %v", err)
 	}
 }
@@ -293,7 +293,7 @@ func TestUpdateMovementRejectsReversalItself(t *testing.T) {
 
 	uc := NewUpdateMovement(repo, newFakeAccountRepo(), &fakeSyncTrigger{})
 	newDescription := "nope"
-	if _, err := uc.Execute(context.Background(), "rev", UpdateMovementInput{Description: &newDescription}); !errors.Is(err, apperrors.ErrConflict) {
+	if _, err := uc.Execute(context.Background(), "u1", "rev", UpdateMovementInput{Description: &newDescription}); !errors.Is(err, apperrors.ErrConflict) {
 		t.Fatalf("want ErrConflict, got %v", err)
 	}
 }
@@ -306,13 +306,13 @@ func TestUpdateMovementRejectsInstallmentFinancialEdit(t *testing.T) {
 	repo.add(installment)
 
 	uc := NewUpdateMovement(repo, newFakeAccountRepo(), &fakeSyncTrigger{})
-	if _, err := uc.Execute(context.Background(), "m1", UpdateMovementInput{Amount: int64Ptr(-400)}); !errors.Is(err, apperrors.ErrConflict) {
+	if _, err := uc.Execute(context.Background(), "u1", "m1", UpdateMovementInput{Amount: int64Ptr(-400)}); !errors.Is(err, apperrors.ErrConflict) {
 		t.Fatalf("want ErrConflict, got %v", err)
 	}
 
 	// Metadata edits on installments are still fine.
 	newDescription := "renamed"
-	result, err := uc.Execute(context.Background(), "m1", UpdateMovementInput{Description: &newDescription})
+	result, err := uc.Execute(context.Background(), "u1", "m1", UpdateMovementInput{Description: &newDescription})
 	if err != nil {
 		t.Fatalf("metadata edit on installment should succeed: %v", err)
 	}
@@ -329,7 +329,7 @@ func TestUpdateMovementRejectsTransferFinancialEdit(t *testing.T) {
 	repo.add(m)
 
 	uc := NewUpdateMovement(repo, newFakeAccountRepo(), &fakeSyncTrigger{})
-	if _, err := uc.Execute(context.Background(), "m1", UpdateMovementInput{Amount: int64Ptr(-1)}); !errors.Is(err, apperrors.ErrConflict) {
+	if _, err := uc.Execute(context.Background(), "u1", "m1", UpdateMovementInput{Amount: int64Ptr(-1)}); !errors.Is(err, apperrors.ErrConflict) {
 		t.Fatalf("want ErrConflict, got %v", err)
 	}
 }
@@ -357,7 +357,7 @@ func TestUpdateMovementValidatesLikeCreate(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := uc.Execute(context.Background(), "m1", tc.input); !errors.Is(err, apperrors.ErrInvalidInput) {
+			if _, err := uc.Execute(context.Background(), "u1", "m1", tc.input); !errors.Is(err, apperrors.ErrInvalidInput) {
 				t.Errorf("want ErrInvalidInput, got %v", err)
 			}
 		})
@@ -374,7 +374,7 @@ func TestUpdateMovementClearsAccountWithEmptyString(t *testing.T) {
 
 	uc := NewUpdateMovement(repo, accounts, &fakeSyncTrigger{})
 	empty := ""
-	result, err := uc.Execute(context.Background(), "m1", UpdateMovementInput{AccountID: &empty})
+	result, err := uc.Execute(context.Background(), "u1", "m1", UpdateMovementInput{AccountID: &empty})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -386,7 +386,7 @@ func TestUpdateMovementClearsAccountWithEmptyString(t *testing.T) {
 func TestUpdateMovementMissingMovement(t *testing.T) {
 	repo := newFakeMovementRepo()
 	uc := NewUpdateMovement(repo, newFakeAccountRepo(), &fakeSyncTrigger{})
-	if _, err := uc.Execute(context.Background(), "nope", UpdateMovementInput{Description: strPtr("x")}); !errors.Is(err, apperrors.ErrNotFound) {
+	if _, err := uc.Execute(context.Background(), "u1", "nope", UpdateMovementInput{Description: strPtr("x")}); !errors.Is(err, apperrors.ErrNotFound) {
 		t.Fatalf("want ErrNotFound, got %v", err)
 	}
 }

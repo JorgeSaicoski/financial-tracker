@@ -22,9 +22,10 @@ import (
 func main() {
 	ledgerServiceURL := envOr("LEDGER_SERVICE_URL", "http://localhost:8080")
 
-	// MVP has no auth yet: every request without an explicit user_id is
-	// attributed to this fixed dev user. Must be a lowercase UUID, since
-	// that's what ledger-service's validator requires.
+	// DEFAULT_USER_ID is now only a dev-mode escape hatch (see
+	// authDisabled below) — real requests get user_id from their verified
+	// Authentik token (BACK-02). Must be a lowercase UUID, since that's
+	// what ledger-service's validator requires.
 	defaultUserID := envOr("DEFAULT_USER_ID", "00000000-0000-0000-0000-000000000001")
 	defaultCurrency := envOr("DEFAULT_CURRENCY", "usd")
 	port := envOr("PORT", "8081")
@@ -36,6 +37,22 @@ func main() {
 	dbDriver := envOr("DB_DRIVER", "sqlite")
 
 	log := applogger.New()
+
+	// authDisabled=true skips Authentik token verification entirely and
+	// attributes every request to defaultUserID — for local dev and
+	// single-user self-hosting only. Defaults to false: a deployment that
+	// forgets to set OIDC_ISSUER_URL fails loudly at startup instead of
+	// silently running with no auth.
+	authDisabled := boolEnvOr(log, "AUTH_DISABLED", false)
+	oidcIssuerURL := os.Getenv("OIDC_ISSUER_URL")
+	oidcJWKSURL := os.Getenv("OIDC_JWKS_URL") // optional override, skips discovery
+	// Defaults to PUBLIC_OIDC_CLIENT_ID (deploy/.env.example's existing
+	// var, already "financial-tracker" in the deployed Authentik
+	// blueprint) since Authentik sets a token's aud to the requesting
+	// client_id — so aud validation works out of the box in this stack
+	// without a separate env var to keep in sync. Set OIDC_AUDIENCE
+	// explicitly to override.
+	oidcAudience := envOr("OIDC_AUDIENCE", envOr("PUBLIC_OIDC_CLIENT_ID", ""))
 
 	syncInterval := durationEnvOr(log, "SYNC_INTERVAL", 30*time.Second)
 	retryCooldown := durationEnvOr(log, "SYNC_RETRY_COOLDOWN", 60*time.Second)
@@ -135,16 +152,33 @@ func main() {
 		cancelPurchase,
 		getCashflow,
 		syncService,
-		defaultUserID,
 		defaultCurrency,
 		log,
 	)
-	accountHandler := handlers.NewAccountHandler(createAccount, listAccounts, reportBalance, defaultUserID, log)
+	accountHandler := handlers.NewAccountHandler(createAccount, listAccounts, reportBalance, log)
 	currencyHandler := handlers.NewCurrencyHandler(listCurrencies, addCurrency, log)
-	transferHandler := handlers.NewTransferHandler(transferBetweenAccounts, cancelTransfer, defaultUserID, log)
-	exchangeRateHandler := handlers.NewExchangeRateHandler(setExchangeRate, listExchangeRates, deleteExchangeRate, defaultUserID, log)
+	transferHandler := handlers.NewTransferHandler(transferBetweenAccounts, cancelTransfer, log)
+	exchangeRateHandler := handlers.NewExchangeRateHandler(setExchangeRate, listExchangeRates, deleteExchangeRate, log)
 
-	router := api.NewRouter(movementHandler, accountHandler, currencyHandler, transferHandler, exchangeRateHandler, corsAllowedOrigin)
+	// Auth: AUTH_DISABLED is a dev-only escape hatch, off by default. A
+	// deployment that leaves OIDC_ISSUER_URL unset without explicitly
+	// opting into AUTH_DISABLED=true fails fast at startup rather than
+	// silently serving every request as the same fixed user.
+	var authMiddleware api.AuthMiddleware
+	if authDisabled {
+		log.Info("AUTH_DISABLED=true: skipping Authentik token verification — every request is attributed to DEFAULT_USER_ID=%s. Do not use this in a real deployment.", defaultUserID)
+		authMiddleware = api.DevUserMiddleware(defaultUserID)
+	} else {
+		if oidcIssuerURL == "" {
+			log.Error("OIDC_ISSUER_URL is required unless AUTH_DISABLED=true")
+			os.Exit(1)
+		}
+		authenticator := api.NewAuthenticator(oidcIssuerURL, oidcAudience, oidcJWKSURL, http.DefaultClient, log)
+		authMiddleware = authenticator.Middleware
+		log.Info("auth: validating Authorization bearer tokens against OIDC issuer %s (audience %q)", oidcIssuerURL, oidcAudience)
+	}
+
+	router := api.NewRouter(movementHandler, accountHandler, currencyHandler, transferHandler, exchangeRateHandler, authMiddleware, corsAllowedOrigin)
 
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
@@ -195,4 +229,21 @@ func intEnvOr(log applogger.Logger, key string, fallback int) int {
 		return fallback
 	}
 	return n
+}
+
+// boolEnvOr parses a strict true/false (anything strconv.ParseBool
+// accepts); unset or invalid falls back — used only for AUTH_DISABLED,
+// where silently misreading a typo as "true" would be a real security
+// hole, so an invalid value logs loudly rather than guessing.
+func boolEnvOr(log applogger.Logger, key string, fallback bool) bool {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return fallback
+	}
+	b, err := strconv.ParseBool(raw)
+	if err != nil {
+		log.Error("invalid %s %q (want true or false), using default %v", key, raw, fallback)
+		return fallback
+	}
+	return b
 }

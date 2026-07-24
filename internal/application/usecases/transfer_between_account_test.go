@@ -167,7 +167,7 @@ func TestCancelTransferCancelsBothLegsPerSyncStatus(t *testing.T) {
 			}
 
 			trigger := &fakeSyncTrigger{}
-			result, err := NewCancelTransfer(movements, trigger).Execute(context.Background(), transfer.TransferID)
+			result, err := NewCancelTransfer(movements, trigger).Execute(context.Background(), "u1", transfer.TransferID)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -240,7 +240,7 @@ func TestCancelTransferRollsBackFirstLegWhenSecondLegFails(t *testing.T) {
 	movements.createReversalErrForID = transfer.Credit.ID
 
 	trigger := &fakeSyncTrigger{}
-	_, err = NewCancelTransfer(movements, trigger).Execute(context.Background(), transfer.TransferID)
+	_, err = NewCancelTransfer(movements, trigger).Execute(context.Background(), "u1", transfer.TransferID)
 	if err == nil {
 		t.Fatal("expected the cancel to fail when the second leg's reversal fails")
 	}
@@ -267,7 +267,7 @@ func TestCancelTransferRollsBackFirstLegWhenSecondLegFails(t *testing.T) {
 func TestCancelTransferMissingID(t *testing.T) {
 	movements := newFakeMovementRepo()
 	uc := NewCancelTransfer(movements, &fakeSyncTrigger{})
-	if _, err := uc.Execute(context.Background(), "nope"); !errors.Is(err, apperrors.ErrNotFound) {
+	if _, err := uc.Execute(context.Background(), "u1", "nope"); !errors.Is(err, apperrors.ErrNotFound) {
 		t.Fatalf("want ErrNotFound, got %v", err)
 	}
 }
@@ -286,7 +286,7 @@ func TestCancelMovementRejectsDirectSingleLegCancel(t *testing.T) {
 	}
 
 	uc := NewCancelMovement(movements, &fakeSyncTrigger{})
-	if _, err := uc.Execute(context.Background(), transfer.Debit.ID); !errors.Is(err, apperrors.ErrConflict) {
+	if _, err := uc.Execute(context.Background(), "u1", transfer.Debit.ID); !errors.Is(err, apperrors.ErrConflict) {
 		t.Fatalf("want ErrConflict, got %v", err)
 	}
 }
