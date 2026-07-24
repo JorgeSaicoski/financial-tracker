@@ -100,11 +100,13 @@
 	}
 
 	async function handleAddAccount(input) {
+		error = '';
 		await createAccount(input);
 		await loadAccounts();
 	}
 
 	async function handleReportBalance(accountId, cents) {
+		error = '';
 		notice = '';
 		const updated = await reportAccountBalance(accountId, cents);
 		accounts = accounts.map((a) => (a.id === updated.id ? updated : a));
@@ -117,6 +119,7 @@
 	}
 
 	async function handleAddMovement(payload) {
+		error = '';
 		notice = '';
 		await createMovement(payload);
 		if (payload.installments > 1) {

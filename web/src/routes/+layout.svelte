@@ -46,6 +46,10 @@
 		cursor: pointer;
 	}
 
+	:global(button:disabled) {
+		cursor: not-allowed;
+	}
+
 	:global(.form-row) {
 		display: flex;
 		gap: 0.6rem;
