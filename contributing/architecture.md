@@ -31,7 +31,7 @@ financial-tracker/
 │   │                                     PaymentMethod. Rich, not anemic:
 │   │                                     single-entity business rules and
 │   │                                     state transitions live here (e.g.
-│   │                                     Movement.IsSynced(), the target
+│   │                                     Movement.IsSynced(),
 │   │                                     Account.Send()/Receive() below) —
 │   │                                     zero knowledge of persistence or HTTP.
 │   │
@@ -39,29 +39,34 @@ financial-tracker/
 │   │   ├── dto/                         Application DTOs: what usecases,
 │   │   │   ├── movement_dto.go          repositories and services actually
 │   │   │   ├── account_dto.go           pass to each other. NOT domain
-│   │   │   └── transfer_dto.go          entities — see "Why a separate DTO
-│   │   │                                 layer" below.
+│   │   │   ├── credit_card_purchase_dto.go  entities — see "Why a separate
+│   │   │   └── exchange_rate_dto.go     DTO layer" below.
 │   │   │
 │   │   ├── repositories/                Repository interfaces, expressed in
 │   │   │   ├── movement_repository.go   terms of application/dto types.
 │   │   │   └── account_repository.go
 │   │   │
 │   │   ├── services/                    External-system contracts (also in
-│   │   │   └── ledger_gateway.go        terms of application/dto types):
+│   │   │   └── sync.go                  terms of application/dto types):
 │   │   │                                 LedgerGateway, SyncTrigger, SyncRunner.
 │   │   │
-│   │   └── usecases/                    One file per use case — the
-│   │       ├── create_movement.go       interface, its Input/Result types,
-│   │       │                            and the concrete struct/constructor/
-│   │       │                            orchestration logic all together
-│   │       │                            (CleanExampleGo's actual documented
-│   │       │                            rule: "one file per use case!").
-│   │       ├── update_movement.go       No consolidated interfaces.go — a
-│   │       └── ...                      shared type used by two usecases
-│   │                                     (e.g. AccountView) lives in the
-│   │                                     file of the usecase that returns
-│   │                                     it first; the other just
-│   │                                     references it (same package).
+│   │   └── usecases/                    Every use-case interface plus its
+│   │       ├── interfaces.go            Input/Result/View types live
+│   │       ├── create_movement.go       together in one consolidated
+│   │       ├── update_movement.go       interfaces.go, so every contract
+│   │       └── ...                      is visible in one place — this
+│   │                                     workspace's amended rule on top
+│   │                                     of CleanExampleGo's base "one
+│   │                                     file per use case" (see
+│   │                                     AGENTS.md's "Architecture"
+│   │                                     section). Each usecase's concrete
+│   │                                     struct/constructor/orchestration
+│   │                                     logic still gets its own file
+│   │                                     (create_movement.go, ...) — only
+│   │                                     the contract itself moved. A type
+│   │                                     shared by two usecases (e.g.
+│   │                                     AccountView) also lives in
+│   │                                     interfaces.go.
 │   │
 │   ├── infrastructure/                  ADAPTERS — implements application contracts
 │   │   └── sqlite/
@@ -119,16 +124,19 @@ prevent:
   Postgres, later) happens to store a row.
 
 Using `internal/domain/entities` directly for repository/service/usecase
-signatures — which is what financial-tracker's code does today — quietly
-erases that boundary: a change to the DB schema's shape now free-rides
-straight through the entity into every usecase and handler that imports
-it, and vice versa. That's the coupling `internal/application/dto` exists to cut.
+signatures would quietly erase that boundary: a change to the DB schema's
+shape would free-ride straight through the entity into every usecase and
+handler that imports it, and vice versa. That's the coupling
+`internal/application/dto` exists to cut — and, per the "Current
+compliance status" section below, financial-tracker's repository/service/
+usecase contracts already use `application/dto` types, not entities,
+today.
 
 ## Worked example: `MovementRepository`
 
-**What CleanExampleGo's pattern requires** (target — see "Current
-compliance status" below for where financial-tracker's actual code
-stands today):
+**What CleanExampleGo's pattern requires** — and, per "Current compliance
+status" below, already matches financial-tracker's actual
+`MovementRepository` today:
 
 ```go
 // internal/application/dto/movement_dto.go
@@ -203,27 +211,41 @@ rule CleanExampleGo's `internal/application/repositories/README.md` states for
 
 ## Current compliance status
 
-financial-tracker's application layer does **not** do this today:
-`internal/application/repositories/movement_repository.go`,
-`internal/application/services/sync.go`'s `LedgerGateway`,
-every usecase interface in `internal/application/usecases/`, and every
-usecase/adapter impl (including `internal/infrastructure/ledgerservice`'s `gateway.Publish`/
-`Transaction.ToEntity()`) take/return `*internal/domain/entities.Movement` (and
-`*entities.Account`, etc.) directly, and there is no `internal/application/dto`
-package. This is a **known, critical architecture violation**, not an
-accepted variant — see `AGENTS.md`'s "Architecture" section at the
-workspace root.
+financial-tracker's application layer does this today: `internal/application/dto`
+exists (`movement_dto.go`, `account_dto.go`, `credit_card_purchase_dto.go`,
+`exchange_rate_dto.go`), and every repository interface in
+`internal/application/repositories/` (`MovementRepository`,
+`AccountRepository`, `CreditCardPurchaseRepository`,
+`ExchangeRateRepository`), `internal/application/services/sync.go`'s
+`LedgerGateway`, and every usecase interface in
+`internal/application/usecases/interfaces.go` take/return
+`application/dto` types (`*dto.MovementDTO`, `*dto.AccountDTO`, etc.), not
+`*internal/domain/entities.Movement` directly. Infrastructure adapts at
+the boundary as the pattern requires: `internal/infrastructure/sqlite`
+and `internal/infrastructure/postgresql` scan DB rows straight into
+`dto.MovementDTO`/`dto.AccountDTO`/..., and
+`internal/infrastructure/ledgerservice`'s wire `Transaction.ToDTO()`
+converts ledger-service's JSON shape to `*dto.MovementDTO` before
+`gateway.Publish` (which itself takes `*dto.MovementDTO`) hands it up.
+`CurrencyRepository` never needed a DTO — it always dealt in plain
+`string` codes.
 
-Bringing the existing code into compliance means introducing
-`internal/application/dto` and updating every repository interface, every
-usecase's Input/Result types, and every infrastructure implementation's
-return path (plus their tests) — a large, cross-cutting change. That
-migration hasn't been scoped or started; it needs an explicit decision
-to take on, not a silent refactor bundled into an unrelated change. Until
-it happens: **new code must not add to the violation** (no new
-repository/service/usecase contract typed against a domain entity), and
-anyone touching this area should flag the gap rather than treat the
-current state as the standard to copy.
+This is not a case of every domain entity having vanished from the
+application layer, and that's fine: several usecases (e.g.
+`create_movement.go`, `cancel_movement.go`, `update_movement.go`,
+`create_credit_card_purchase.go`) still construct an
+`entities.Movement` internally — to run domain validation/enum checks and
+build the row's shape — before converting it to `dto.MovementDTO` via
+`dto.MovementFromEntity(...)` at the point they hand it to a repository.
+That's fully compliant: the entity never crosses a contract boundary: the
+repository interface itself, the thing another package actually depends
+on, is typed against `dto.MovementDTO` from end to end.
+
+The historical gap this section used to describe (contracts typed
+directly against `domain/entities`, no `application/dto` package at all)
+is fixed. There is no known outstanding violation of this rule in the
+current codebase; if you find one while working here, treat it as a bug,
+not as the documented standard.
 
 ## Worked example: infra adapting an *external* system (`LedgerGateway`)
 
@@ -233,11 +255,11 @@ version of the same rule, because it crosses a real external-system
 boundary, not just a DB row: **infrastructure's job is to adapt whatever
 comes in — a DB row, another service's JSON, anything — to the contract
 the application layer defined, not the other way around.** This is real,
-current code, and it already gets the *shape* of the pattern right —
-adapting at the boundary with explicit conversion functions, not letting
-ledger-service's format leak past `internal/infrastructure/ledgerservice`. It's
-only converting to the wrong target type (a domain entity, per the gap
-above), not doing the wrong thing.
+current code, and it already gets both the *shape* of the pattern right
+— adapting at the boundary with explicit conversion functions, not
+letting ledger-service's format leak past
+`internal/infrastructure/ledgerservice` — and the *target type*: it
+converts to `dto.MovementDTO`, not a domain entity.
 
 What's there today, `internal/infrastructure/ledgerservice/entities/transaction.go`
 — ledger-service's own wire format, private to this package:
@@ -253,12 +275,12 @@ type Transaction struct {
 	Timestamp time.Time `json:"timestamp"`
 }
 
-func (t Transaction) ToEntity() *domain.Movement {
-	return &domain.Movement{
-		ID:       t.ID,
-		UserID:   t.UserID,
-		Amount:   t.Amount,
-		Currency: t.Currency,
+func (t Transaction) ToDTO() *dto.MovementDTO {
+	return &dto.MovementDTO{
+		ID:        t.ID,
+		UserID:    t.UserID,
+		Amount:    t.Amount,
+		Currency:  t.Currency,
 		Timestamp: t.Timestamp,
 	}
 }
@@ -271,16 +293,17 @@ type TransactionRequest struct {
 ```
 
 And the adapter itself, `internal/infrastructure/ledgerservice/gateway.go` —
-notice it already narrows the full `Movement` down to just the three
+notice it already narrows the full `MovementDTO` down to just the three
 fields ledger-service's contract accepts, by hand, field by field (no
 reflection, no generic mapper — an explicit map is the point, so a field
 ledger-service *shouldn't* see can't leak through by accident):
 
 ```go
-// gateway adapts Client to the application layer's LedgerGateway port.
-// Only the money facts cross the wire — ledger-service's transaction
-// model doesn't know about descriptions, categories, or payment methods.
-func (g *gateway) Publish(ctx context.Context, movement *entities.Movement) (string, error) {
+// gateway adapts Client to the application layer's LedgerGateway port
+// (application/services). Only the money facts cross the wire —
+// ledger-service's transaction model doesn't know about descriptions,
+// categories, or payment methods.
+func (g *gateway) Publish(ctx context.Context, movement *dto.MovementDTO) (string, error) {
 	tx, err := g.client.CreateTransaction(ctx, wire.TransactionRequest{
 		UserID:   movement.UserID,
 		Amount:   movement.Amount,
@@ -293,36 +316,21 @@ func (g *gateway) Publish(ctx context.Context, movement *entities.Movement) (str
 }
 ```
 
-**The only delta once `internal/application/dto` exists**: `LedgerGateway`'s port
-(`internal/application/services/sync.go`) takes/returns `dto.MovementDTO` instead
-of `*entities.Movement`, `ToEntity()` becomes `ToDTO()` returning
-`*dto.MovementDTO`, and `Publish`'s body — the actual narrowing logic —
-doesn't change at all:
+`LedgerGateway`'s port (`internal/application/services/sync.go`) matches
+that same shape — `dto.MovementDTO` in, `ledgerTransactionID` out:
 
 ```go
-// internal/application/services/sync.go (target)
+// internal/application/services/sync.go
 type LedgerGateway interface {
 	Publish(ctx context.Context, movement *dto.MovementDTO) (ledgerTransactionID string, err error)
 }
 ```
 
-```go
-// internal/infrastructure/ledgerservice/entities/transaction.go (target)
-func (t Transaction) ToDTO() *dto.MovementDTO {
-	return &dto.MovementDTO{
-		ID:       t.ID,
-		UserID:   t.UserID,
-		Amount:   t.Amount,
-		Currency: t.Currency,
-		Timestamp: t.Timestamp,
-	}
-}
-```
-
 That's the whole point of putting the DTO at the application boundary:
-the adapter's actual logic (which fields cross the wire, which don't)
-is already correct and doesn't need to change — only the type it's
-adapting *to* does.
+the adapter's actual logic (which fields cross the wire, which don't) is
+the part that matters, and it was already correct — the type it adapts
+*to* is what had to line up with the rest of the application layer, and
+now does.
 
 ## Rich entities: single-account logic belongs on `Account`, not the usecase
 
@@ -355,26 +363,10 @@ usecase:
 // balance, or an observability/monitoring hook here once we care about
 // per-account transfer volume.
 func (a *Account) Send(to *Account, amount int64, description string, timestamp time.Time) (*Movement, error) {
-	if a.ID == to.ID {
-		return nil, errors.New("cannot transfer to the same account")
+	if err := a.validateTransfer(to, amount); err != nil {
+		return nil, err
 	}
-	if a.Currency != to.Currency {
-		return nil, fmt.Errorf("currency mismatch: %s vs %s", a.Currency, to.Currency)
-	}
-	if amount <= 0 {
-		return nil, errors.New("amount must be positive")
-	}
-	return &Movement{
-		Amount:        -amount,
-		Currency:      a.Currency,
-		Description:   description,
-		Category:      CategoryTransfer,
-		PaymentMethod: PaymentMethodBankTransfer,
-		AccountID:     &a.ID,
-		Status:        MovementStatusActive,
-		SyncStatus:    SyncStatusPending,
-		Timestamp:     timestamp,
-	}, nil
+	return a.transferLeg(-amount, description, timestamp), nil
 }
 
 // Receive is Send's mirror for the destination side — same validation,
@@ -383,16 +375,34 @@ func (a *Account) Send(to *Account, amount int64, description string, timestamp 
 // it" confirmation/monitoring hook later belongs here, not on the source
 // account's method.
 func (a *Account) Receive(from *Account, amount int64, description string, timestamp time.Time) (*Movement, error) {
-	if a.ID == from.ID {
-		return nil, errors.New("cannot transfer to the same account")
+	if err := a.validateTransfer(from, amount); err != nil {
+		return nil, err
 	}
-	if a.Currency != from.Currency {
-		return nil, fmt.Errorf("currency mismatch: %s vs %s", from.Currency, a.Currency)
+	return a.transferLeg(amount, description, timestamp), nil
+}
+
+// validateTransfer and transferLeg are the shared same-currency/
+// positive-amount/not-self checks and Movement-building logic behind
+// both Send and Receive.
+func (a *Account) validateTransfer(other *Account, amount int64) error {
+	if other == nil {
+		return errors.New("other account is required")
+	}
+	if a.ID != "" && other.ID != "" && a.ID == other.ID {
+		return errors.New("cannot transfer to the same account")
+	}
+	if a.Currency != other.Currency {
+		return fmt.Errorf("cross-currency transfers aren't supported yet (%q vs %q)", a.Currency, other.Currency)
 	}
 	if amount <= 0 {
-		return nil, errors.New("amount must be positive")
+		return errors.New("amount must be positive")
 	}
+	return nil
+}
+
+func (a *Account) transferLeg(amount int64, description string, timestamp time.Time) *Movement {
 	return &Movement{
+		UserID:        a.UserID,
 		Amount:        amount,
 		Currency:      a.Currency,
 		Description:   description,
@@ -402,7 +412,8 @@ func (a *Account) Receive(from *Account, amount int64, description string, times
 		Status:        MovementStatusActive,
 		SyncStatus:    SyncStatusPending,
 		Timestamp:     timestamp,
-	}, nil
+		CreatedAt:     time.Now().UTC(),
+	}
 }
 ```
 
@@ -410,15 +421,18 @@ The usecase calls both, then owns the parts entities must never do —
 loading via repositories and persisting atomically:
 
 ```go
-// internal/application/usecases/transfer_between_account.go (shape, not the
-// current real implementation — see "Current compliance status")
+// internal/application/usecases/transfer_between_account.go — this is
+// the actual current implementation, dto conversions included (accounts
+// come back from the repository as dto.AccountDTO; .ToEntity() runs the
+// entity's Send/Receive, then dto.MovementFromEntity converts each leg
+// back before it's persisted).
 
 func (uc *transferBetweenAccountsUseCase) Execute(ctx context.Context, input TransferBetweenAccountsInput) (TransferResult, error) {
-	from, err := uc.ownedAccount(ctx, input.FromAccountID, input.UserID)
+	fromDTO, err := uc.ownedAccount(ctx, input.FromAccountID, input.UserID)
 	if err != nil {
 		return TransferResult{}, err
 	}
-	to, err := uc.ownedAccount(ctx, input.ToAccountID, input.UserID)
+	toDTO, err := uc.ownedAccount(ctx, input.ToAccountID, input.UserID)
 	if err != nil {
 		return TransferResult{}, err
 	}
@@ -428,6 +442,7 @@ func (uc *transferBetweenAccountsUseCase) Execute(ctx context.Context, input Tra
 		timestamp = time.Now().UTC()
 	}
 
+	from, to := fromDTO.ToEntity(), toDTO.ToEntity()
 	debit, err := from.Send(to, input.Amount, input.Description, timestamp)
 	if err != nil {
 		return TransferResult{}, fmt.Errorf("%w: %v", apperrors.ErrInvalidInput, err)
@@ -437,11 +452,15 @@ func (uc *transferBetweenAccountsUseCase) Execute(ctx context.Context, input Tra
 		return TransferResult{}, fmt.Errorf("%w: %v", apperrors.ErrInvalidInput, err)
 	}
 
+	// Linking the pair is cross-entity orchestration — the usecase's job.
 	transferID := id.NewUUID()
 	debit.TransferID, credit.TransferID = &transferID, &transferID
 
 	// Still the usecase's job: atomic persistence across both legs.
-	created, err := uc.movements.CreateBatch(ctx, []*entities.Movement{debit, credit})
+	created, err := uc.movements.CreateBatch(ctx, []*dto.MovementDTO{
+		dto.MovementFromEntity(debit),
+		dto.MovementFromEntity(credit),
+	})
 	if err != nil {
 		return TransferResult{}, err
 	}
@@ -449,26 +468,28 @@ func (uc *transferBetweenAccountsUseCase) Execute(ctx context.Context, input Tra
 }
 ```
 
-Same rule as the DTO one above: don't reinvent this per-usecase.
-Whenever a usecase is about to inline a single-entity validate-and-build
-step (as today's `transfer_between_account.go` does — it builds both
-`Movement` structs directly inline instead of via `Account.Send`/
-`Account.Receive`), that's the signal it belongs on the entity instead.
+Same rule as the DTO one above: don't reinvent this per-usecase. If a
+usecase is about to inline a single-entity validate-and-build step
+directly instead of calling an entity method like `Account.Send`/
+`Account.Receive`, that's the signal it belongs on the entity instead.
 
 ## Current compliance status (entity methods)
 
-Documented here as the target shape and worked example only — this
-principle is **not yet applied** anywhere in financial-tracker's actual
-code. `transfer_between_account.go` currently builds both `Movement`
-structs inline in the usecase; there is no `Account.Send`/
-`Account.Receive` today. Unlike the `internal/application/dto` gap above, this one
-is scoped to transfer only for now — the rest of the usecases
-(`update_movement`, `cancel_movement`, `cancel_transfer`,
-`create_credit_card_purchase`, ...) haven't been individually reviewed
-against this principle yet; do that case-by-case when touching each,
-rather than assuming they all need the same treatment.
+`Account.Send`/`Account.Receive` exist in
+`internal/domain/entities/account.go` and
+`transfer_between_account.go` calls them — this principle **is** applied
+for transfers today, matching the worked example above. It's still
+scoped to transfers only: the rest of the usecases that build a
+`Movement` (`update_movement.go`, `cancel_movement.go`,
+`cancel_transfer.go`, `create_credit_card_purchase.go`) construct
+`entities.Movement` literals directly inline rather than through an
+entity method, and haven't been individually reviewed against this
+principle yet — do that case-by-case when touching each, rather than
+assuming they all need the same treatment (most of them are cancel/
+reversal logic, which doesn't obviously map onto a `Send`/`Receive`-style
+method the way a transfer's two symmetric legs did).
 
-## Everything else (unaffected by the DTO gap above)
+## Everything else
 
 The rest of the request-flow and conventions already match CleanExampleGo
 and are documented in this folder's `README.md`:
@@ -476,8 +497,10 @@ and are documented in this folder's `README.md`:
 - Handlers never touch repositories directly.
 - Usecases never import `database/sql` or `net/http`.
 - Constructors return interface types.
-- Contracts sit next to what implements them: one file per use case in
-  `internal/application/usecases/`, one file per aggregate under
+- Contracts sit next to what implements them: every use-case contract
+  (interface + Input/Result/View types) consolidated in
+  `internal/application/usecases/interfaces.go` (this workspace's amended
+  rule, see AGENTS.md), one file per aggregate under
   `internal/application/repositories/` — never declared inline next to an
   unrelated feature's implementation or consumer.
 - `internal/cmd/api/main.go` is the sole composition root.
