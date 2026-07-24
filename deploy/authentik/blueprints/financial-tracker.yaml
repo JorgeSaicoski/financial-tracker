@@ -1,0 +1,55 @@
+# Auto-applied by the authentik worker on startup (any .yaml mounted under
+# /blueprints is discovered and instantiated — see deploy/README.md's
+# Authentik section). Creates the OAuth2/OIDC Provider + Application that
+# BACK-02/FRONT-04 (Phase 2) authenticate against, so a fresh stack has a
+# working provider with no manual admin-UI clicking.
+#
+# sub claim: sub_mode is set to "user_uuid" (Subject mode "Based on the
+# User's UUID" in the admin UI) so Authentik's `sub` claim is emitted as
+# the user's UUID — already the lowercase-UUID format BACK-02/
+# ledger-service require, so no claim transformation is needed later.
+# This resolves the open "sub claim mapping" decision in claude/plan.md.
+#
+# If a future authentik version renamed/moved any of these fields, the
+# manual equivalent is: Admin interface -> Applications -> Providers ->
+# Create -> OAuth2/OpenID Provider (client type Public, authorization flow
+# "default-provider-authorization-explicit-consent", Subject mode "Based
+# on the User's UUID", redirect URI matching the PUBLIC_OIDC_REDIRECT_URI
+# below), then Applications -> Create, linking to that provider.
+version: 1
+metadata:
+  name: financial-tracker OAuth2 provider + application
+entries:
+  - model: authentik_providers_oauth2.oauth2provider
+    id: financial-tracker-provider
+    identifiers:
+      name: financial-tracker
+    state: present
+    attrs:
+      name: financial-tracker
+      client_type: public
+      client_id: !Env [PUBLIC_OIDC_CLIENT_ID, financial-tracker]
+      sub_mode: user_uuid
+      authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-explicit-consent]]
+      invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
+      access_code_validity: "minutes=1"
+      access_token_validity: "minutes=30"
+      refresh_token_validity: "days=30"
+      redirect_uris:
+        - url: !Env [PUBLIC_OIDC_REDIRECT_URI, "https://financial-tracker.local:8443/auth/callback"]
+          matching_mode: strict
+      property_mappings:
+        - !Find [authentik_providers_oauth2.scopemapping, [scope_name, openid]]
+        - !Find [authentik_providers_oauth2.scopemapping, [scope_name, profile]]
+        - !Find [authentik_providers_oauth2.scopemapping, [scope_name, email]]
+      signing_key: !Find [authentik_crypto.certificatekeypair, [name, "authentik Self-signed Certificate"]]
+  - model: authentik_core.application
+    id: financial-tracker-application
+    identifiers:
+      slug: financial-tracker
+    state: present
+    attrs:
+      name: financial-tracker
+      slug: financial-tracker
+      policy_engine_mode: any
+      provider: !KeyOf financial-tracker-provider
