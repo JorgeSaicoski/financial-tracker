@@ -22,11 +22,8 @@ func NewUserRepository(db *sql.DB) repositories.UserRepository {
 	return &userRepository{db: db}
 }
 
-const userColumns = `id, provider, external_id, email, display_name, cloud_sync_enabled, created_at, updated_at`
+const userColumns = `id, provider, external_id, email, display_name, created_at, updated_at`
 
-// Upsert deliberately excludes cloud_sync_enabled from the UPDATE clause:
-// that field is owned by the user, not the identity provider, so a repeat
-// login must never reset it back to the caller's zero value.
 func (r *userRepository) Upsert(ctx context.Context, user *dto.UserDTO) (*dto.UserDTO, error) {
 	now := time.Now().UTC()
 	createdAt := user.CreatedAt
@@ -35,7 +32,7 @@ func (r *userRepository) Upsert(ctx context.Context, user *dto.UserDTO) (*dto.Us
 	}
 
 	_, err := r.db.ExecContext(ctx,
-		`INSERT INTO users (`+userColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO users (`+userColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(id) DO UPDATE SET
 		   provider = excluded.provider,
 		   external_id = excluded.external_id,
@@ -43,7 +40,7 @@ func (r *userRepository) Upsert(ctx context.Context, user *dto.UserDTO) (*dto.Us
 		   display_name = excluded.display_name,
 		   updated_at = excluded.updated_at`,
 		user.ID, user.Provider, user.ExternalID, user.Email, user.DisplayName,
-		user.CloudSyncEnabled, formatTime(createdAt), formatTime(now))
+		formatTime(createdAt), formatTime(now))
 	if err != nil {
 		return nil, fmt.Errorf("sqlite: upsert user: %w", err)
 	}
@@ -67,7 +64,7 @@ func scanUser(row scannable) (*dto.UserDTO, error) {
 		createdAt, updatedAt string
 	)
 	err := row.Scan(&u.ID, &u.Provider, &u.ExternalID, &u.Email, &u.DisplayName,
-		&u.CloudSyncEnabled, &createdAt, &updatedAt)
+		&createdAt, &updatedAt)
 	if err != nil {
 		return nil, err
 	}
