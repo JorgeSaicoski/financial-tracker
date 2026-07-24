@@ -3,14 +3,14 @@
 **What we're building:** a currency registry — `GET /currencies` (list
 codes) and `POST /currencies` (register a new one) — so the frontend's
 currency dropdown is real data instead of two hardcoded options. This is
-the actual feature at `interfaces/api/handlers/currency_handler.go`
+the actual feature at `internal/interfaces/api/handlers/currency_handler.go`
 et al. today; every file below is copy-pasted from the repo, not
 paraphrased.
 
 Before starting, read [architecture.md](architecture.md) and "Where
-contracts live" in [README.md](README.md) — steps 2, 4 and 5 below put
+contracts live" in [README.md](README.md) — steps 2 and 4 below put
 each piece in its required place. Currency has no domain entity, so this
-particular walkthrough doesn't hit the `application/dto` gap
+particular walkthrough doesn't hit the `internal/application/dto` gap
 architecture.md describes — `CurrencyRepository` already takes/returns
 plain `string`s, not an entity. Features built around `Movement` or
 `Account` (most of them) do hit it; see that doc before typing a domain
@@ -45,7 +45,7 @@ FROM movements;
 Never edit a migration that's already shipped — write a new file instead,
 even to fix a typo in one that's out.
 
-## Step 2 — repository interface: `application/repositories/currency_repository.go`
+## Step 2 — repository interface: `internal/application/repositories/currency_repository.go`
 
 The usecase layer will depend on this interface, never on SQLite
 directly. Keep it to exactly what usecases need, and write down any
@@ -67,7 +67,7 @@ type CurrencyRepository interface {
 }
 ```
 
-## Step 3 — SQLite implementation: `infrastructure/sqlite/currency_repository.go`
+## Step 3 — SQLite implementation: `internal/infrastructure/sqlite/currency_repository.go`
 
 ```go
 package sqlite
@@ -78,7 +78,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/JorgeSaicoski/financial-tracker/application/repositories"
+	"github.com/JorgeSaicoski/financial-tracker/internal/application/repositories"
 )
 
 type currencyRepository struct {
@@ -121,42 +121,18 @@ func (r *currencyRepository) Add(ctx context.Context, code string) error {
 ```
 
 `formatTime` is a shared helper already defined in this package
-(`infrastructure/sqlite/db.go`) — reuse it instead of formatting time
+(`internal/infrastructure/sqlite/db.go`) — reuse it instead of formatting time
 yourself, so every table sorts timestamps identically.
 
-## Step 4 — use-case contracts: `application/usecases/interfaces.go`
+## Step 4 — use-case contract + implementation: `internal/application/usecases/currencies.go`
 
-Every use-case interface and its Input/Result types go in the one
-consolidated `interfaces.go` — **never** in the implementation file. Add
-your contracts under the matching `// ---- <feature> ----` section (or
-start a new section). For currencies, this is what's in the file today:
-
-```go
-// ---- Currencies ----
-
-type ListCurrenciesUseCase interface {
-	Execute(ctx context.Context) ([]string, error)
-}
-
-// AddCurrencyUseCase registers a new currency code; adding an existing
-// code is a no-op. Returns the normalized (lowercased) code.
-type AddCurrencyUseCase interface {
-	Execute(ctx context.Context, code string) (string, error)
-}
-```
-
-If your feature has request-shaped data crossing the boundary, its struct
-goes here too — see `CreateMovementInput` or `CreateAccountInput` in the
-same file for the pattern.
-
-## Step 5 — usecase implementations: `application/usecases/currencies.go`
-
-All validation and normalization lives here, not in the handler and not
-in SQL. The impl file holds only concrete structs, constructors, and
-logic — the interfaces it implements are in `interfaces.go` (Step 4).
-This file has two usecases because listing and adding are independent
-operations with independent contracts — that's the pattern used
-throughout `application/usecases`.
+Every use-case interface and its Input/Result types go in the **same file**
+as the concrete implementation that satisfies it — one file per use case
+(CleanExampleGo's own rule: "one file per use case!"), never a separate
+consolidated file. The interface comes first, then the concrete struct,
+constructor, and `Execute` body. This file has two usecases because
+listing and adding are independent operations with independent contracts
+— that's the pattern used throughout `internal/application/usecases`:
 
 ```go
 package usecases
@@ -167,13 +143,17 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/JorgeSaicoski/financial-tracker/application/repositories"
-	apperrors "github.com/JorgeSaicoski/financial-tracker/pkg/errors"
+	"github.com/JorgeSaicoski/financial-tracker/internal/application/repositories"
+	apperrors "github.com/JorgeSaicoski/financial-tracker/internal/pkg/errors"
 )
 
 // currencyCodePattern keeps codes short lowercase identifiers (usd, brl,
 // btc, usdt, ...) so they behave everywhere a currency string is used.
 var currencyCodePattern = regexp.MustCompile(`^[a-z0-9]{2,10}$`)
+
+type ListCurrenciesUseCase interface {
+	Execute(ctx context.Context) ([]string, error)
+}
 
 type listCurrenciesUseCase struct {
 	repo repositories.CurrencyRepository
@@ -186,6 +166,12 @@ func NewListCurrencies(repo repositories.CurrencyRepository) ListCurrenciesUseCa
 
 func (uc *listCurrenciesUseCase) Execute(ctx context.Context) ([]string, error) {
 	return uc.repo.List(ctx)
+}
+
+// AddCurrencyUseCase registers a new currency code; adding an existing
+// code is a no-op. Returns the normalized (lowercased) code.
+type AddCurrencyUseCase interface {
+	Execute(ctx context.Context, code string) (string, error)
 }
 
 type addCurrencyUseCase struct {
@@ -209,12 +195,21 @@ func (uc *addCurrencyUseCase) Execute(ctx context.Context, code string) (string,
 }
 ```
 
-`apperrors.ErrInvalidInput` is one of four sentinels in `pkg/errors`
+If your feature has request-shaped data crossing the boundary, its struct
+goes in the same file too — see `CreateMovementInput` in
+`create_movement.go` or `CreateAccountInput` in `create_account.go` for
+the pattern. A type shared by two use cases (e.g. `AccountView`, returned
+by both `ListAccountsUseCase` and `ReportAccountBalanceUseCase`) lives in
+whichever file returns it first, with a one-line comment pointing at the
+other consumer — same package, no import needed. All validation and
+normalization lives in the impl, not in the handler and not in SQL.
+
+`apperrors.ErrInvalidInput` is one of four sentinels in `internal/pkg/errors`
 (`ErrInvalidInput`, `ErrNotFound`, `ErrConflict`, `ErrUpstream`). Wrap it
 with `fmt.Errorf("%w: <human message>", ...)` — the message is what a 400
 response shows the caller, so write it for a person, not a log.
 
-## Step 6 — request/response DTOs: `interfaces/dto/account_dto.go`
+## Step 5 — request/response DTOs: `internal/interfaces/dto/account_dto.go`
 
 DTOs are plain structs with JSON tags, snake_case on the wire. These two
 live in `account_dto.go` alongside the account DTOs added in the same
@@ -231,7 +226,7 @@ type AddCurrencyRequest struct {
 }
 ```
 
-## Step 7 — handler: `interfaces/api/handlers/currency_handler.go`
+## Step 6 — handler: `internal/interfaces/api/handlers/currency_handler.go`
 
 ```go
 package handlers
@@ -240,10 +235,10 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/JorgeSaicoski/financial-tracker/application/usecases"
-	interfacedto "github.com/JorgeSaicoski/financial-tracker/interfaces/dto"
-	apperrors "github.com/JorgeSaicoski/financial-tracker/pkg/errors"
-	"github.com/JorgeSaicoski/financial-tracker/pkg/logger"
+	"github.com/JorgeSaicoski/financial-tracker/internal/application/usecases"
+	interfacedto "github.com/JorgeSaicoski/financial-tracker/internal/interfaces/dto"
+	apperrors "github.com/JorgeSaicoski/financial-tracker/internal/pkg/errors"
+	"github.com/JorgeSaicoski/financial-tracker/internal/pkg/logger"
 )
 
 // CurrencyHandler exposes the user-extendable currency registry backing
@@ -313,7 +308,7 @@ implementation — they're the interfaces *layer's* own surface, consumed
 only by the router one file away.)
 
 `writeJSON` and `writeError` are shared across every handler, defined
-once in `interfaces/api/handlers/http_helpers.go`:
+once in `internal/interfaces/api/handlers/http_helpers.go`:
 
 ```go
 func writeJSON(log logger.Logger, w http.ResponseWriter, status int, data interface{}) {
@@ -337,7 +332,7 @@ Always use these instead of writing headers/encoding JSON by hand in a
 new handler — every response gets the same `Content-Type` and the same
 error shape (`{"error": "..."}`) this way.
 
-## Step 8 — route: `interfaces/api/router.go`
+## Step 7 — route: `internal/interfaces/api/router.go`
 
 Add two lines to `NewRouter`. If your feature needs a brand-new handler
 *type* (as currencies did), add it as a parameter too — the compiler will
@@ -362,10 +357,10 @@ func NewRouter(
 
 Path parameters use Go 1.22's `ServeMux` patterns directly, e.g.
 `"POST /accounts/{id}/balance"`, read in the handler with
-`r.PathValue("id")` — see `interfaces/api/handlers/account_handler.go`
+`r.PathValue("id")` — see `internal/interfaces/api/handlers/account_handler.go`
 for a real example if your route needs one.
 
-## Step 9 — wire it up: `cmd/api/main.go`
+## Step 8 — wire it up: `internal/cmd/api/main.go`
 
 This is the only file where concrete SQLite repos, usecases, and
 handlers are actually constructed and connected. Three additions:
@@ -394,11 +389,11 @@ log.Info("endpoints: POST /movements | GET /movements | POST /movements/{id}/can
 	"GET|POST /accounts | POST /accounts/{id}/balance | GET|POST /currencies")
 ```
 
-## Step 10 — tests
+## Step 9 — tests
 
-Usecase tests live in `application/usecases/*_test.go` and run against
+Usecase tests live in `internal/application/usecases/*_test.go` and run against
 in-memory fakes, not a real database. Add your fake to
-`application/usecases/fakes_test.go`:
+`internal/application/usecases/fakes_test.go`:
 
 ```go
 // fakeCurrencyRepo is an in-memory CurrencyRepository. Add is idempotent,
@@ -430,7 +425,7 @@ func (f *fakeCurrencyRepo) Add(_ context.Context, code string) error {
 }
 ```
 
-Then the actual test file, `application/usecases/currencies_test.go`:
+Then the actual test file, `internal/application/usecases/currencies_test.go`:
 
 ```go
 package usecases
@@ -440,7 +435,7 @@ import (
 	"errors"
 	"testing"
 
-	apperrors "github.com/JorgeSaicoski/financial-tracker/pkg/errors"
+	apperrors "github.com/JorgeSaicoski/financial-tracker/internal/pkg/errors"
 )
 
 func TestAddCurrencyNormalizesAndValidates(t *testing.T) {
@@ -508,7 +503,7 @@ fake and SQLite test that implements it until you update them all — that
 failure is the compiler doing your review for you, not a problem to work
 around.
 
-## Step 11 — frontend API client: `web/src/lib/api.js`
+## Step 10 — frontend API client: `web/src/lib/api.js`
 
 One exported function per endpoint, built on the shared `request()`
 helper already in this file (it sets the base URL and JSON headers, and
@@ -528,7 +523,7 @@ export function addCurrency(code) {
 }
 ```
 
-## Step 12 — frontend page: `web/src/routes/+page.svelte`
+## Step 11 — frontend page: `web/src/routes/+page.svelte`
 
 State, with a safe default so the UI works even before the API call
 resolves:
@@ -587,7 +582,7 @@ And markup binding the state:
 <button type="button" class="ghost" title="Add a currency" onclick={handleAddCurrency}>+</button>
 ```
 
-## Step 13 — see it run
+## Step 12 — see it run
 
 Go code only exists inside the API container after an image rebuild —
 the container does not hot-reload:

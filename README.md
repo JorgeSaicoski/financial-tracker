@@ -67,8 +67,8 @@ application/repositories     MovementRepository, CreditCardPurchaseRepository,
                              application/dto types — the swap points
 application/services         LedgerGateway, SyncTrigger, SyncRunner — service contracts the
                              application defines; sync/infrastructure implement them
-application/usecases         all use-case interfaces + Input/Result types in interfaces.go;
-                             one impl file each: CreateMovement, CreateCreditCardPurchase,
+application/usecases         one file per use case: interface + Input/Result types +
+                             implementation together: CreateMovement, CreateCreditCardPurchase,
                              GetMovement, ListMovements (computes balance), CancelMovement,
                              CancelCreditCardPurchase, CreateAccount, ListAccounts
                              (computes balances/returns), ReportAccountBalance,
@@ -91,14 +91,14 @@ web/                         SvelteKit frontend
 ```
 
 See `contributing/architecture.md` for the full layer-by-layer rationale
-(why `application/dto` is a separate contract from `interfaces/dto`, why
+(why `internal/application/dto` is a separate contract from `internal/interfaces/dto`, why
 single-entity logic like `Account.Send`/`Receive` belongs on the entity
 rather than inlined in a usecase, and so on).
 
 Every constructor returns its interface type, not the concrete struct —
 each layer depends on a contract instead of an implementation. Usecases
-know nothing about SQL or HTTP; `application/sync` reaches ledger-service
-only through its `LedgerGateway` port, which `infrastructure/ledgerservice`
+know nothing about SQL or HTTP; `internal/application/sync` reaches ledger-service
+only through its `LedgerGateway` port, which `internal/infrastructure/ledgerservice`
 implements.
 
 ## Cancel semantics (worth understanding)
@@ -193,7 +193,7 @@ already set in `docker-compose.yml` — without it `npm install` fails with
 1. **financial-tracker API** (works with or without ledger-service up):
    ```bash
    cp .env.example .env   # adjust if needed
-   make run                # or: go run ./cmd/api
+   make run                # or: go run ./internal/cmd/api
    ```
    Listens on `:8081`, stores data at `DB_PATH` (default
    `./data/financial-tracker.db`), syncs to `LEDGER_SERVICE_URL`
@@ -216,7 +216,7 @@ already set in `docker-compose.yml` — without it `npm install` fails with
    npm install
    npm run dev
    ```
-   Opens on `:5173`. CORS is wide open in `interfaces/api/router.go` for
+   Opens on `:5173`. CORS is wide open in `internal/interfaces/api/router.go` for
    local dev — tighten before deploying anywhere real.
 
 ### Deploying (PostgreSQL, production images)
@@ -239,7 +239,7 @@ rejection), installment split math (signed amounts, remainder cents,
 too-small totals), balance calculation with cancelled movements, the sync
 pass (success/failure recording, retry cooldown vs manual sync), and the
 SQLite repositories (including the atomic reversal link). The Postgres
-repositories in `infrastructure/postgresql` mirror the same test suite but
+repositories in `internal/infrastructure/postgresql` mirror the same test suite but
 only run against a real database, guarded by `TEST_DATABASE_URL` — unset,
 they're skipped so `go test ./...` still passes offline:
 
