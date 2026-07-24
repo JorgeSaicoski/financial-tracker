@@ -121,6 +121,7 @@
 			<button
 				type="button"
 				class:active={directionInput === 'expense'}
+				aria-pressed={directionInput === 'expense'}
 				onclick={() => (directionInput = 'expense')}
 			>
 				− Expense
@@ -128,6 +129,7 @@
 			<button
 				type="button"
 				class:active={directionInput === 'income'}
+				aria-pressed={directionInput === 'income'}
 				onclick={() => (directionInput = 'income')}
 			>
 				+ Income
@@ -155,6 +157,7 @@
 						type="button"
 						class="chip-btn"
 						class:selected={categoryInput === cat}
+						aria-pressed={categoryInput === cat}
 						onclick={() => selectCategory(cat)}
 					>
 						{categoryIcons[cat] ?? ''} {labelFor(cat)}
@@ -177,6 +180,7 @@
 						type="button"
 						class="chip-btn"
 						class:selected={descriptionInput === desc}
+						aria-pressed={descriptionInput === desc}
 						onclick={() => selectDescription(desc)}
 					>
 						{desc}
@@ -184,7 +188,12 @@
 				{/each}
 			</div>
 		{/if}
-		<input type="text" placeholder="Description (optional)" bind:value={descriptionInput} />
+		<input
+			type="text"
+			placeholder="Description (optional)"
+			aria-label="Description"
+			bind:value={descriptionInput}
+		/>
 	</div>
 
 	<div class="overrides">

@@ -44,15 +44,23 @@
 	}
 
 	async function loadStatic() {
-		try {
-			const [cats, curr, accs] = await Promise.all([getCategories(), getCurrencies(), listAccounts()]);
-			categories = cats.categories ?? [];
-			paymentMethods = cats.payment_methods ?? [];
-			if (curr.currencies?.length) currencies = curr.currencies;
-			accounts = accs.accounts ?? [];
-		} catch {
-			// Quick-add still works with whatever defaults are already set,
-			// same "optional, page still works" pattern as the home route.
+		// allSettled (not Promise.all) so a hiccup on one endpoint doesn't
+		// discard the other two's successful responses — same resilience
+		// as the home route, which loads each resource independently.
+		const [cats, curr, accs] = await Promise.allSettled([
+			getCategories(),
+			getCurrencies(),
+			listAccounts()
+		]);
+		if (cats.status === 'fulfilled') {
+			categories = cats.value.categories ?? [];
+			paymentMethods = cats.value.payment_methods ?? [];
+		}
+		if (curr.status === 'fulfilled' && curr.value.currencies?.length) {
+			currencies = curr.value.currencies;
+		}
+		if (accs.status === 'fulfilled') {
+			accounts = accs.value.accounts ?? [];
 		}
 	}
 
@@ -126,7 +134,7 @@
 	class="fab"
 	type="button"
 	onclick={openQuickAdd}
-	aria-label="Quick add movement (press n or / )"
+	aria-label="Quick add movement (press n or /)"
 	title="Quick add (n or /)"
 >
 	<span aria-hidden="true">+</span>
