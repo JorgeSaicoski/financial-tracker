@@ -33,7 +33,7 @@ func preflight(ctx context.Context, dst *sql.DB) error {
 	// It's a soft, idempotent registry (ON CONFLICT DO NOTHING both in
 	// the migration and in copyCurrencies below), not ledger data, so
 	// pre-existing rows there don't indicate a prior migration.
-	tables := []string{"accounts", "account_snapshots", "credit_card_purchases", "movements"}
+	tables := []string{"accounts", "account_snapshots", "credit_card_purchases", "movements", "exchange_rates"}
 	var nonEmpty []string
 	for _, t := range tables {
 		var n int
@@ -74,6 +74,7 @@ func run(ctx context.Context, src, dst *sql.DB, force bool) ([]tableCount, error
 		{"account_snapshots", copyAccountSnapshots},
 		{"credit_card_purchases", copyCreditCardPurchases},
 		{"movements", copyMovements},
+		{"exchange_rates", copyExchangeRates},
 	}
 
 	counts := make([]tableCount, 0, len(steps))
@@ -315,6 +316,44 @@ func copyCreditCardPurchases(ctx context.Context, src *sql.DB, tx *sql.Tx) (int,
 			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
 			p.ID, p.UserID, nullString(p.Description), p.Category, p.TotalAmount, p.Currency, p.InstallmentCount, p.PurchaseDate, p.Status, p.CreatedAt); err != nil {
 			return len(all), written, fmt.Errorf("insert %s: %w", p.ID, err)
+		}
+		written++
+	}
+	return len(all), written, nil
+}
+
+func copyExchangeRates(ctx context.Context, src *sql.DB, tx *sql.Tx) (int, int, error) {
+	rows, err := src.QueryContext(ctx, `SELECT id, user_id, currency, units_per_usd, effective_from, created_at FROM exchange_rates`)
+	if err != nil {
+		return 0, 0, fmt.Errorf("read: %w", err)
+	}
+	defer rows.Close()
+
+	var all []*dto.ExchangeRateDTO
+	for rows.Next() {
+		r := &dto.ExchangeRateDTO{}
+		var effectiveFrom, createdAt string
+		if err := rows.Scan(&r.ID, &r.UserID, &r.Currency, &r.UnitsPerUSD, &effectiveFrom, &createdAt); err != nil {
+			return 0, 0, fmt.Errorf("scan: %w", err)
+		}
+		if r.EffectiveFrom, err = parseTimestamp(effectiveFrom); err != nil {
+			return 0, 0, fmt.Errorf("parse effective_from for %s: %w", r.ID, err)
+		}
+		if r.CreatedAt, err = parseTimestamp(createdAt); err != nil {
+			return 0, 0, fmt.Errorf("parse created_at for %s: %w", r.ID, err)
+		}
+		all = append(all, r)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, 0, err
+	}
+
+	written := 0
+	for _, r := range all {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO exchange_rates (id, user_id, currency, units_per_usd, effective_from, created_at) VALUES ($1, $2, $3, $4, $5, $6)`,
+			r.ID, r.UserID, r.Currency, r.UnitsPerUSD, r.EffectiveFrom, r.CreatedAt); err != nil {
+			return len(all), written, fmt.Errorf("insert %s: %w", r.ID, err)
 		}
 		written++
 	}

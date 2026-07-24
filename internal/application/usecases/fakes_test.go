@@ -13,15 +13,20 @@ import (
 )
 
 // fakeCurrencyRepo is an in-memory CurrencyRepository. Add is idempotent,
-// matching the real SQLite implementation's INSERT OR IGNORE.
+// matching the real SQLite implementation's INSERT OR IGNORE. Every seeded
+// or added code defaults to 2 decimals (the real table's DEFAULT); tests
+// that need a different value (e.g. a 0-decimal currency) call
+// setDecimals.
 type fakeCurrencyRepo struct {
-	codes map[string]bool
+	codes    map[string]bool
+	decimals map[string]int
 }
 
 func newFakeCurrencyRepo(seed ...string) *fakeCurrencyRepo {
-	f := &fakeCurrencyRepo{codes: map[string]bool{}}
+	f := &fakeCurrencyRepo{codes: map[string]bool{}, decimals: map[string]int{}}
 	for _, c := range seed {
 		f.codes[c] = true
+		f.decimals[c] = 2
 	}
 	return f
 }
@@ -37,7 +42,21 @@ func (f *fakeCurrencyRepo) List(_ context.Context) ([]string, error) {
 
 func (f *fakeCurrencyRepo) Add(_ context.Context, code string) error {
 	f.codes[code] = true
+	if _, ok := f.decimals[code]; !ok {
+		f.decimals[code] = 2
+	}
 	return nil
+}
+
+func (f *fakeCurrencyRepo) Decimals(_ context.Context, code string) (int, error) {
+	if !f.codes[code] {
+		return 0, apperrors.ErrNotFound
+	}
+	return f.decimals[code], nil
+}
+
+func (f *fakeCurrencyRepo) setDecimals(code string, n int) {
+	f.decimals[code] = n
 }
 
 // fakeMovementRepo is an in-memory MovementRepository mirroring the
@@ -377,4 +396,81 @@ func (f *fakeAccountRepo) LatestSnapshots(_ context.Context, accountID string, n
 		snaps = snaps[:n]
 	}
 	return snaps, nil
+}
+
+// fakeExchangeRateRepo is an in-memory ExchangeRateRepository. Create
+// upserts on (user_id, currency, effective_from), matching the real
+// SQLite/Postgres implementations' ON CONFLICT behavior.
+type fakeExchangeRateRepo struct {
+	byID   map[string]*dto.ExchangeRateDTO
+	nextID int
+}
+
+func newFakeExchangeRateRepo() *fakeExchangeRateRepo {
+	return &fakeExchangeRateRepo{byID: map[string]*dto.ExchangeRateDTO{}}
+}
+
+func (f *fakeExchangeRateRepo) Create(_ context.Context, rate *dto.ExchangeRateDTO) (*dto.ExchangeRateDTO, error) {
+	for _, existing := range f.byID {
+		if existing.UserID == rate.UserID && existing.Currency == rate.Currency && existing.EffectiveFrom.Equal(rate.EffectiveFrom) {
+			existing.UnitsPerUSD = rate.UnitsPerUSD
+			cp := *existing
+			return &cp, nil
+		}
+	}
+	if rate.ID == "" {
+		f.nextID++
+		rate.ID = fmt.Sprintf("er-%d", f.nextID)
+	}
+	cp := *rate
+	f.byID[rate.ID] = &cp
+	out := *rate
+	return &out, nil
+}
+
+func (f *fakeExchangeRateRepo) ListByUser(_ context.Context, userID string) ([]*dto.ExchangeRateDTO, error) {
+	var out []*dto.ExchangeRateDTO
+	for _, r := range f.byID {
+		if r.UserID != userID {
+			continue
+		}
+		cp := *r
+		out = append(out, &cp)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Currency != out[j].Currency {
+			return out[i].Currency < out[j].Currency
+		}
+		return out[i].EffectiveFrom.After(out[j].EffectiveFrom)
+	})
+	return out, nil
+}
+
+func (f *fakeExchangeRateRepo) RateAt(_ context.Context, userID, currency string, at time.Time) (*dto.ExchangeRateDTO, error) {
+	var best *dto.ExchangeRateDTO
+	for _, r := range f.byID {
+		if r.UserID != userID || r.Currency != currency {
+			continue
+		}
+		if r.EffectiveFrom.After(at) {
+			continue
+		}
+		if best == nil || r.EffectiveFrom.After(best.EffectiveFrom) {
+			best = r
+		}
+	}
+	if best == nil {
+		return nil, apperrors.ErrNotFound
+	}
+	cp := *best
+	return &cp, nil
+}
+
+func (f *fakeExchangeRateRepo) Delete(_ context.Context, userID, id string) error {
+	r, ok := f.byID[id]
+	if !ok || r.UserID != userID {
+		return apperrors.ErrNotFound
+	}
+	delete(f.byID, id)
+	return nil
 }

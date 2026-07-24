@@ -22,6 +22,15 @@ type CurrencyHandler interface {
 	AddCurrency(w http.ResponseWriter, r *http.Request)
 }
 
+// ExchangeRateHandler exposes user-managed, historical exchange rates
+// against USD (BACK-11) — reference data the user maintains themselves,
+// no external rate API involved.
+type ExchangeRateHandler interface {
+	SetExchangeRate(w http.ResponseWriter, r *http.Request)
+	ListExchangeRates(w http.ResponseWriter, r *http.Request)
+	DeleteExchangeRate(w http.ResponseWriter, r *http.Request)
+}
+
 // MovementHandler exposes financial-tracker's own API. It never talks to
 // the database or ledger-service directly - it only calls application
 // code, which depends on the application repository interfaces.

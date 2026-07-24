@@ -9,4 +9,10 @@ type CurrencyRepository interface {
 	List(ctx context.Context) ([]string, error)
 	// Add registers a code; adding an existing code is a no-op.
 	Add(ctx context.Context, code string) error
+	// Decimals returns the number of minor-unit decimal places a
+	// registered currency uses (2 for usd/brl, 8 for btc, ...) — needed to
+	// scale smallest-unit amounts correctly during exchange-rate
+	// conversion (see BACK-11's ToUSDUseCase). apperrors.ErrNotFound if
+	// the code isn't registered.
+	Decimals(ctx context.Context, code string) (int, error)
 }

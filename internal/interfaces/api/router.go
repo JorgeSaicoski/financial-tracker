@@ -11,6 +11,7 @@ func NewRouter(
 	accountHandler handlers.AccountHandler,
 	currencyHandler handlers.CurrencyHandler,
 	transferHandler handlers.TransferHandler,
+	exchangeRateHandler handlers.ExchangeRateHandler,
 	allowedOrigin string,
 ) http.Handler {
 	mux := http.NewServeMux()
@@ -40,6 +41,10 @@ func NewRouter(
 	mux.HandleFunc("POST /transfers", transferHandler.CreateTransfer)
 	mux.HandleFunc("POST /transfers/{id}/cancel", transferHandler.CancelTransfer)
 
+	mux.HandleFunc("GET /exchange-rates", exchangeRateHandler.ListExchangeRates)
+	mux.HandleFunc("POST /exchange-rates", exchangeRateHandler.SetExchangeRate)
+	mux.HandleFunc("DELETE /exchange-rates/{id}", exchangeRateHandler.DeleteExchangeRate)
+
 	return withCORS(mux, allowedOrigin)
 }
 
@@ -50,7 +55,7 @@ func NewRouter(
 func withCORS(next http.Handler, allowedOrigin string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 
 		if r.Method == http.MethodOptions {

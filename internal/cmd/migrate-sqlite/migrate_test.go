@@ -47,7 +47,7 @@ func openTargetDB(t *testing.T) *sql.DB {
 	if err := postgresql.Migrate(db); err != nil {
 		t.Fatalf("migrate target: %v", err)
 	}
-	if _, err := db.Exec(`TRUNCATE TABLE account_snapshots, movements, credit_card_purchases, accounts CASCADE`); err != nil {
+	if _, err := db.Exec(`TRUNCATE TABLE account_snapshots, movements, credit_card_purchases, accounts, exchange_rates CASCADE`); err != nil {
 		t.Fatalf("truncate target: %v", err)
 	}
 	return db
@@ -192,6 +192,17 @@ func seedSource(t *testing.T, db *sql.DB) {
 	}); err != nil {
 		t.Fatalf("create transfer pair: %v", err)
 	}
+
+	// Exchange rate history — BACK-11.
+	if _, err := sqlite.NewExchangeRateRepository(db).Create(ctx, &dto.ExchangeRateDTO{
+		UserID:        testUserID,
+		Currency:      "brl",
+		UnitsPerUSD:   "5.25",
+		EffectiveFrom: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		CreatedAt:     nowTruncated(),
+	}); err != nil {
+		t.Fatalf("create exchange rate: %v", err)
+	}
 }
 
 func intPtr(n int) *int { return &n }
@@ -296,6 +307,16 @@ func TestMigrateSeedsMatchAfterCopy(t *testing.T) {
 	}
 	if len(snapshots) != 1 || snapshots[0].Balance != 100000 {
 		t.Errorf("snapshot mismatch: %+v", snapshots)
+	}
+
+	// Exchange rate history survived the copy too (BACK-11) — this is the
+	// table Copilot flagged as missing from the migration tool entirely.
+	rates, err := postgresql.NewExchangeRateRepository(dst).ListByUser(ctx, testUserID)
+	if err != nil {
+		t.Fatalf("list target exchange rates: %v", err)
+	}
+	if len(rates) != 1 || rates[0].Currency != "brl" || rates[0].UnitsPerUSD != "5.25" {
+		t.Errorf("exchange rate mismatch: %+v", rates)
 	}
 }
 
