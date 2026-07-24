@@ -4,4 +4,4 @@
 -- Existing rows default to 2 (correct for the seeded usd/brl and any
 -- fiat code backfilled from movements so far); a currency that actually
 -- needs a different value can be re-registered via a future admin path.
-ALTER TABLE currencies ADD COLUMN decimals INTEGER NOT NULL DEFAULT 2;
+ALTER TABLE currencies ADD COLUMN decimals INTEGER NOT NULL DEFAULT 2 CHECK (decimals >= 0);

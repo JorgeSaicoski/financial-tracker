@@ -206,7 +206,7 @@ rebuilds without manual regeneration.
 ## Migrating existing SQLite data
 
 If you have existing data in the SQLite-backed dev/standalone deployment,
-the supported path is `cmd/migrate-sqlite` — it copies every table
+the supported path is `internal/cmd/migrate-sqlite` — it copies every table
 (currencies, accounts, account snapshots, credit-card purchases,
 movements) in one Postgres transaction, preserving ids, timestamps, sync
 state, and every link (reversals, installments, transfers). Re-importing
@@ -217,7 +217,7 @@ via CSV instead would silently drop all of that.
 2. Bring up this stack's Postgres only: `podman-compose up -d ft-postgres`.
 3. From the repo root, run:
    ```bash
-   go run ./cmd/migrate-sqlite \
+   go run ./internal/cmd/migrate-sqlite \
      --db-path /path/to/financial-tracker.db \
      --database-url "$DATABASE_URL"   # same value as ft-postgres's DSN in .env
    ```

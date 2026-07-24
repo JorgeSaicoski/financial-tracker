@@ -67,7 +67,7 @@ logs:
 
 # Run the API locally without containers (requires ledger-service already running)
 run:
-	go run ./cmd/api
+	go run ./internal/cmd/api
 
 # Install web frontend dependencies. Re-runs npm install whenever
 # package.json/package-lock.json change; a no-op otherwise.

@@ -4,13 +4,13 @@
 filtering. Real diff, current code, in build order.
 
 **Architecture note:** the signature below (`[]*entities.Movement`) is
-the repo's current, real shape — and also the known `application/dto` gap
+the repo's current, real shape — and also the known `internal/application/dto` gap
 described in [architecture.md](architecture.md): this contract should be
 typed against an application DTO, not the domain entity, per
 CleanExampleGo. Shown here as-is because it's real, current code, not
 because it's the target to copy into a *new* contract.
 
-## 1. Repository interface — `application/repositories/movement_repository.go`
+## 1. Repository interface — `internal/application/repositories/movement_repository.go`
 
 Before:
 ```go
@@ -25,7 +25,7 @@ ListByUser(ctx context.Context, userID string, currency *string, from, to *time.
 Optional filters are pointers — `nil` means "no bound," matching how
 `currency *string` already worked in this same signature.
 
-## 2. SQLite implementation — `infrastructure/sqlite/movement_repository.go`
+## 2. SQLite implementation — `internal/infrastructure/sqlite/movement_repository.go`
 
 Inside `ListByUser`, right after the existing currency filter:
 ```go
@@ -42,15 +42,15 @@ if to != nil {
 ## 3. Use-case contract and implementation
 
 The `ListMovementsUseCase` interface lives in
-`application/usecases/interfaces.go` (all use-case contracts do — see
-[README.md](README.md)); its `Execute` signature gains `from, to *time.Time`
-there:
+`internal/application/usecases/list_movements.go` — same file as its
+implementation, one file per use case (see [README.md](README.md)); its
+`Execute` signature gains `from, to *time.Time` there:
 ```go
 type ListMovementsUseCase interface {
 	Execute(ctx context.Context, userID string, currency *string, from, to *time.Time, limit, offset int) (ListMovementsResult, error)
 }
 ```
-The implementation in `application/usecases/list_movements.go` gains the
+The implementation in `internal/application/usecases/list_movements.go` gains the
 same parameters, passed straight through to the repository, plus one
 validation line before the query runs:
 ```go
@@ -59,7 +59,7 @@ if from != nil && to != nil && !from.Before(*to) {
 }
 ```
 
-## 4. Handler — `interfaces/api/handlers/movement_handler.go`
+## 4. Handler — `internal/interfaces/api/handlers/movement_handler.go`
 
 Inside `ListMovements`:
 ```go
@@ -74,7 +74,7 @@ if err != nil {
 	return
 }
 ```
-`parseTimeParam` is shared (`interfaces/api/handlers/http_helpers.go`),
+`parseTimeParam` is shared (`internal/interfaces/api/handlers/http_helpers.go`),
 so any handler needing a date-range query param reuses it instead of
 reimplementing date parsing:
 ```go
@@ -107,8 +107,8 @@ func parseTimeParam(r *http.Request, name string, endOfDay bool) (*time.Time, er
 Changing an interface signature breaks every implementer and every fake:
 `fakeMovementRepo` and `fakeRepo` in the test files, and every existing
 call site of `ListByUser`/`ListMovements.Execute` in
-`infrastructure/sqlite/repository_test.go` and
-`application/usecases/cancel_movement_test.go`. Give the fakes real
+`internal/infrastructure/sqlite/repository_test.go` and
+`internal/application/usecases/cancel_movement_test.go`. Give the fakes real
 filtering behavior — a `_, _` no-op parameter defeats the point of the
 test. `go vet ./...` finds every broken call site for you; fix them one
 by one until it's clean.
@@ -127,7 +127,7 @@ change needs new storage (like the `account_id` column added to
 `movements` in `migrations/004_create_accounts_tables.sql` via
 `ALTER TABLE`), you must also update the `movementColumns` constant,
 `insertMovement`, and `scanMovement` in
-`infrastructure/sqlite/movement_repository.go` **together** — their
+`internal/infrastructure/sqlite/movement_repository.go` **together** — their
 column order must match exactly, or you'll scan a `category` value into
 the `account_id` field silently.
 

@@ -31,32 +31,33 @@ curl -s localhost:8081/categories   # now returns the real category list
 ## 3. When the bug *is* in the code, write a failing test first
 
 In the layer where the bug lives:
-- Usecase/validation bug → a test in `application/usecases/*_test.go`
+- Usecase/validation bug → a test in `internal/application/usecases/*_test.go`
   using the fakes in `fakes_test.go`, styled like
   `TestAddCurrencyRejectsBadCodes` in
   [new-feature.md](new-feature.md) step 10.
-- SQL bug → `infrastructure/sqlite/repository_test.go`, which runs
+- SQL bug → `internal/infrastructure/sqlite/repository_test.go`, which runs
   against a real temporary SQLite database, not a fake.
 - Wrong HTTP status/shape → exercise the handler directly, or just
   `curl` against a rebuilt container.
 
-`application/usecases/cancel_movement_test.go` is a good model for a
+`internal/application/usecases/cancel_movement_test.go` is a good model for a
 bug-shaped test: it locks down exact edge cases (double-cancel,
 reversal-of-reversal) that were easy to reintroduce by accident.
 
 ## 4. Fix at the right layer
 
 Validation belongs in usecases, SQL correctness in
-`infrastructure/sqlite`, status-code mapping in handlers. Don't patch a
+`internal/infrastructure/sqlite`, status-code mapping in handlers. Don't patch a
 backend bug by adding a workaround in the frontend. And if the fix
-involves a new interface, it goes where contracts live
-(`application/usecases/interfaces.go`, `application/repositories/`,
-`application/services/` — see [README.md](README.md) and
-[architecture.md](architecture.md)), never inline next to an
-implementation, and typed against an `application/dto` type rather than
-a domain entity if you're touching a repository/service contract (the
-existing code doesn't do this yet — see architecture.md — but a bug fix
-is not the place to silently perpetuate that gap into new signatures).
+involves a new interface, it goes where contracts live (the usecase's own
+file in `internal/application/usecases/`, `internal/application/repositories/`,
+`internal/application/services/` — see [README.md](README.md) and
+[architecture.md](architecture.md)), never inline next to an unrelated
+feature's implementation, and typed against an `internal/application/dto` type
+rather than a domain entity if you're touching a repository/service
+contract (the existing code doesn't do this yet — see architecture.md —
+but a bug fix is not the place to silently perpetuate that gap into new
+signatures).
 
 ## 5. Verify twice
 
