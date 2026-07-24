@@ -1,6 +1,7 @@
 <script>
 	import '$lib/styles/tokens.css';
 	import Sidebar from '$lib/components/Sidebar.svelte';
+	import QuickAdd from '$lib/components/QuickAdd.svelte';
 	import { onMount } from 'svelte';
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
@@ -41,6 +42,7 @@
 		<div class="app-content">
 			{@render children()}
 		</div>
+		<QuickAdd />
 	</div>
 {:else}
 	<!-- $effect above is already navigating to /login; nothing protected renders meanwhile. -->
