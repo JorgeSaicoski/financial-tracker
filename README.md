@@ -49,6 +49,11 @@ Beyond movements, the tracker knows about:
   Cancelling one (`POST /transfers/{id}/cancel`) cancels both legs, each
   per its own sync status; a single leg can't be cancelled directly via
   `POST /movements/{id}/cancel`.
+- **Exchange rates** — user-managed historical rates against USD
+  (`POST /exchange-rates`, `GET /exchange-rates`), a decimal string never
+  a float. Backing the (not yet built) purchasing-power report; posting
+  the same currency + effective date again backfills/corrects that row
+  instead of duplicating it.
 
 Backend layout follows Clean Architecture (see `CleanExampleGo` for the
 reference pattern this was modeled on): the **domain** layer holds pure
@@ -59,20 +64,25 @@ repository interfaces, service ports, and use-case interfaces:
 domain/entities              Movement, CreditCardPurchase, Account (+snapshots),
                              fixed Category/PaymentMethod/AccountType lists; single-entity
                              rules live here too (e.g. Account.Send()/Receive() for transfers)
-application/dto              MovementDTO, AccountDTO, CreditCardPurchaseDTO — what
-                             repositories/services/usecases actually pass to each other,
-                             converted from domain entities at the infrastructure boundary
+application/dto              MovementDTO, AccountDTO, CreditCardPurchaseDTO, ExchangeRateDTO
+                             — what repositories/services/usecases actually pass to each
+                             other, converted from domain entities at the infrastructure
+                             boundary
 application/repositories     MovementRepository, CreditCardPurchaseRepository,
-                             AccountRepository, CurrencyRepository interfaces, expressed in
-                             application/dto types — the swap points
+                             AccountRepository, CurrencyRepository, ExchangeRateRepository
+                             interfaces, expressed in application/dto types — the swap points
 application/services         LedgerGateway, SyncTrigger, SyncRunner — service contracts the
                              application defines; sync/infrastructure implement them
-application/usecases         one file per use case: interface + Input/Result types +
-                             implementation together: CreateMovement, CreateCreditCardPurchase,
-                             GetMovement, ListMovements (computes balance), CancelMovement,
-                             CancelCreditCardPurchase, CreateAccount, ListAccounts
-                             (computes balances/returns), ReportAccountBalance,
-                             GetCashflow, ListCurrencies, AddCurrency
+application/usecases         every use-case interface + Input/Result/View type consolidated
+                             in interfaces.go; each usecase's concrete struct/constructor/
+                             logic in its own file: CreateMovement, UpdateMovement,
+                             CancelMovement, CreateCreditCardPurchase,
+                             CancelCreditCardPurchase, GetMovement, ListMovements (computes
+                             balance), CreateAccount, ListAccounts (computes
+                             balances/returns), ReportAccountBalance, GetCashflow,
+                             ListCurrencies, AddCurrency, TransferBetweenAccounts,
+                             CancelTransfer, SetExchangeRate, ListExchangeRates,
+                             DeleteExchangeRate, ToUSD
 application/sync             SyncService: pushes pending movements to ledger-service via the
                              LedgerGateway port (background ticker + manual trigger)
 infrastructure/sqlite        implements the repositories on the local SQLite DB (source of truth,
@@ -147,6 +157,9 @@ implements.
 | `POST` | `/currencies` | Register a code: `{code}` (2–10 lowercase alphanumerics). Idempotent; returns the updated list. |
 | `POST` | `/transfers` | Move money between two of the user's own accounts. Body: `{from_account_id, to_account_id, amount, description?, user_id?, timestamp?}` (`amount` positive). v1 requires both accounts to hold the same currency. Creates a linked debit (`-amount` on `from_account_id`) and credit (`+amount` on `to_account_id`) atomically, category `transfer`, sharing a `transfer_id`. Returns `{transfer_id, debit, credit}`. |
 | `POST` | `/transfers/{id}/cancel` | Cancel both legs of a transfer (`{id}` is the `transfer_id`). Each leg is voided or reversed independently based on its own `sync_status`, same as `/movements/{id}/cancel`. Returns `{debit, credit}`, each shaped like `POST /movements/{id}/cancel`'s response. |
+| `GET` | `/exchange-rates?user_id=` | The user's exchange-rate history, grouped by currency (current rate + full history, newest `effective_from` first). |
+| `POST` | `/exchange-rates` | Set/backfill a currency's rate against USD. Body: `{currency, units_per_usd, user_id?, effective_from?}` (`units_per_usd` a decimal string; `effective_from` defaults to today, normalized to midnight UTC). Posting the same `(currency, effective_from)` again replaces that row instead of duplicating it. |
+| `DELETE` | `/exchange-rates/{id}` | Remove a rate row the user owns. |
 
 `amount` is an integer in the smallest currency unit (cents), negative for
 expenses, positive for income, and cannot be zero. Splitting an amount too
@@ -244,7 +257,7 @@ only run against a real database, guarded by `TEST_DATABASE_URL` — unset,
 they're skipped so `go test ./...` still passes offline:
 
 ```bash
-TEST_DATABASE_URL="postgres://user:password@localhost:5432/financial_tracker_test?sslmode=disable" go test ./infrastructure/postgresql/...
+TEST_DATABASE_URL="postgres://user:password@localhost:5432/financial_tracker_test?sslmode=disable" go test ./internal/infrastructure/postgresql/...
 ```
 
 Manually smoke-tested end-to-end: movements created/listed/cancelled with
