@@ -1,6 +1,7 @@
 <script>
 	import '$lib/styles/tokens.css';
 	import Sidebar from '$lib/components/Sidebar.svelte';
+	import QuickAdd from '$lib/components/QuickAdd.svelte';
 
 	let { children } = $props();
 </script>
@@ -10,6 +11,7 @@
 	<div class="app-content">
 		{@render children()}
 	</div>
+	<QuickAdd />
 </div>
 
 <style>
