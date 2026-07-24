@@ -19,11 +19,15 @@ func NewRouter(
 	currencyHandler handlers.CurrencyHandler,
 	transferHandler handlers.TransferHandler,
 	exchangeRateHandler handlers.ExchangeRateHandler,
+	importHandler handlers.ImportHandler,
 	userHandler handlers.UserHandler,
 	authMiddleware AuthMiddleware,
 	allowedOrigin string,
 ) http.Handler {
 	mux := http.NewServeMux()
+
+	mux.HandleFunc("GET /import/movements/spec", importHandler.GetImportSpec)
+	mux.HandleFunc("POST /import/movements", importHandler.ImportMovements)
 
 	mux.HandleFunc("POST /movements", movementHandler.CreateMovement)
 	mux.HandleFunc("GET /movements", func(w http.ResponseWriter, r *http.Request) {

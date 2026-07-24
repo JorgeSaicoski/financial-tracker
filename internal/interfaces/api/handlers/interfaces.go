@@ -22,6 +22,13 @@ type CurrencyHandler interface {
 	AddCurrency(w http.ResponseWriter, r *http.Request)
 }
 
+// ImportHandler exposes BACK-03's CSV history backfill: the spec the
+// frontend renders (not hardcoded) and the import endpoint itself.
+type ImportHandler interface {
+	GetImportSpec(w http.ResponseWriter, r *http.Request)
+	ImportMovements(w http.ResponseWriter, r *http.Request)
+}
+
 // ExchangeRateHandler exposes user-managed, historical exchange rates
 // against USD (BACK-11) — reference data the user maintains themselves,
 // no external rate API involved.

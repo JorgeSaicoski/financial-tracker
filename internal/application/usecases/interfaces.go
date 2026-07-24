@@ -81,6 +81,64 @@ type CreateMovementInput struct {
 	AccountID     *string
 }
 
+// ImportRowInput is one CSV data row (BACK-03), still raw strings — the
+// usecase does all type coercion/validation itself, applying the same
+// rules CreateMovement enforces (category/payment-method validity,
+// account currency match) field by field so a bad row reports exactly
+// which field is wrong.
+type ImportRowInput struct {
+	Date          string
+	Amount        string
+	Currency      string
+	Description   string
+	Category      string
+	PaymentMethod string
+	Account       string // optional; resolved case-insensitively against the user's accounts
+}
+
+// ImportMovementsInput is one CSV file's rows plus the import mode
+// flags.
+type ImportMovementsInput struct {
+	UserID         string
+	Rows           []ImportRowInput
+	DryRun         bool // validate (and report) only; never writes
+	AllowPartial   bool // false (default/strict): any row error aborts the whole file
+	SkipDuplicates bool // exclude flagged duplicate rows from the commit
+}
+
+// ImportRowError is one row's validation failure. Row is 1-based,
+// counting only data rows (the row immediately after the header is row 1).
+type ImportRowError struct {
+	Row     int
+	Field   string
+	Message string
+}
+
+// ImportDuplicate flags a row that matches on (user, date, amount,
+// currency, normalized description) either an already-existing movement
+// (ExistingMovementID set) or an earlier row in the same file
+// (DuplicateOfRow set, 1-based like Row). Duplicates still import by
+// default; ImportMovementsInput.SkipDuplicates excludes them.
+type ImportDuplicate struct {
+	Row                int
+	ExistingMovementID *string
+	DuplicateOfRow     *int
+}
+
+// ImportMovementsResult mirrors POST /import/movements's response.
+// Imported/Skipped describe what happened (a real commit) or what would
+// happen (DryRun) — either way, the same two counts.
+type ImportMovementsResult struct {
+	Imported   int
+	Skipped    int
+	Errors     []ImportRowError
+	Duplicates []ImportDuplicate
+}
+
+type ImportMovementsUseCase interface {
+	Execute(ctx context.Context, input ImportMovementsInput) (ImportMovementsResult, error)
+}
+
 type CreateMovementUseCase interface {
 	Execute(ctx context.Context, input CreateMovementInput) (*dto.MovementDTO, error)
 }

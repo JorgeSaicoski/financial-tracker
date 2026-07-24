@@ -54,6 +54,13 @@ Beyond movements, the tracker knows about:
   a float. Backing the (not yet built) purchasing-power report; posting
   the same currency + effective date again backfills/corrects that row
   instead of duplicating it.
+- **CSV history import** (BACK-03) — users export/scan their bank
+  statements, hand them to any AI along with `GET /import/movements/spec`'s
+  published model, and upload the result via `POST /import/movements` to
+  backfill history. Every row is validated before anything writes
+  (strict by default: any bad row imports nothing), and rows matching an
+  existing movement or another row in the same file are flagged as
+  duplicates rather than silently re-imported.
 
 Backend layout follows Clean Architecture (see `CleanExampleGo` for the
 reference pattern this was modeled on): the **domain** layer holds pure
@@ -141,6 +148,8 @@ implements.
 
 | Method | Path | Purpose |
 |---|---|---|
+| `GET` | `/import/movements/spec?user_id=` | BACK-03: the CSV history-import model — columns (with real allowed values: registered currencies, categories, payment methods, the user's own account names) plus a ready-to-copy template. The frontend renders this instead of hardcoding the spec. |
+| `POST` | `/import/movements?user_id=&dry_run=&allow_partial=&skip_duplicates=` | Import a CSV backstop (multipart `file` field or a raw `text/csv` body; header `date,amount,currency,description,category,payment_method,account`, max 1 MiB / 10k rows). Validates every row first; `dry_run=true` reports without writing. Default **strict**: any row error imports nothing (`allow_partial=true` imports the valid rows and skips the rest). Rows matching an existing movement or an earlier row in the same file on `(date, amount, currency, normalized description)` are flagged in `duplicates[]` but still import by default — `skip_duplicates=true` excludes them. Response: `{imported, skipped, errors[], duplicates[]}`. |
 | `POST` | `/movements` | Create a movement. Body: `{amount, currency?, user_id?, description?, category?, payment_method?, installments?, account_id?}`. With `payment_method="credit_card"` and `installments > 1`, splits into monthly installments and returns the purchase + its movements (no `account_id` allowed in that case). An `account_id`'s currency must match the movement's. |
 | `GET` | `/movements?id={uuid}` | Fetch one movement. |
 | `GET` | `/movements?user_id={uuid}&currency=&from=&to=&limit=&offset=` | List movements + computed `balance` (voided rows excluded from the balance). `from`/`to` take `YYYY-MM-DD` or RFC 3339 (`to` is inclusive when date-only). Each row carries `status` and `sync_status`. |
