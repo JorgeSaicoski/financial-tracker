@@ -1,4 +1,6 @@
 <script>
+	import { authState, logout } from '$lib/auth.svelte.js';
+
 	let { onSync } = $props();
 
 	let syncing = $state(false);
@@ -11,13 +13,27 @@
 			syncing = false;
 		}
 	}
+
+	// From the ID token's claims (not a separate userinfo call) — see
+	// auth.svelte.js.
+	const displayName = $derived(
+		authState.user?.profile?.name ?? authState.user?.profile?.email ?? ''
+	);
 </script>
 
 <header>
 	<h1>Financial Tracker</h1>
-	<button class="sync" onclick={handleClick} disabled={syncing}>
-		{#if syncing}Syncing…{:else}⟳ Sync now{/if}
-	</button>
+	<div class="header-actions">
+		{#if authState.authEnabled && displayName}
+			<span class="user-chip">{displayName}</span>
+		{/if}
+		<button class="sync" onclick={handleClick} disabled={syncing}>
+			{#if syncing}Syncing…{:else}⟳ Sync now{/if}
+		</button>
+		{#if authState.authEnabled}
+			<button class="ghost" onclick={logout}>Log out</button>
+		{/if}
+	</div>
 </header>
 
 <style>
@@ -33,6 +49,17 @@
 		margin: 0;
 		color: var(--color-primary);
 		letter-spacing: -0.02em;
+	}
+
+	.header-actions {
+		display: flex;
+		align-items: center;
+		gap: 0.6rem;
+	}
+
+	.user-chip {
+		font: var(--text-label);
+		color: var(--color-text-secondary);
 	}
 
 	.sync {

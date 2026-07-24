@@ -126,8 +126,17 @@ implements.
 
 ## MVP scope / known limitations
 
-- **No auth.** Every request without an explicit `user_id` is attributed to
-  a fixed dev user (`DEFAULT_USER_ID`). Fine for single-user personal use.
+- **No server-side auth enforcement yet.** Every request without an
+  explicit `user_id` is attributed to a fixed dev user (`DEFAULT_USER_ID`).
+  Fine for single-user personal use. The frontend has a full OIDC (Authentik)
+  login flow (`web/src/lib/auth.svelte.js`) gated by `GET /config`'s
+  `auth_enabled` flag (`AUTH_ENABLED` env, default `false`) — but that flag
+  only controls whether the *frontend* shows a login guard; the API itself
+  doesn't verify tokens until the separate JWT-middleware work lands
+  (`OIDC_ISSUER_URL`/`AUTH_DISABLED`, see the auth PR). Don't set
+  `AUTH_ENABLED=true` in a real deployment until that's merged and live —
+  today it would just make the frontend ask for a login that nothing
+  server-side checks.
 - **No idempotency key on sync.** If a push to ledger-service succeeds but
   the response is lost, the retry duplicates the transaction there. The
   real fix is idempotency-key support in ledger-service's API (follow-up
@@ -141,6 +150,7 @@ implements.
 
 | Method | Path | Purpose |
 |---|---|---|
+| `GET` | `/config` | Unauthenticated. `{standalone, auth_enabled}` — what the frontend reads before deciding whether to show the login guard. |
 | `POST` | `/movements` | Create a movement. Body: `{amount, currency?, user_id?, description?, category?, payment_method?, installments?, account_id?}`. With `payment_method="credit_card"` and `installments > 1`, splits into monthly installments and returns the purchase + its movements (no `account_id` allowed in that case). An `account_id`'s currency must match the movement's. |
 | `GET` | `/movements?id={uuid}` | Fetch one movement. |
 | `GET` | `/movements?user_id={uuid}&currency=&from=&to=&limit=&offset=` | List movements + computed `balance` (voided rows excluded from the balance). `from`/`to` take `YYYY-MM-DD` or RFC 3339 (`to` is inclusive when date-only). Each row carries `status` and `sync_status`. |
@@ -232,6 +242,10 @@ already set in `docker-compose.yml` — without it `npm install` fails with
    Opens on `:5173`. CORS is wide open in `internal/interfaces/api/router.go` for
    local dev — tighten before deploying anywhere real.
 
+   `PUBLIC_OIDC_ISSUER`/`PUBLIC_OIDC_CLIENT_ID` (`web/.env.example`) are
+   only needed when the API's `AUTH_ENABLED=true`; leave them blank for
+   the default no-auth flow.
+
 ### Deploying (PostgreSQL, production images)
 
 The stack above is dev-only (SQLite, Svelte dev server). For a deployable
@@ -268,6 +282,8 @@ balance netting to zero after a full purchase cancel.
 ## Roadmap
 
 - Idempotency keys for sync pushes (needs a ledger-service API change).
-- Real auth instead of `DEFAULT_USER_ID`.
+- Server-side JWT verification (the frontend's OIDC login flow already
+  exists; the API doesn't check tokens yet — see the MVP limitations note
+  above) instead of `DEFAULT_USER_ID`.
 - Installment dates aligned to a card's real statement/closing day.
 - Backfill script importing pre-SQLite history from ledger-service.

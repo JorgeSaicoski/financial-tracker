@@ -12,9 +12,14 @@ func NewRouter(
 	currencyHandler handlers.CurrencyHandler,
 	transferHandler handlers.TransferHandler,
 	exchangeRateHandler handlers.ExchangeRateHandler,
+	configHandler handlers.ConfigHandler,
 	allowedOrigin string,
 ) http.Handler {
 	mux := http.NewServeMux()
+
+	// Unauthenticated by design (see config_handler.go): the frontend
+	// calls this before it has a token to decide whether it needs one.
+	mux.HandleFunc("GET /config", configHandler.GetConfig)
 
 	mux.HandleFunc("POST /movements", movementHandler.CreateMovement)
 	mux.HandleFunc("GET /movements", func(w http.ResponseWriter, r *http.Request) {
@@ -56,7 +61,7 @@ func withCORS(next http.Handler, allowedOrigin string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)

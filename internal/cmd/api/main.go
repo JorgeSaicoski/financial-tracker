@@ -37,6 +37,16 @@ func main() {
 
 	log := applogger.New()
 
+	// FRONT-04's GET /config seed: AUTH_ENABLED (default false) is
+	// deliberately its own flag, not BACK-02's AUTH_DISABLED (PR #16,
+	// unmerged as of this writing) — so this doesn't depend on unmerged
+	// auth work landing first. Defaulting to false keeps today's no-auth
+	// local dev flow working unchanged; a real deployment sets it to true
+	// once BACK-02's JWT middleware is live and OIDC_ISSUER_URL is
+	// configured. `standalone` is hardcoded false until BACK-09 exists.
+	authEnabled := boolEnvOr(log, "AUTH_ENABLED", false)
+	const standalone = false
+
 	syncInterval := durationEnvOr(log, "SYNC_INTERVAL", 30*time.Second)
 	retryCooldown := durationEnvOr(log, "SYNC_RETRY_COOLDOWN", 60*time.Second)
 
@@ -143,8 +153,9 @@ func main() {
 	currencyHandler := handlers.NewCurrencyHandler(listCurrencies, addCurrency, log)
 	transferHandler := handlers.NewTransferHandler(transferBetweenAccounts, cancelTransfer, defaultUserID, log)
 	exchangeRateHandler := handlers.NewExchangeRateHandler(setExchangeRate, listExchangeRates, deleteExchangeRate, defaultUserID, log)
+	configHandler := handlers.NewConfigHandler(standalone, authEnabled, log)
 
-	router := api.NewRouter(movementHandler, accountHandler, currencyHandler, transferHandler, exchangeRateHandler, corsAllowedOrigin)
+	router := api.NewRouter(movementHandler, accountHandler, currencyHandler, transferHandler, exchangeRateHandler, configHandler, corsAllowedOrigin)
 
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
@@ -156,7 +167,7 @@ func main() {
 	}
 	addr := ":" + port
 	log.Info("financial-tracker API listening on %s (db driver %s at %s, syncing to ledger-service at %s every %s)", addr, dbDriver, dbDescription, ledgerServiceURL, syncInterval)
-	log.Info("endpoints: POST /movements | GET /movements | PATCH /movements/{id} | POST /movements/{id}/cancel | POST /credit-card-purchases/{id}/cancel | POST /sync | GET /categories | GET /cashflow | GET|POST /accounts | POST /accounts/{id}/balance | GET|POST /currencies | POST /transfers | POST /transfers/{id}/cancel | GET|POST /exchange-rates | DELETE /exchange-rates/{id}")
+	log.Info("endpoints: GET /config | POST /movements | GET /movements | PATCH /movements/{id} | POST /movements/{id}/cancel | POST /credit-card-purchases/{id}/cancel | POST /sync | GET /categories | GET /cashflow | GET|POST /accounts | POST /accounts/{id}/balance | GET|POST /currencies | POST /transfers | POST /transfers/{id}/cancel | GET|POST /exchange-rates | DELETE /exchange-rates/{id}")
 
 	if err := http.ListenAndServe(addr, router); err != nil {
 		log.Error("server failed: %v", err)
@@ -169,6 +180,19 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func boolEnvOr(log applogger.Logger, key string, fallback bool) bool {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return fallback
+	}
+	b, err := strconv.ParseBool(raw)
+	if err != nil {
+		log.Error("invalid %s %q, using default %t", key, raw, fallback)
+		return fallback
+	}
+	return b
 }
 
 func durationEnvOr(log applogger.Logger, key string, fallback time.Duration) time.Duration {
