@@ -31,6 +31,14 @@ type ExchangeRateHandler interface {
 	DeleteExchangeRate(w http.ResponseWriter, r *http.Request)
 }
 
+// SettingsHandler exposes a user's own settings (BACK-13): entitlement
+// (operator/billing-controlled, read-only here) and preference
+// (user-controlled — ledger sync on/off today).
+type SettingsHandler interface {
+	GetSettings(w http.ResponseWriter, r *http.Request)
+	PatchSettings(w http.ResponseWriter, r *http.Request)
+}
+
 // MovementHandler exposes financial-tracker's own API. It never talks to
 // the database or ledger-service directly - it only calls application
 // code, which depends on the application repository interfaces.

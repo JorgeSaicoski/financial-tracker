@@ -58,10 +58,17 @@ func (f *fakeRepo) Transact(_ context.Context, fn func(repositories.MovementRepo
 	panic("not used")
 }
 
-func (f *fakeRepo) ListPendingSync(_ context.Context, now time.Time, retryCooldown time.Duration) ([]*dto.MovementDTO, error) {
+func (f *fakeRepo) ListPendingSync(_ context.Context, now time.Time, retryCooldown time.Duration, excludedUserIDs []string) ([]*dto.MovementDTO, error) {
+	excluded := make(map[string]bool, len(excludedUserIDs))
+	for _, uid := range excludedUserIDs {
+		excluded[uid] = true
+	}
 	var out []*dto.MovementDTO
 	for _, m := range f.movements {
-		if m.Status != string(entities.MovementStatusActive) || m.SyncStatus == string(entities.SyncStatusSynced) {
+		if m.Status != string(entities.MovementStatusActive) || (m.SyncStatus != string(entities.SyncStatusPending) && m.SyncStatus != string(entities.SyncStatusFailed)) {
+			continue
+		}
+		if excluded[m.UserID] {
 			continue
 		}
 		if m.Timestamp.After(now) {
@@ -71,6 +78,54 @@ func (f *fakeRepo) ListPendingSync(_ context.Context, now time.Time, retryCooldo
 			continue
 		}
 		out = append(out, m)
+	}
+	return out, nil
+}
+
+func (f *fakeRepo) MarkLocalPending(_ context.Context, userID string) error {
+	for _, m := range f.movements {
+		if m.UserID == userID && m.SyncStatus == string(entities.SyncStatusLocal) {
+			m.SyncStatus = string(entities.SyncStatusPending)
+		}
+	}
+	return nil
+}
+
+// fakeSettingsRepo is an in-memory UserSettingsRepository for sync
+// service tests: only ListSyncDisabledUserIDs matters to the sync loop
+// itself (the usecases package has its own fuller fake with
+// Get/UpdateEnabled for the settings usecases).
+type fakeSettingsRepo struct {
+	disabled map[string]bool
+}
+
+func newFakeSettingsRepo(disabledUserIDs ...string) *fakeSettingsRepo {
+	f := &fakeSettingsRepo{disabled: map[string]bool{}}
+	for _, uid := range disabledUserIDs {
+		f.disabled[uid] = true
+	}
+	return f
+}
+
+func (f *fakeSettingsRepo) Get(_ context.Context, userID string) (*dto.UserSettingsDTO, error) {
+	s := dto.DefaultUserSettings(userID, time.Now().UTC())
+	s.LedgerSyncEnabled = !f.disabled[userID]
+	return s, nil
+}
+
+func (f *fakeSettingsRepo) UpdateEnabled(_ context.Context, userID string, enabled bool) (*dto.UserSettingsDTO, error) {
+	f.disabled[userID] = !enabled
+	s := dto.DefaultUserSettings(userID, time.Now().UTC())
+	s.LedgerSyncEnabled = enabled
+	return s, nil
+}
+
+func (f *fakeSettingsRepo) ListSyncDisabledUserIDs(_ context.Context) ([]string, error) {
+	var out []string
+	for uid, disabled := range f.disabled {
+		if disabled {
+			out = append(out, uid)
+		}
 	}
 	return out, nil
 }
@@ -132,7 +187,7 @@ func TestRunPassSyncsDueMovements(t *testing.T) {
 	repo := newFakeRepo(due, future)
 	gateway := &fakeGateway{}
 
-	sum := NewService(repo, gateway, logger.New(), time.Minute).RunPass(context.Background())
+	sum := NewService(repo, newFakeSettingsRepo(), gateway, logger.New(), time.Minute).RunPass(context.Background())
 
 	if sum.Synced != 1 || sum.Failed != 0 {
 		t.Fatalf("summary = %+v, want 1 synced / 0 failed", sum)
@@ -153,7 +208,7 @@ func TestRunPassRecordsFailures(t *testing.T) {
 	m := pendingMovement("m1", now.Add(-time.Hour))
 	repo := newFakeRepo(m)
 	gateway := &fakeGateway{err: errors.New("connection refused")}
-	service := NewService(repo, gateway, logger.New(), time.Minute)
+	service := NewService(repo, newFakeSettingsRepo(), gateway, logger.New(), time.Minute)
 
 	sum := service.RunPass(context.Background())
 	if sum.Synced != 0 || sum.Failed != 1 {
@@ -177,5 +232,35 @@ func TestRunPassRecordsFailures(t *testing.T) {
 	}
 	if m.SyncStatus != string(entities.SyncStatusSynced) {
 		t.Errorf("movement status = %q, want synced after recovery", m.SyncStatus)
+	}
+}
+
+// TestRunPassSkipsSyncDisabledUsers is BACK-13's acceptance criterion:
+// two users, one with ledger sync disabled — the pass only pushes the
+// enabled user's movements, even though the disabled user's movement is
+// still sitting as "pending" (from before they turned sync off; a
+// currently-live toggle, not the from-creation "local" status).
+func TestRunPassSkipsSyncDisabledUsers(t *testing.T) {
+	now := time.Now().UTC()
+	enabledUser := pendingMovement("enabled-user-movement", now.Add(-time.Hour))
+	enabledUser.UserID = "u-enabled"
+	disabledUser := pendingMovement("disabled-user-movement", now.Add(-time.Hour))
+	disabledUser.UserID = "u-disabled"
+
+	repo := newFakeRepo(enabledUser, disabledUser)
+	gateway := &fakeGateway{}
+	settings := newFakeSettingsRepo("u-disabled")
+	service := NewService(repo, settings, gateway, logger.New(), time.Minute)
+
+	sum := service.RunPassNow(context.Background())
+
+	if sum.Synced != 1 || sum.Failed != 0 {
+		t.Fatalf("summary = %+v, want exactly 1 synced (the enabled user only)", sum)
+	}
+	if enabledUser.SyncStatus != string(entities.SyncStatusSynced) {
+		t.Error("enabled user's movement should have synced")
+	}
+	if disabledUser.SyncStatus != string(entities.SyncStatusPending) {
+		t.Error("disabled user's movement must stay untouched (still pending, just excluded from the pass)")
 	}
 }

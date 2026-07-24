@@ -14,11 +14,12 @@ import (
 type createMovementUseCase struct {
 	repo     repositories.MovementRepository
 	accounts repositories.AccountRepository
+	settings repositories.UserSettingsRepository
 }
 
 // NewCreateMovement returns interface type for dependency injection.
-func NewCreateMovement(repo repositories.MovementRepository, accounts repositories.AccountRepository) CreateMovementUseCase {
-	return &createMovementUseCase{repo: repo, accounts: accounts}
+func NewCreateMovement(repo repositories.MovementRepository, accounts repositories.AccountRepository, settings repositories.UserSettingsRepository) CreateMovementUseCase {
+	return &createMovementUseCase{repo: repo, accounts: accounts, settings: settings}
 }
 
 func (uc *createMovementUseCase) Execute(ctx context.Context, input CreateMovementInput) (*dto.MovementDTO, error) {
@@ -53,6 +54,11 @@ func (uc *createMovementUseCase) Execute(ctx context.Context, input CreateMoveme
 		}
 	}
 
+	syncStatus, err := effectiveSyncStatus(ctx, uc.settings, input.UserID)
+	if err != nil {
+		return nil, err
+	}
+
 	now := time.Now().UTC()
 	movement := &entities.Movement{
 		UserID:        input.UserID,
@@ -63,7 +69,7 @@ func (uc *createMovementUseCase) Execute(ctx context.Context, input CreateMoveme
 		PaymentMethod: paymentMethod,
 		AccountID:     input.AccountID,
 		Status:        entities.MovementStatusActive,
-		SyncStatus:    entities.SyncStatusPending,
+		SyncStatus:    syncStatus,
 		Timestamp:     now,
 		CreatedAt:     now,
 	}
