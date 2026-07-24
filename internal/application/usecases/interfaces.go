@@ -28,6 +28,32 @@ type CreateAccountUseCase interface {
 	Execute(ctx context.Context, input CreateAccountInput) (*dto.AccountDTO, error)
 }
 
+// EnsureUserInput carries what the identity provider asserted about the
+// caller (services.Identity, unpacked so this package doesn't depend on
+// infrastructure/authentik). Called once per request by the auth
+// middleware right after token verification succeeds — never hit
+// directly over HTTP. Idempotent: the first sight of UserID inserts a
+// row, every sight after refreshes the profile fields.
+type EnsureUserInput struct {
+	UserID      string
+	Provider    string
+	ExternalID  string
+	Email       string
+	DisplayName string
+}
+
+type EnsureUserUseCase interface {
+	Execute(ctx context.Context, input EnsureUserInput) (*dto.UserDTO, error)
+}
+
+// GetUserUseCase backs GET /me. By the time any handler runs, the auth
+// middleware's EnsureUser call has already provisioned the row, so
+// ErrNotFound here would only mean a bug in that wiring, not a normal
+// "new user" case.
+type GetUserUseCase interface {
+	Execute(ctx context.Context, userID string) (*dto.UserDTO, error)
+}
+
 type CreateCreditCardPurchaseInput struct {
 	UserID       string
 	TotalAmount  int64

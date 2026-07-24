@@ -53,3 +53,10 @@ type TransferHandler interface {
 	CreateTransfer(w http.ResponseWriter, r *http.Request)
 	CancelTransfer(w http.ResponseWriter, r *http.Request)
 }
+
+// UserHandler exposes the authenticated caller's own profile. There is no
+// create/update endpoint — the row is provisioned and kept in sync by the
+// auth middleware's EnsureUser call (BACK-02), not by a client request.
+type UserHandler interface {
+	Me(w http.ResponseWriter, r *http.Request)
+}

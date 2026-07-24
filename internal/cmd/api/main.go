@@ -70,6 +70,7 @@ func main() {
 		accountRepo      repositories.AccountRepository
 		currencyRepo     repositories.CurrencyRepository
 		exchangeRateRepo repositories.ExchangeRateRepository
+		userRepo         repositories.UserRepository
 	)
 
 	switch dbDriver {
@@ -99,6 +100,7 @@ func main() {
 		accountRepo = postgresql.NewAccountRepository(db)
 		currencyRepo = postgresql.NewCurrencyRepository(db)
 		exchangeRateRepo = postgresql.NewExchangeRateRepository(db)
+		userRepo = postgresql.NewUserRepository(db)
 	case "sqlite":
 		db, err = sqlite.Open(dbPath)
 		if err != nil {
@@ -114,6 +116,7 @@ func main() {
 		accountRepo = sqlite.NewAccountRepository(db)
 		currencyRepo = sqlite.NewCurrencyRepository(db)
 		exchangeRateRepo = sqlite.NewExchangeRateRepository(db)
+		userRepo = sqlite.NewUserRepository(db)
 	default:
 		log.Error("unknown DB_DRIVER %q (want sqlite or postgres)", dbDriver)
 		os.Exit(1)
@@ -142,6 +145,8 @@ func main() {
 	setExchangeRate := usecases.NewSetExchangeRate(exchangeRateRepo, currencyRepo)
 	listExchangeRates := usecases.NewListExchangeRates(exchangeRateRepo)
 	deleteExchangeRate := usecases.NewDeleteExchangeRate(exchangeRateRepo)
+	ensureUser := usecases.NewEnsureUser(userRepo)
+	getUser := usecases.NewGetUser(userRepo)
 
 	movementHandler := handlers.NewMovementHandler(
 		createMovement,
@@ -160,6 +165,7 @@ func main() {
 	currencyHandler := handlers.NewCurrencyHandler(listCurrencies, addCurrency, log)
 	transferHandler := handlers.NewTransferHandler(transferBetweenAccounts, cancelTransfer, log)
 	exchangeRateHandler := handlers.NewExchangeRateHandler(setExchangeRate, listExchangeRates, deleteExchangeRate, log)
+	userHandler := handlers.NewUserHandler(getUser, log)
 
 	// Auth: AUTH_DISABLED is a dev-only escape hatch, off by default. A
 	// deployment that leaves OIDC_ISSUER_URL unset without explicitly
@@ -168,18 +174,18 @@ func main() {
 	var authMiddleware api.AuthMiddleware
 	if authDisabled {
 		log.Info("AUTH_DISABLED=true: skipping Authentik token verification — every request is attributed to DEFAULT_USER_ID=%s. Do not use this in a real deployment.", defaultUserID)
-		authMiddleware = api.DevUserMiddleware(defaultUserID)
+		authMiddleware = api.DevUserMiddleware(defaultUserID, ensureUser, log)
 	} else {
 		if oidcIssuerURL == "" {
 			log.Error("OIDC_ISSUER_URL is required unless AUTH_DISABLED=true")
 			os.Exit(1)
 		}
 		verifier := authentik.NewVerifier(oidcIssuerURL, oidcAudience, oidcJWKSURL, http.DefaultClient, log)
-		authMiddleware = api.Middleware(verifier, log)
+		authMiddleware = api.Middleware(verifier, ensureUser, log)
 		log.Info("auth: validating Authorization bearer tokens against OIDC issuer %s (audience %q)", oidcIssuerURL, oidcAudience)
 	}
 
-	router := api.NewRouter(movementHandler, accountHandler, currencyHandler, transferHandler, exchangeRateHandler, authMiddleware, corsAllowedOrigin)
+	router := api.NewRouter(movementHandler, accountHandler, currencyHandler, transferHandler, exchangeRateHandler, userHandler, authMiddleware, corsAllowedOrigin)
 
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
@@ -191,7 +197,7 @@ func main() {
 	}
 	addr := ":" + port
 	log.Info("financial-tracker API listening on %s (db driver %s at %s, syncing to ledger-service at %s every %s)", addr, dbDriver, dbDescription, ledgerServiceURL, syncInterval)
-	log.Info("endpoints: POST /movements | GET /movements | PATCH /movements/{id} | POST /movements/{id}/cancel | POST /credit-card-purchases/{id}/cancel | POST /sync | GET /categories | GET /cashflow | GET|POST /accounts | POST /accounts/{id}/balance | GET|POST /currencies | POST /transfers | POST /transfers/{id}/cancel | GET|POST /exchange-rates | DELETE /exchange-rates/{id}")
+	log.Info("endpoints: POST /movements | GET /movements | PATCH /movements/{id} | POST /movements/{id}/cancel | POST /credit-card-purchases/{id}/cancel | POST /sync | GET /categories | GET /cashflow | GET|POST /accounts | POST /accounts/{id}/balance | GET|POST /currencies | POST /transfers | POST /transfers/{id}/cancel | GET|POST /exchange-rates | DELETE /exchange-rates/{id} | GET /me")
 
 	if err := http.ListenAndServe(addr, router); err != nil {
 		log.Error("server failed: %v", err)

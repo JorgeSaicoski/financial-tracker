@@ -1,8 +1,10 @@
 // Package authentik implements the application layer's
 // services.IdentityVerifier port against Authentik (or any other
 // spec-compliant OIDC provider): it discovers/fetches a JWKS, verifies a
-// JWT's signature/iss/exp/aud, and maps the token's `sub` claim to
-// financial-tracker's internal lowercase-UUID user_id. This is the only
+// JWT's signature/iss/exp/aud, and maps the token's claims (via
+// entities.Claims) to a services.Identity — `sub` becomes
+// financial-tracker's internal lowercase-UUID user_id, `email`/`name`
+// carry through for EnsureUserUseCase to persist. This is the only
 // package that knows OIDC/JWT/JWKS/Authentik exist — everything else
 // (interfaces/api's auth middleware, cmd/api's wiring) depends only on
 // services.IdentityVerifier, so swapping in a different identity provider
@@ -23,6 +25,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 
 	"github.com/JorgeSaicoski/financial-tracker/internal/application/services"
+	"github.com/JorgeSaicoski/financial-tracker/internal/infrastructure/authentik/entities"
 	"github.com/JorgeSaicoski/financial-tracker/internal/pkg/id"
 	"github.com/JorgeSaicoski/financial-tracker/internal/pkg/logger"
 )
@@ -48,12 +51,15 @@ var allowedSigningMethods = []string{
 
 // Verifier implements services.IdentityVerifier by validating a JWT
 // against an OIDC issuer's published JWKS: signature, iss, exp (both via
-// jwt/v5's default validation) and aud (when audience is configured).
+// jwt/v5's default validation) and aud (when audience is configured). It
+// uses Client for the HTTP mechanics (discovery, JWKS fetch) the same way
+// ledgerservice.gateway uses ledgerservice.Client — this is the adapter,
+// Client is the transport.
 type Verifier struct {
-	issuerURL  string
-	audience   string
-	httpClient *http.Client
-	log        logger.Logger
+	client    *Client
+	issuerURL string
+	audience  string
+	log       logger.Logger
 
 	mu        sync.Mutex
 	jwksURL   string // resolved once (via discovery or jwksURLOverride), then reused
@@ -70,15 +76,12 @@ var _ services.IdentityVerifier = (*Verifier)(nil)
 // not checked (see cmd/api/main.go's OIDC_AUDIENCE handling for why
 // that's still safe in this deployment's default configuration).
 func NewVerifier(issuerURL, audience, jwksURLOverride string, httpClient *http.Client, log logger.Logger) *Verifier {
-	if httpClient == nil {
-		httpClient = http.DefaultClient
-	}
 	return &Verifier{
-		issuerURL:  issuerURL,
-		audience:   audience,
-		jwksURL:    jwksURLOverride,
-		httpClient: httpClient,
-		log:        log,
+		client:    NewClient(issuerURL, httpClient),
+		issuerURL: issuerURL,
+		audience:  audience,
+		jwksURL:   jwksURLOverride,
+		log:       log,
 	}
 }
 
@@ -88,10 +91,10 @@ var (
 )
 
 // Verify implements services.IdentityVerifier.
-func (v *Verifier) Verify(ctx context.Context, token string) (string, error) {
+func (v *Verifier) Verify(ctx context.Context, token string) (services.Identity, error) {
 	raw := strings.TrimSpace(token)
 	if raw == "" {
-		return "", errEmptyToken
+		return services.Identity{}, errEmptyToken
 	}
 
 	opts := []jwt.ParserOption{
@@ -107,23 +110,32 @@ func (v *Verifier) Verify(ctx context.Context, token string) (string, error) {
 		return v.keyFunc(ctx, t)
 	}, opts...)
 	if err != nil {
-		return "", fmt.Errorf("invalid token: %w", err)
+		return services.Identity{}, fmt.Errorf("invalid token: %w", err)
 	}
-	claims, ok := parsed.Claims.(jwt.MapClaims)
+	mapClaims, ok := parsed.Claims.(jwt.MapClaims)
 	if !ok {
-		return "", errors.New("unexpected claims type")
-	}
-	sub, _ := claims["sub"].(string)
-	sub = strings.TrimSpace(sub)
-	if sub == "" {
-		return "", errMissingSubject
+		return services.Identity{}, errors.New("unexpected claims type")
 	}
 
-	userID, err := deriveUserID(sub)
-	if err != nil {
-		return "", fmt.Errorf("deriving user_id from sub: %w", err)
+	claims := entities.Claims{
+		Sub:   stringClaim(mapClaims, "sub"),
+		Email: stringClaim(mapClaims, "email"),
+		Name:  stringClaim(mapClaims, "name"),
 	}
-	return userID, nil
+	if claims.Sub == "" {
+		return services.Identity{}, errMissingSubject
+	}
+
+	userID, err := deriveUserID(claims.Sub)
+	if err != nil {
+		return services.Identity{}, fmt.Errorf("deriving user_id from sub: %w", err)
+	}
+	return claims.ToIdentity(userID), nil
+}
+
+func stringClaim(claims jwt.MapClaims, key string) string {
+	s, _ := claims[key].(string)
+	return strings.TrimSpace(s)
 }
 
 // deriveUserID maps an OIDC `sub` claim to the lowercase UUID
@@ -190,14 +202,14 @@ func (v *Verifier) refreshKeys(ctx context.Context) error {
 	v.mu.Unlock()
 
 	if jwksURL == "" {
-		u, err := discoverJWKSURL(ctx, v.httpClient, v.issuerURL)
+		u, err := v.client.DiscoverJWKSURL(ctx)
 		if err != nil {
 			return err
 		}
 		jwksURL = u
 	}
 
-	keys, err := fetchJWKS(ctx, v.httpClient, jwksURL)
+	keys, err := v.client.FetchJWKS(ctx, jwksURL)
 	if err != nil {
 		return err
 	}

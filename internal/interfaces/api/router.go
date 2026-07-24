@@ -19,6 +19,7 @@ func NewRouter(
 	currencyHandler handlers.CurrencyHandler,
 	transferHandler handlers.TransferHandler,
 	exchangeRateHandler handlers.ExchangeRateHandler,
+	userHandler handlers.UserHandler,
 	authMiddleware AuthMiddleware,
 	allowedOrigin string,
 ) http.Handler {
@@ -52,6 +53,8 @@ func NewRouter(
 	mux.HandleFunc("GET /exchange-rates", exchangeRateHandler.ListExchangeRates)
 	mux.HandleFunc("POST /exchange-rates", exchangeRateHandler.SetExchangeRate)
 	mux.HandleFunc("DELETE /exchange-rates/{id}", exchangeRateHandler.DeleteExchangeRate)
+
+	mux.HandleFunc("GET /me", userHandler.Me)
 
 	// Auth wraps every route: user_id always comes from the verified
 	// token (or the AUTH_DISABLED dev stand-in), never from a request
