@@ -10,14 +10,6 @@ import (
 	"github.com/JorgeSaicoski/financial-tracker/internal/pkg/logger"
 )
 
-// TransferHandler exposes account-to-account transfers: a linked
-// debit/credit pair of movements that nets to zero, so it never changes
-// the user's overall net worth.
-type TransferHandler interface {
-	CreateTransfer(w http.ResponseWriter, r *http.Request)
-	CancelTransfer(w http.ResponseWriter, r *http.Request)
-}
-
 type transferHandler struct {
 	createTransfer usecases.TransferBetweenAccountsUseCase
 	cancelTransfer usecases.CancelTransferUseCase

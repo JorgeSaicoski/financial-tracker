@@ -8,10 +8,6 @@ import (
 	apperrors "github.com/JorgeSaicoski/financial-tracker/internal/pkg/errors"
 )
 
-type GetMovementUseCase interface {
-	Execute(ctx context.Context, id string) (*dto.MovementDTO, error)
-}
-
 type getMovementUseCase struct {
 	repo repositories.MovementRepository
 }

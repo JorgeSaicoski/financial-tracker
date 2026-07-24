@@ -11,24 +11,6 @@ import (
 	apperrors "github.com/JorgeSaicoski/financial-tracker/internal/pkg/errors"
 )
 
-// CreateMovementInput carries the caller-supplied fields for a single
-// movement. Category and PaymentMethod default to "other" when empty so
-// pre-existing clients that only send an amount keep working; both are
-// validated against the domain's fixed lists inside the usecase.
-type CreateMovementInput struct {
-	UserID        string
-	Amount        int64
-	Currency      string
-	Description   string
-	Category      string
-	PaymentMethod string
-	AccountID     *string
-}
-
-type CreateMovementUseCase interface {
-	Execute(ctx context.Context, input CreateMovementInput) (*dto.MovementDTO, error)
-}
-
 type createMovementUseCase struct {
 	repo     repositories.MovementRepository
 	accounts repositories.AccountRepository

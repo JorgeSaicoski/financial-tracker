@@ -14,21 +14,6 @@ import (
 	"github.com/JorgeSaicoski/financial-tracker/internal/pkg/logger"
 )
 
-// MovementHandler exposes financial-tracker's own API. It never talks to
-// the database or ledger-service directly - it only calls application
-// code, which depends on the application repository interfaces.
-type MovementHandler interface {
-	CreateMovement(w http.ResponseWriter, r *http.Request)
-	GetMovement(w http.ResponseWriter, r *http.Request)
-	ListMovements(w http.ResponseWriter, r *http.Request)
-	UpdateMovement(w http.ResponseWriter, r *http.Request)
-	CancelMovement(w http.ResponseWriter, r *http.Request)
-	CancelCreditCardPurchase(w http.ResponseWriter, r *http.Request)
-	Sync(w http.ResponseWriter, r *http.Request)
-	ListCategories(w http.ResponseWriter, r *http.Request)
-	Cashflow(w http.ResponseWriter, r *http.Request)
-}
-
 type movementHandler struct {
 	createMovement usecases.CreateMovementUseCase
 	createPurchase usecases.CreateCreditCardPurchaseUseCase

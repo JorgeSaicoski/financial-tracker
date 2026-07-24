@@ -13,40 +13,6 @@ import (
 	apperrors "github.com/JorgeSaicoski/financial-tracker/internal/pkg/errors"
 )
 
-// UpdateMovementInput carries a PATCH /movements/{id} partial body — a nil
-// field means "leave unchanged". Description/Category/PaymentMethod/
-// AccountID are metadata: local-only, always editable regardless of sync
-// status. Amount/Currency/Timestamp are financial: editable in place only
-// before the movement syncs; once synced, editing them produces a
-// reversal + a replacement instead (see UpdateMovementResult).
-type UpdateMovementInput struct {
-	Description   *string
-	Category      *string
-	PaymentMethod *string
-	AccountID     *string // a pointer to "" clears the account
-	Amount        *int64
-	Currency      *string
-	Timestamp     *time.Time
-}
-
-// UpdateMovementResult reports how the edit was carried out. A
-// metadata-only edit, or a financial edit on a not-yet-synced movement,
-// updates Movement in place (Reversal/Replacement nil). A financial edit
-// on an already-synced movement leaves Movement untouched other than the
-// reversal link and returns the compensating Reversal plus the
-// Replacement movement carrying the corrected values — mirroring
-// CancelMovementResult's shape for the same reason (ledger-service never
-// deletes).
-type UpdateMovementResult struct {
-	Movement    *dto.MovementDTO
-	Reversal    *dto.MovementDTO
-	Replacement *dto.MovementDTO
-}
-
-type UpdateMovementUseCase interface {
-	Execute(ctx context.Context, id string, input UpdateMovementInput) (UpdateMovementResult, error)
-}
-
 type updateMovementUseCase struct {
 	repo     repositories.MovementRepository
 	accounts repositories.AccountRepository

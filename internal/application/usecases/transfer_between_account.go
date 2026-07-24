@@ -11,33 +11,6 @@ import (
 	"github.com/JorgeSaicoski/financial-tracker/internal/pkg/id"
 )
 
-// TransferBetweenAccountsInput describes a move of money between two of
-// the user's own accounts. Amount is always positive: the debit leg gets
-// -Amount, the credit leg +Amount. A zero Timestamp means "now". v1 is
-// same-currency only.
-type TransferBetweenAccountsInput struct {
-	UserID        string
-	FromAccountID string
-	ToAccountID   string
-	Amount        int64
-	Description   string
-	Timestamp     time.Time
-}
-
-// TransferResult carries both legs of a transfer, linked by TransferID:
-// Debit is the negative leg on FromAccountID, Credit the positive leg on
-// ToAccountID. Together they net to zero, so the transfer never changes
-// net worth.
-type TransferResult struct {
-	TransferID string
-	Debit      *dto.MovementDTO
-	Credit     *dto.MovementDTO
-}
-
-type TransferBetweenAccountsUseCase interface {
-	Execute(ctx context.Context, input TransferBetweenAccountsInput) (TransferResult, error)
-}
-
 type transferBetweenAccountsUseCase struct {
 	movements repositories.MovementRepository
 	accounts  repositories.AccountRepository

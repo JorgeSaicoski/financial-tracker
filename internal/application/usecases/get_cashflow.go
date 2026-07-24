@@ -11,38 +11,6 @@ import (
 	apperrors "github.com/JorgeSaicoski/financial-tracker/internal/pkg/errors"
 )
 
-// CurrencyFlow aggregates the interval's money in / money out for one
-// currency. In and Out are both positive; Net = In - Out. Totals are kept
-// per currency because summing usd and btc together is meaningless.
-type CurrencyFlow struct {
-	Currency string
-	In       int64
-	Out      int64
-	Net      int64
-}
-
-// AccountFlow is the same breakdown for one account. AccountID/Name are
-// empty for movements that weren't assigned to any account.
-type AccountFlow struct {
-	AccountID string
-	Name      string
-	Currency  string
-	In        int64
-	Out       int64
-	Net       int64
-}
-
-type CashflowResult struct {
-	From      time.Time
-	To        time.Time
-	Totals    []CurrencyFlow
-	ByAccount []AccountFlow
-}
-
-type GetCashflowUseCase interface {
-	Execute(ctx context.Context, userID string, from, to time.Time) (CashflowResult, error)
-}
-
 type getCashflowUseCase struct {
 	movements repositories.MovementRepository
 	accounts  repositories.AccountRepository
