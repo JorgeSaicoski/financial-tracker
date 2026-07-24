@@ -12,21 +12,6 @@ import (
 	apperrors "github.com/JorgeSaicoski/financial-tracker/internal/pkg/errors"
 )
 
-// CreateAccountInput carries the caller-supplied fields for a new
-// account. Type defaults to "other" when empty and is validated against
-// the domain's fixed list in the usecase; Currency must already be
-// registered (POST /currencies first for a new one).
-type CreateAccountInput struct {
-	UserID   string
-	Name     string
-	Type     string
-	Currency string
-}
-
-type CreateAccountUseCase interface {
-	Execute(ctx context.Context, input CreateAccountInput) (*dto.AccountDTO, error)
-}
-
 type createAccountUseCase struct {
 	accounts   repositories.AccountRepository
 	currencies repositories.CurrencyRepository

@@ -3,25 +3,11 @@ package usecases
 import (
 	"context"
 
-	"github.com/JorgeSaicoski/financial-tracker/internal/application/dto"
 	"github.com/JorgeSaicoski/financial-tracker/internal/application/repositories"
 	"github.com/JorgeSaicoski/financial-tracker/internal/application/services"
 	"github.com/JorgeSaicoski/financial-tracker/internal/domain/entities"
 	apperrors "github.com/JorgeSaicoski/financial-tracker/internal/pkg/errors"
 )
-
-// CancelCreditCardPurchaseResult reports what happened to each
-// installment: due/synced ones got reversals, not-yet-due ones were just
-// voided (they never reached ledger-service).
-type CancelCreditCardPurchaseResult struct {
-	Purchase  *dto.CreditCardPurchaseDTO
-	Voided    []*dto.MovementDTO
-	Reversals []*dto.MovementDTO
-}
-
-type CancelCreditCardPurchaseUseCase interface {
-	Execute(ctx context.Context, id string) (CancelCreditCardPurchaseResult, error)
-}
 
 type cancelCreditCardPurchaseUseCase struct {
 	purchases repositories.CreditCardPurchaseRepository

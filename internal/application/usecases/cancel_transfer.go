@@ -8,18 +8,6 @@ import (
 	apperrors "github.com/JorgeSaicoski/financial-tracker/internal/pkg/errors"
 )
 
-// CancelTransferResult reports what happened to each leg — same
-// voided/reversal shape as CancelMovementResult, one per leg, since each
-// leg is cancelled independently based on its own sync status.
-type CancelTransferResult struct {
-	Debit  CancelMovementResult
-	Credit CancelMovementResult
-}
-
-type CancelTransferUseCase interface {
-	Execute(ctx context.Context, transferID string) (CancelTransferResult, error)
-}
-
 type cancelTransferUseCase struct {
 	movements repositories.MovementRepository
 	sync      services.SyncTrigger

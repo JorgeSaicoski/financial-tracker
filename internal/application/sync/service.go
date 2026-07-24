@@ -12,7 +12,7 @@ import (
 	"github.com/JorgeSaicoski/financial-tracker/internal/pkg/logger"
 )
 
-type Service struct {
+type service struct {
 	repo          repositories.MovementRepository
 	gateway       services.LedgerGateway
 	log           logger.Logger
@@ -21,8 +21,9 @@ type Service struct {
 	asyncTimeout time.Duration
 }
 
-func NewService(repo repositories.MovementRepository, gateway services.LedgerGateway, log logger.Logger, retryCooldown time.Duration) *Service {
-	return &Service{
+// NewService returns interface type for dependency injection.
+func NewService(repo repositories.MovementRepository, gateway services.LedgerGateway, log logger.Logger, retryCooldown time.Duration) Service {
+	return &service{
 		repo:          repo,
 		gateway:       gateway,
 		log:           log,
@@ -33,16 +34,16 @@ func NewService(repo repositories.MovementRepository, gateway services.LedgerGat
 
 // RunPass syncs due movements, skipping rows attempted within the retry
 // cooldown — this is what the background ticker calls.
-func (s *Service) RunPass(ctx context.Context) services.Summary {
+func (s *service) RunPass(ctx context.Context) services.Summary {
 	return s.run(ctx, s.retryCooldown)
 }
 
 // RunPassNow ignores the cooldown — the user explicitly asked to sync.
-func (s *Service) RunPassNow(ctx context.Context) services.Summary {
+func (s *service) RunPassNow(ctx context.Context) services.Summary {
 	return s.run(ctx, 0)
 }
 
-func (s *Service) run(ctx context.Context, cooldown time.Duration) services.Summary {
+func (s *service) run(ctx context.Context, cooldown time.Duration) services.Summary {
 	var sum services.Summary
 
 	pending, err := s.repo.ListPendingSync(ctx, time.Now().UTC(), cooldown)
@@ -81,7 +82,7 @@ func (s *Service) run(ctx context.Context, cooldown time.Duration) services.Summ
 // TriggerAsync runs one best-effort pass in the background, detached from
 // the caller's request. Used after cancels so a reversal reaches
 // ledger-service promptly without the cancel blocking on it.
-func (s *Service) TriggerAsync() {
+func (s *service) TriggerAsync() {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), s.asyncTimeout)
 		defer cancel()
@@ -90,7 +91,7 @@ func (s *Service) TriggerAsync() {
 }
 
 // Start runs a sync pass every interval until ctx is cancelled.
-func (s *Service) Start(ctx context.Context, interval time.Duration) {
+func (s *service) Start(ctx context.Context, interval time.Duration) {
 	go func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
