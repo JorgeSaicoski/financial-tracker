@@ -1,4 +1,4 @@
-package api
+package authentik
 
 import (
 	"context"
@@ -55,14 +55,14 @@ func discoverJWKSURL(ctx context.Context, client *http.Client, issuerURL string)
 
 	body, err := getBody(ctx, client, discoveryURL)
 	if err != nil {
-		return "", fmt.Errorf("auth: fetching OIDC discovery document %s: %w", discoveryURL, err)
+		return "", fmt.Errorf("authentik: fetching OIDC discovery document %s: %w", discoveryURL, err)
 	}
 	var doc oidcDiscovery
 	if err := json.Unmarshal(body, &doc); err != nil {
-		return "", fmt.Errorf("auth: parsing OIDC discovery document %s: %w", discoveryURL, err)
+		return "", fmt.Errorf("authentik: parsing OIDC discovery document %s: %w", discoveryURL, err)
 	}
 	if doc.JWKSURI == "" {
-		return "", fmt.Errorf("auth: OIDC discovery document %s has no jwks_uri", discoveryURL)
+		return "", fmt.Errorf("authentik: OIDC discovery document %s has no jwks_uri", discoveryURL)
 	}
 	return doc.JWKSURI, nil
 }
@@ -75,11 +75,11 @@ func discoverJWKSURL(ctx context.Context, client *http.Client, issuerURL string)
 func fetchJWKS(ctx context.Context, client *http.Client, jwksURL string) (map[string]crypto.PublicKey, error) {
 	body, err := getBody(ctx, client, jwksURL)
 	if err != nil {
-		return nil, fmt.Errorf("auth: fetching JWKS %s: %w", jwksURL, err)
+		return nil, fmt.Errorf("authentik: fetching JWKS %s: %w", jwksURL, err)
 	}
 	var set jwkSet
 	if err := json.Unmarshal(body, &set); err != nil {
-		return nil, fmt.Errorf("auth: parsing JWKS %s: %w", jwksURL, err)
+		return nil, fmt.Errorf("authentik: parsing JWKS %s: %w", jwksURL, err)
 	}
 
 	keys := make(map[string]crypto.PublicKey, len(set.Keys))
@@ -91,13 +91,13 @@ func fetchJWKS(ctx context.Context, client *http.Client, jwksURL string) (map[st
 		case "RSA":
 			pub, err := parseRSAKey(k)
 			if err != nil {
-				return nil, fmt.Errorf("auth: JWKS %s: key %q: %w", jwksURL, k.Kid, err)
+				return nil, fmt.Errorf("authentik: JWKS %s: key %q: %w", jwksURL, k.Kid, err)
 			}
 			keys[k.Kid] = pub
 		case "EC":
 			pub, err := parseECKey(k)
 			if err != nil {
-				return nil, fmt.Errorf("auth: JWKS %s: key %q: %w", jwksURL, k.Kid, err)
+				return nil, fmt.Errorf("authentik: JWKS %s: key %q: %w", jwksURL, k.Kid, err)
 			}
 			keys[k.Kid] = pub
 		default:

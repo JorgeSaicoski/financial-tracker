@@ -11,6 +11,7 @@ import (
 	"github.com/JorgeSaicoski/financial-tracker/internal/application/repositories"
 	syncapp "github.com/JorgeSaicoski/financial-tracker/internal/application/sync"
 	"github.com/JorgeSaicoski/financial-tracker/internal/application/usecases"
+	"github.com/JorgeSaicoski/financial-tracker/internal/infrastructure/authentik"
 	"github.com/JorgeSaicoski/financial-tracker/internal/infrastructure/ledgerservice"
 	"github.com/JorgeSaicoski/financial-tracker/internal/infrastructure/postgresql"
 	"github.com/JorgeSaicoski/financial-tracker/internal/infrastructure/sqlite"
@@ -173,8 +174,8 @@ func main() {
 			log.Error("OIDC_ISSUER_URL is required unless AUTH_DISABLED=true")
 			os.Exit(1)
 		}
-		authenticator := api.NewAuthenticator(oidcIssuerURL, oidcAudience, oidcJWKSURL, http.DefaultClient, log)
-		authMiddleware = authenticator.Middleware
+		verifier := authentik.NewVerifier(oidcIssuerURL, oidcAudience, oidcJWKSURL, http.DefaultClient, log)
+		authMiddleware = api.Middleware(verifier, log)
 		log.Info("auth: validating Authorization bearer tokens against OIDC issuer %s (audience %q)", oidcIssuerURL, oidcAudience)
 	}
 
