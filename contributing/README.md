@@ -18,9 +18,9 @@ repo right now.
 
 ## How a request flows
 
-The full, corrected layer map — including the `internal/application/dto` layer
-this repo is currently missing — is in [architecture.md](architecture.md).
-Short version:
+The full layer map — including `internal/application/dto`, the layer that
+sits between the application layer and everything above/below it — is in
+[architecture.md](architecture.md). Short version:
 
 ```
 browser (web/src/routes/+page.svelte)
@@ -37,10 +37,11 @@ browser (web/src/routes/+page.svelte)
 
 - **Handlers** never touch repositories directly — they call usecases.
 - **Usecases** never import `database/sql` or `net/http` — and, per
-  `AGENTS.md`, should see `internal/application/dto` types (not `internal/domain/entities`
-  directly) from repositories/services. financial-tracker's code doesn't
-  do this today — see architecture.md's "Current compliance status" —
-  don't copy that shape into new code.
+  `AGENTS.md`, see `internal/application/dto` types (not `internal/domain/entities`
+  directly) from repositories/services. financial-tracker's code already
+  does this — see architecture.md's "Current compliance status" — keep
+  new code typed against `application/dto`, not a domain entity, at any
+  repository/service/usecase contract boundary.
 - **Constructors return interface types** (`NewCreateMovement(...) CreateMovementUseCase`),
   so every layer depends on a contract, and tests swap in fakes.
 - **`internal/cmd/api/main.go`** is the only place concrete implementations meet:
@@ -54,8 +55,8 @@ repo):
 
 | Contract kind | Lives in | Real examples |
 |---|---|---|
-| Application DTOs | `internal/application/dto/` (missing today — see [architecture.md](architecture.md)) | `MovementDTO`, `AccountDTO` |
-| Use-case interfaces + their Input/Result types | `internal/application/usecases/` — **one file per use case**, interface + Input/Result types + the implementation together (CleanExampleGo's actual rule; no consolidated `interfaces.go`) | `create_movement.go` holds `CreateMovementUseCase`, `CreateMovementInput`, and `createMovementUseCase` |
+| Application DTOs | `internal/application/dto/` | `MovementDTO`, `AccountDTO` |
+| Use-case interfaces + their Input/Result types | `internal/application/usecases/interfaces.go` — every use-case contract consolidated in one file (this workspace's amended rule on top of CleanExampleGo's base "one file per use case"; see [architecture.md](architecture.md)) | `interfaces.go` holds `CreateMovementUseCase` and `CreateMovementInput`; `create_movement.go` holds only the concrete `createMovementUseCase` struct/constructor/logic |
 | Repository interfaces | `internal/application/repositories/` (one file per aggregate) | `MovementRepository`, `AccountRepository` |
 | Service ports / cross-service contracts | `internal/application/services/` | `LedgerGateway`, `SyncTrigger`, `SyncRunner` |
 
