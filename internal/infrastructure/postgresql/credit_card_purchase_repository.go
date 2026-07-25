@@ -64,20 +64,44 @@ func (r *creditCardPurchaseRepository) CreateWithInstallments(ctx context.Contex
 
 func (r *creditCardPurchaseRepository) GetByID(ctx context.Context, purchaseID string) (*dto.CreditCardPurchaseDTO, error) {
 	row := r.db.QueryRowContext(ctx, `SELECT `+purchaseColumns+` FROM credit_card_purchases WHERE id = $1`, purchaseID)
+	p, err := scanPurchase(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, apperrors.ErrNotFound
+	}
+	return p, err
+}
 
+func (r *creditCardPurchaseRepository) ListByUser(ctx context.Context, userID string) ([]*dto.CreditCardPurchaseDTO, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT `+purchaseColumns+` FROM credit_card_purchases WHERE user_id = $1 ORDER BY purchase_date DESC`, userID)
+	if err != nil {
+		return nil, fmt.Errorf("postgresql: query purchases: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]*dto.CreditCardPurchaseDTO, 0)
+	for rows.Next() {
+		p, err := scanPurchase(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// scanPurchase adapts one credit_card_purchases row to the application
+// layer's CreditCardPurchaseDTO — shared by GetByID and ListByUser.
+func scanPurchase(row scannable) (*dto.CreditCardPurchaseDTO, error) {
 	var (
 		p           dto.CreditCardPurchaseDTO
 		description sql.NullString
 	)
 	err := row.Scan(&p.ID, &p.UserID, &description, &p.Category, &p.TotalAmount, &p.Currency,
 		&p.InstallmentCount, &p.PurchaseDate, &p.Status, &p.CreatedAt)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, apperrors.ErrNotFound
-	}
 	if err != nil {
-		return nil, fmt.Errorf("postgresql: scan purchase: %w", err)
+		return nil, err
 	}
-
 	p.Description = description.String
 	return &p, nil
 }

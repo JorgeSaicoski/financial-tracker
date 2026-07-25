@@ -52,6 +52,7 @@ func main() {
 		accountRepo      repositories.AccountRepository
 		currencyRepo     repositories.CurrencyRepository
 		exchangeRateRepo repositories.ExchangeRateRepository
+		localArchiveRepo repositories.LocalArchiveSettingsRepository
 	)
 
 	switch dbDriver {
@@ -81,6 +82,7 @@ func main() {
 		accountRepo = postgresql.NewAccountRepository(db)
 		currencyRepo = postgresql.NewCurrencyRepository(db)
 		exchangeRateRepo = postgresql.NewExchangeRateRepository(db)
+		localArchiveRepo = postgresql.NewLocalArchiveSettingsRepository(db)
 	case "sqlite":
 		db, err = sqlite.Open(dbPath)
 		if err != nil {
@@ -96,6 +98,7 @@ func main() {
 		accountRepo = sqlite.NewAccountRepository(db)
 		currencyRepo = sqlite.NewCurrencyRepository(db)
 		exchangeRateRepo = sqlite.NewExchangeRateRepository(db)
+		localArchiveRepo = sqlite.NewLocalArchiveSettingsRepository(db)
 	default:
 		log.Error("unknown DB_DRIVER %q (want sqlite or postgres)", dbDriver)
 		os.Exit(1)
@@ -124,6 +127,10 @@ func main() {
 	setExchangeRate := usecases.NewSetExchangeRate(exchangeRateRepo, currencyRepo)
 	listExchangeRates := usecases.NewListExchangeRates(exchangeRateRepo)
 	deleteExchangeRate := usecases.NewDeleteExchangeRate(exchangeRateRepo)
+	getLocalArchiveSetting := usecases.NewGetLocalArchiveSetting(localArchiveRepo)
+	setLocalArchiveSetting := usecases.NewSetLocalArchiveSetting(localArchiveRepo)
+	exportArchive := usecases.NewExportArchive(accountRepo, movementRepo, purchaseRepo)
+	importArchive := usecases.NewImportArchive(accountRepo, movementRepo, purchaseRepo)
 
 	movementHandler := handlers.NewMovementHandler(
 		createMovement,
@@ -143,8 +150,9 @@ func main() {
 	currencyHandler := handlers.NewCurrencyHandler(listCurrencies, addCurrency, log)
 	transferHandler := handlers.NewTransferHandler(transferBetweenAccounts, cancelTransfer, defaultUserID, log)
 	exchangeRateHandler := handlers.NewExchangeRateHandler(setExchangeRate, listExchangeRates, deleteExchangeRate, defaultUserID, log)
+	archiveHandler := handlers.NewArchiveHandler(getLocalArchiveSetting, setLocalArchiveSetting, exportArchive, importArchive, defaultUserID, log)
 
-	router := api.NewRouter(movementHandler, accountHandler, currencyHandler, transferHandler, exchangeRateHandler, corsAllowedOrigin)
+	router := api.NewRouter(movementHandler, accountHandler, currencyHandler, transferHandler, exchangeRateHandler, archiveHandler, corsAllowedOrigin)
 
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
@@ -156,7 +164,7 @@ func main() {
 	}
 	addr := ":" + port
 	log.Info("financial-tracker API listening on %s (db driver %s at %s, syncing to ledger-service at %s every %s)", addr, dbDriver, dbDescription, ledgerServiceURL, syncInterval)
-	log.Info("endpoints: POST /movements | GET /movements | PATCH /movements/{id} | POST /movements/{id}/cancel | POST /credit-card-purchases/{id}/cancel | POST /sync | GET /categories | GET /cashflow | GET|POST /accounts | POST /accounts/{id}/balance | GET|POST /currencies | POST /transfers | POST /transfers/{id}/cancel | GET|POST /exchange-rates | DELETE /exchange-rates/{id}")
+	log.Info("endpoints: POST /movements | GET /movements | PATCH /movements/{id} | POST /movements/{id}/cancel | POST /credit-card-purchases/{id}/cancel | POST /sync | GET /categories | GET /cashflow | GET|POST /accounts | POST /accounts/{id}/balance | GET|POST /currencies | POST /transfers | POST /transfers/{id}/cancel | GET|POST /exchange-rates | DELETE /exchange-rates/{id} | GET|PUT /settings/local-archive | GET /export/archive | POST /import/archive")
 
 	if err := http.ListenAndServe(addr, router); err != nil {
 		log.Error("server failed: %v", err)

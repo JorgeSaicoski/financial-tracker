@@ -134,3 +134,31 @@ export function addCurrency(code) {
 		body: JSON.stringify({ code })
 	});
 }
+
+// --- Local archive (BACK-15) ---
+
+export function getLocalArchiveSetting() {
+	return request('/settings/local-archive');
+}
+
+export function setLocalArchiveSetting(enabled) {
+	return request('/settings/local-archive', {
+		method: 'PUT',
+		body: JSON.stringify({ local_archive_enabled: enabled })
+	});
+}
+
+// Plaintext account export — the caller (LocalBackupPanel) encrypts this
+// client-side before it's saved anywhere.
+export function exportArchive() {
+	return request('/export/archive');
+}
+
+// bundle is an already-decrypted archive (same shape exportArchive()
+// returns): { accounts, movements, credit_card_purchases }.
+export function importArchive(bundle) {
+	return request('/import/archive', {
+		method: 'POST',
+		body: JSON.stringify(bundle)
+	});
+}
