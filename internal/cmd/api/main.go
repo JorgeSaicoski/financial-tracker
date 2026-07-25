@@ -180,7 +180,11 @@ func main() {
 			log.Error("OIDC_ISSUER_URL is required unless AUTH_DISABLED=true")
 			os.Exit(1)
 		}
-		verifier := authentik.NewVerifier(oidcIssuerURL, oidcAudience, oidcJWKSURL, http.DefaultClient, log)
+		// A dedicated client with a timeout, not http.DefaultClient: a stalled
+		// OIDC discovery/JWKS fetch must not be able to hang request auth
+		// indefinitely.
+		oidcHTTPClient := &http.Client{Timeout: 10 * time.Second}
+		verifier := authentik.NewVerifier(oidcIssuerURL, oidcAudience, oidcJWKSURL, oidcHTTPClient, log)
 		authMiddleware = api.Middleware(verifier, ensureUser, log)
 		log.Info("auth: validating Authorization bearer tokens against OIDC issuer %s (audience %q)", oidcIssuerURL, oidcAudience)
 	}

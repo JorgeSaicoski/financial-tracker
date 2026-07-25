@@ -77,6 +77,12 @@ func withCORS(next http.Handler, allowedOrigin string) http.Handler {
 		w.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		// Vary: Origin so a cache in front of this API (or the browser's own
+		// HTTP cache) doesn't serve one origin's CORS-allowed response to a
+		// different origin — matters even with allowedOrigin="*" today,
+		// since a deployment can tighten it later without a corresponding
+		// cache-config change.
+		w.Header().Add("Vary", "Origin")
 
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)

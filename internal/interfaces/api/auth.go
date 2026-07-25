@@ -55,11 +55,13 @@ func Middleware(verifier services.IdentityVerifier, ensureUser usecases.EnsureUs
 
 func bearerToken(r *http.Request) (string, error) {
 	header := r.Header.Get("Authorization")
+	// RFC 7235: the auth-scheme token ("Bearer") is case-insensitive, so
+	// clients sending "bearer <token>" must still be accepted.
 	const prefix = "Bearer "
-	if !strings.HasPrefix(header, prefix) {
+	if len(header) < len(prefix) || !strings.EqualFold(header[:len(prefix)], prefix) {
 		return "", errMissingAuthHeader
 	}
-	return strings.TrimSpace(strings.TrimPrefix(header, prefix)), nil
+	return strings.TrimSpace(header[len(prefix):]), nil
 }
 
 // DevUserMiddleware is the AUTH_DISABLED=true escape hatch: every request

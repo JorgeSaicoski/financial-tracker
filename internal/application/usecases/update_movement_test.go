@@ -390,3 +390,13 @@ func TestUpdateMovementMissingMovement(t *testing.T) {
 		t.Fatalf("want ErrNotFound, got %v", err)
 	}
 }
+
+func TestUpdateMovementRejectsCrossUserAccess(t *testing.T) {
+	repo := newFakeMovementRepo()
+	repo.add(activeMovement("m1", -500, entities.SyncStatusPending)) // owned by "u1"
+
+	uc := NewUpdateMovement(repo, newFakeAccountRepo(), &fakeSyncTrigger{})
+	if _, err := uc.Execute(context.Background(), "someone-else", "m1", UpdateMovementInput{Description: strPtr("x")}); !errors.Is(err, apperrors.ErrNotFound) {
+		t.Fatalf("want ErrNotFound for another user's movement, got %v", err)
+	}
+}

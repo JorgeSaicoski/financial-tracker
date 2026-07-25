@@ -145,6 +145,16 @@ func TestCancelRejectsBadStates(t *testing.T) {
 	}
 }
 
+func TestCancelMovementRejectsCrossUserAccess(t *testing.T) {
+	repo := newFakeMovementRepo()
+	repo.add(activeMovement("m1", -500, entities.SyncStatusPending)) // owned by "u1"
+
+	_, err := NewCancelMovement(repo, &fakeSyncTrigger{}).Execute(context.Background(), "someone-else", "m1")
+	if !errors.Is(err, apperrors.ErrNotFound) {
+		t.Fatalf("want ErrNotFound for another user's movement, got %v", err)
+	}
+}
+
 func TestCancelledMovementsNetToZeroInBalance(t *testing.T) {
 	repo := newFakeMovementRepo()
 	trigger := &fakeSyncTrigger{}
