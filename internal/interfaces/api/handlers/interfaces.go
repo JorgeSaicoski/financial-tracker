@@ -46,6 +46,15 @@ type MovementHandler interface {
 	Cashflow(w http.ResponseWriter, r *http.Request)
 }
 
+// RecurringRuleHandler exposes recurring movement rules (BACK-07) — rent,
+// salary, subscriptions and the like, generated on schedule by
+// application/recurring rather than re-entered every month.
+type RecurringRuleHandler interface {
+	CreateRecurringRule(w http.ResponseWriter, r *http.Request)
+	ListRecurringRules(w http.ResponseWriter, r *http.Request)
+	UpdateRecurringRule(w http.ResponseWriter, r *http.Request)
+}
+
 // TransferHandler exposes account-to-account transfers: a linked
 // debit/credit pair of movements that nets to zero, so it never changes
 // the user's overall net worth.

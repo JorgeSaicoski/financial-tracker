@@ -389,6 +389,9 @@ func toMovementResponse(m *dto.MovementDTO) interfacedto.MovementResponse {
 	if m.TransferID != nil {
 		resp.TransferID = *m.TransferID
 	}
+	if m.RecurringRuleID != nil {
+		resp.RecurringRuleID = *m.RecurringRuleID
+	}
 	return resp
 }
 

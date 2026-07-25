@@ -12,6 +12,7 @@ func NewRouter(
 	currencyHandler handlers.CurrencyHandler,
 	transferHandler handlers.TransferHandler,
 	exchangeRateHandler handlers.ExchangeRateHandler,
+	recurringRuleHandler handlers.RecurringRuleHandler,
 	allowedOrigin string,
 ) http.Handler {
 	mux := http.NewServeMux()
@@ -44,6 +45,10 @@ func NewRouter(
 	mux.HandleFunc("GET /exchange-rates", exchangeRateHandler.ListExchangeRates)
 	mux.HandleFunc("POST /exchange-rates", exchangeRateHandler.SetExchangeRate)
 	mux.HandleFunc("DELETE /exchange-rates/{id}", exchangeRateHandler.DeleteExchangeRate)
+
+	mux.HandleFunc("GET /recurring-rules", recurringRuleHandler.ListRecurringRules)
+	mux.HandleFunc("POST /recurring-rules", recurringRuleHandler.CreateRecurringRule)
+	mux.HandleFunc("PATCH /recurring-rules/{id}", recurringRuleHandler.UpdateRecurringRule)
 
 	return withCORS(mux, allowedOrigin)
 }

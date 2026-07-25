@@ -136,6 +136,11 @@ implements.
   date; no awareness of a card's real closing/due day.
 - **Ledger-service only stores money facts** (`user_id, amount, currency`):
   description/category/payment method live only in financial-tracker's DB.
+- **`PATCH /recurring-rules/{id}` can't clear `ends_at`.** Setting or
+  changing it works normally; there's no way to send "remove the end
+  date" through this endpoint (an omitted field means "leave unchanged",
+  indistinguishable from "clear it" without a sentinel value this
+  endpoint doesn't define yet).
 
 ## API
 
@@ -160,6 +165,9 @@ implements.
 | `GET` | `/exchange-rates?user_id=` | The user's exchange-rate history, grouped by currency (current rate + full history, newest `effective_from` first). |
 | `POST` | `/exchange-rates` | Set/backfill a currency's rate against USD. Body: `{currency, units_per_usd, user_id?, effective_from?}` (`units_per_usd` a decimal string; `effective_from` defaults to today, normalized to midnight UTC). Posting the same `(currency, effective_from)` again replaces that row instead of duplicating it. |
 | `DELETE` | `/exchange-rates/{id}` | Remove a rate row the user owns. |
+| `GET` | `/recurring-rules?user_id=` | The user's recurring rules (rent, salary, subscriptions) that generate ordinary movements on schedule. |
+| `POST` | `/recurring-rules` | Create a rule. Body: `{amount, currency?, user_id?, description?, category?, payment_method?, account_id?, day_of_month, starts_at?, ends_at?}`. `day_of_month` is `"1"`-`"28"` or `"last"` (never 29-31, so a fixed day never drifts across months of different lengths); `starts_at` defaults to now. |
+| `PATCH` | `/recurring-rules/{id}` | Edit a rule / deactivate it (`{active: false}`) — any edit affects future generations only, movements already generated are never touched. Any subset of `{description, category, payment_method, account_id, amount, currency, day_of_month, ends_at, active}`; `account_id: ""` clears it. There's no way to clear an already-set `ends_at` back to "no end date" through this endpoint. |
 
 `amount` is an integer in the smallest currency unit (cents), negative for
 expenses, positive for income, and cannot be zero. Splitting an amount too
@@ -210,7 +218,9 @@ already set in `docker-compose.yml` — without it `npm install` fails with
    ```
    Listens on `:8081`, stores data at `DB_PATH` (default
    `./data/financial-tracker.db`), syncs to `LEDGER_SERVICE_URL`
-   (default `http://localhost:8080`) every `SYNC_INTERVAL` (default 30s).
+   (default `http://localhost:8080`) every `SYNC_INTERVAL` (default 30s),
+   and generates due recurring-rule movements every `RECURRING_INTERVAL`
+   (default 1h).
 
    Set `DB_DRIVER=postgres` and `DATABASE_URL=postgres://...` to run against
    Postgres instead — `DB_PATH` is then ignored. Both drivers apply their

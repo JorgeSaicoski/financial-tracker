@@ -38,6 +38,7 @@ type MovementResponse struct {
 	CancelsMovementID    string `json:"cancels_movement_id,omitempty"`
 	ReversedByMovementID string `json:"reversed_by_movement_id,omitempty"`
 	TransferID           string `json:"transfer_id,omitempty"`
+	RecurringRuleID      string `json:"recurring_rule_id,omitempty"`
 }
 
 // UpdateMovementRequest is the API request body for PATCH /movements/{id}.

@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	recurringapp "github.com/JorgeSaicoski/financial-tracker/internal/application/recurring"
 	"github.com/JorgeSaicoski/financial-tracker/internal/application/repositories"
 	syncapp "github.com/JorgeSaicoski/financial-tracker/internal/application/sync"
 	"github.com/JorgeSaicoski/financial-tracker/internal/application/usecases"
@@ -39,19 +40,21 @@ func main() {
 
 	syncInterval := durationEnvOr(log, "SYNC_INTERVAL", 30*time.Second)
 	retryCooldown := durationEnvOr(log, "SYNC_RETRY_COOLDOWN", 60*time.Second)
+	recurringInterval := durationEnvOr(log, "RECURRING_INTERVAL", 1*time.Hour)
 
 	// Infrastructure: the local database (SQLite by default, or Postgres
 	// when DB_DRIVER=postgres) is the source of truth; ledger-service is
 	// only reached by the background sync, so requests keep working while
 	// it's down.
 	var (
-		db               *sql.DB
-		err              error
-		movementRepo     repositories.MovementRepository
-		purchaseRepo     repositories.CreditCardPurchaseRepository
-		accountRepo      repositories.AccountRepository
-		currencyRepo     repositories.CurrencyRepository
-		exchangeRateRepo repositories.ExchangeRateRepository
+		db                *sql.DB
+		err               error
+		movementRepo      repositories.MovementRepository
+		purchaseRepo      repositories.CreditCardPurchaseRepository
+		accountRepo       repositories.AccountRepository
+		currencyRepo      repositories.CurrencyRepository
+		exchangeRateRepo  repositories.ExchangeRateRepository
+		recurringRuleRepo repositories.RecurringRuleRepository
 	)
 
 	switch dbDriver {
@@ -81,6 +84,7 @@ func main() {
 		accountRepo = postgresql.NewAccountRepository(db)
 		currencyRepo = postgresql.NewCurrencyRepository(db)
 		exchangeRateRepo = postgresql.NewExchangeRateRepository(db)
+		recurringRuleRepo = postgresql.NewRecurringRuleRepository(db)
 	case "sqlite":
 		db, err = sqlite.Open(dbPath)
 		if err != nil {
@@ -96,6 +100,7 @@ func main() {
 		accountRepo = sqlite.NewAccountRepository(db)
 		currencyRepo = sqlite.NewCurrencyRepository(db)
 		exchangeRateRepo = sqlite.NewExchangeRateRepository(db)
+		recurringRuleRepo = sqlite.NewRecurringRuleRepository(db)
 	default:
 		log.Error("unknown DB_DRIVER %q (want sqlite or postgres)", dbDriver)
 		os.Exit(1)
@@ -105,6 +110,7 @@ func main() {
 	ledgerClient := ledgerservice.NewClient(ledgerServiceURL)
 	ledgerGateway := ledgerservice.NewLedgerGateway(ledgerClient)
 	syncService := syncapp.NewService(movementRepo, ledgerGateway, log, retryCooldown)
+	recurringService := recurringapp.NewService(recurringRuleRepo, log)
 
 	createMovement := usecases.NewCreateMovement(movementRepo, accountRepo)
 	createPurchase := usecases.NewCreateCreditCardPurchase(purchaseRepo)
@@ -124,6 +130,9 @@ func main() {
 	setExchangeRate := usecases.NewSetExchangeRate(exchangeRateRepo, currencyRepo)
 	listExchangeRates := usecases.NewListExchangeRates(exchangeRateRepo)
 	deleteExchangeRate := usecases.NewDeleteExchangeRate(exchangeRateRepo)
+	createRecurringRule := usecases.NewCreateRecurringRule(recurringRuleRepo, accountRepo)
+	listRecurringRules := usecases.NewListRecurringRules(recurringRuleRepo)
+	updateRecurringRule := usecases.NewUpdateRecurringRule(recurringRuleRepo)
 
 	movementHandler := handlers.NewMovementHandler(
 		createMovement,
@@ -143,12 +152,14 @@ func main() {
 	currencyHandler := handlers.NewCurrencyHandler(listCurrencies, addCurrency, log)
 	transferHandler := handlers.NewTransferHandler(transferBetweenAccounts, cancelTransfer, defaultUserID, log)
 	exchangeRateHandler := handlers.NewExchangeRateHandler(setExchangeRate, listExchangeRates, deleteExchangeRate, defaultUserID, log)
+	recurringRuleHandler := handlers.NewRecurringRuleHandler(createRecurringRule, listRecurringRules, updateRecurringRule, defaultUserID, log)
 
-	router := api.NewRouter(movementHandler, accountHandler, currencyHandler, transferHandler, exchangeRateHandler, corsAllowedOrigin)
+	router := api.NewRouter(movementHandler, accountHandler, currencyHandler, transferHandler, exchangeRateHandler, recurringRuleHandler, corsAllowedOrigin)
 
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
 	syncService.Start(ctx, syncInterval)
+	recurringService.Start(ctx, recurringInterval)
 
 	dbDescription := dbPath
 	if dbDriver == "postgres" {
@@ -156,7 +167,7 @@ func main() {
 	}
 	addr := ":" + port
 	log.Info("financial-tracker API listening on %s (db driver %s at %s, syncing to ledger-service at %s every %s)", addr, dbDriver, dbDescription, ledgerServiceURL, syncInterval)
-	log.Info("endpoints: POST /movements | GET /movements | PATCH /movements/{id} | POST /movements/{id}/cancel | POST /credit-card-purchases/{id}/cancel | POST /sync | GET /categories | GET /cashflow | GET|POST /accounts | POST /accounts/{id}/balance | GET|POST /currencies | POST /transfers | POST /transfers/{id}/cancel | GET|POST /exchange-rates | DELETE /exchange-rates/{id}")
+	log.Info("endpoints: POST /movements | GET /movements | PATCH /movements/{id} | POST /movements/{id}/cancel | POST /credit-card-purchases/{id}/cancel | POST /sync | GET /categories | GET /cashflow | GET|POST /accounts | POST /accounts/{id}/balance | GET|POST /currencies | POST /transfers | POST /transfers/{id}/cancel | GET|POST /exchange-rates | DELETE /exchange-rates/{id} | GET|POST /recurring-rules | PATCH /recurring-rules/{id}")
 
 	if err := http.ListenAndServe(addr, router); err != nil {
 		log.Error("server failed: %v", err)
