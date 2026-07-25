@@ -52,9 +52,12 @@
 <section class="accounts card">
 	<div class="section-head">
 		<h2>Accounts</h2>
-		<button class="ghost" onclick={() => (showAddAccount = !showAddAccount)}>
-			{showAddAccount ? 'Close' : '+ Add account'}
-		</button>
+		<div class="head-actions">
+			<a class="ghost" href="/accounts">History</a>
+			<button class="ghost" onclick={() => (showAddAccount = !showAddAccount)}>
+				{showAddAccount ? 'Close' : '+ Add account'}
+			</button>
+		</div>
 	</div>
 
 	{#if showAddAccount}
@@ -128,6 +131,18 @@
 </section>
 
 <style>
+	.head-actions {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+	}
+
+	.head-actions a.ghost {
+		display: inline-flex;
+		align-items: center;
+		text-decoration: none;
+	}
+
 	.add-account {
 		display: flex;
 		gap: 0.6rem;

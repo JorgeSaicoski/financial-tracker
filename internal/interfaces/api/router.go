@@ -34,6 +34,7 @@ func NewRouter(
 	mux.HandleFunc("GET /accounts", accountHandler.ListAccounts)
 	mux.HandleFunc("POST /accounts", accountHandler.CreateAccount)
 	mux.HandleFunc("POST /accounts/{id}/balance", accountHandler.ReportBalance)
+	mux.HandleFunc("GET /accounts/{id}/balance", accountHandler.ListSnapshots)
 
 	mux.HandleFunc("GET /currencies", currencyHandler.ListCurrencies)
 	mux.HandleFunc("POST /currencies", currencyHandler.AddCurrency)
