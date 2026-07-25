@@ -24,14 +24,17 @@ func NewUpdateMovement(repo repositories.MovementRepository, accounts repositori
 	return &updateMovementUseCase{repo: repo, accounts: accounts, sync: sync}
 }
 
-func (uc *updateMovementUseCase) Execute(ctx context.Context, id string, input UpdateMovementInput) (UpdateMovementResult, error) {
-	if id == "" {
+func (uc *updateMovementUseCase) Execute(ctx context.Context, userID, id string, input UpdateMovementInput) (UpdateMovementResult, error) {
+	if userID == "" || id == "" {
 		return UpdateMovementResult{}, apperrors.ErrInvalidInput
 	}
 
 	movementDTO, err := uc.repo.GetByID(ctx, id)
 	if err != nil {
 		return UpdateMovementResult{}, err
+	}
+	if movementDTO.UserID != userID {
+		return UpdateMovementResult{}, apperrors.ErrNotFound
 	}
 	movement := movementDTO.ToEntity()
 	if movement.IsCancelled() {

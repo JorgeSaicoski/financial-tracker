@@ -31,7 +31,7 @@ func TestCancelUnsyncedMovementVoidsLocally(t *testing.T) {
 	trigger := &fakeSyncTrigger{}
 	repo.add(activeMovement("m1", -500, entities.SyncStatusPending))
 
-	result, err := NewCancelMovement(repo, trigger).Execute(context.Background(), "m1")
+	result, err := NewCancelMovement(repo, trigger).Execute(context.Background(), "u1", "m1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestCancelFailedSyncMovementVoidsLocally(t *testing.T) {
 	repo := newFakeMovementRepo()
 	repo.add(activeMovement("m1", -500, entities.SyncStatusFailed))
 
-	result, err := NewCancelMovement(repo, &fakeSyncTrigger{}).Execute(context.Background(), "m1")
+	result, err := NewCancelMovement(repo, &fakeSyncTrigger{}).Execute(context.Background(), "u1", "m1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestCancelSyncedMovementCreatesReversal(t *testing.T) {
 	original := activeMovement("m1", -500, entities.SyncStatusSynced)
 	repo.add(original)
 
-	result, err := NewCancelMovement(repo, trigger).Execute(context.Background(), "m1")
+	result, err := NewCancelMovement(repo, trigger).Execute(context.Background(), "u1", "m1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -138,10 +138,20 @@ func TestCancelRejectsBadStates(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := uc.Execute(context.Background(), tc.id); !errors.Is(err, tc.want) {
+			if _, err := uc.Execute(context.Background(), "u1", tc.id); !errors.Is(err, tc.want) {
 				t.Fatalf("want %v, got %v", tc.want, err)
 			}
 		})
+	}
+}
+
+func TestCancelMovementRejectsCrossUserAccess(t *testing.T) {
+	repo := newFakeMovementRepo()
+	repo.add(activeMovement("m1", -500, entities.SyncStatusPending)) // owned by "u1"
+
+	_, err := NewCancelMovement(repo, &fakeSyncTrigger{}).Execute(context.Background(), "someone-else", "m1")
+	if !errors.Is(err, apperrors.ErrNotFound) {
+		t.Fatalf("want ErrNotFound for another user's movement, got %v", err)
 	}
 }
 
@@ -155,10 +165,10 @@ func TestCancelledMovementsNetToZeroInBalance(t *testing.T) {
 	repo.add(activeMovement("synced-cancelled", -500, entities.SyncStatusSynced))
 	repo.add(activeMovement("unsynced-cancelled", -900, entities.SyncStatusPending))
 
-	if _, err := cancel.Execute(context.Background(), "synced-cancelled"); err != nil {
+	if _, err := cancel.Execute(context.Background(), "u1", "synced-cancelled"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := cancel.Execute(context.Background(), "unsynced-cancelled"); err != nil {
+	if _, err := cancel.Execute(context.Background(), "u1", "unsynced-cancelled"); err != nil {
 		t.Fatal(err)
 	}
 

@@ -34,7 +34,7 @@ func TestCancelPurchaseReversesSyncedAndVoidsRest(t *testing.T) {
 	trigger := &fakeSyncTrigger{}
 	purchase := seedPurchase(t, movements, purchases)
 
-	result, err := NewCancelCreditCardPurchase(purchases, movements, trigger).Execute(context.Background(), purchase.ID)
+	result, err := NewCancelCreditCardPurchase(purchases, movements, trigger).Execute(context.Background(), "u1", purchase.ID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -78,11 +78,11 @@ func TestCancelPurchaseSkipsAlreadyCancelledInstallments(t *testing.T) {
 			syncedID = m.ID
 		}
 	}
-	if _, err := NewCancelMovement(movements, trigger).Execute(context.Background(), syncedID); err != nil {
+	if _, err := NewCancelMovement(movements, trigger).Execute(context.Background(), "u1", syncedID); err != nil {
 		t.Fatal(err)
 	}
 
-	result, err := NewCancelCreditCardPurchase(purchases, movements, trigger).Execute(context.Background(), purchase.ID)
+	result, err := NewCancelCreditCardPurchase(purchases, movements, trigger).Execute(context.Background(), "u1", purchase.ID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -101,13 +101,13 @@ func TestCancelPurchaseRejectsRepeatAndMissing(t *testing.T) {
 	purchase := seedPurchase(t, movements, purchases)
 	uc := NewCancelCreditCardPurchase(purchases, movements, trigger)
 
-	if _, err := uc.Execute(context.Background(), purchase.ID); err != nil {
+	if _, err := uc.Execute(context.Background(), "u1", purchase.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := uc.Execute(context.Background(), purchase.ID); !errors.Is(err, apperrors.ErrConflict) {
+	if _, err := uc.Execute(context.Background(), "u1", purchase.ID); !errors.Is(err, apperrors.ErrConflict) {
 		t.Errorf("second cancel: want ErrConflict, got %v", err)
 	}
-	if _, err := uc.Execute(context.Background(), "nope"); !errors.Is(err, apperrors.ErrNotFound) {
+	if _, err := uc.Execute(context.Background(), "u1", "nope"); !errors.Is(err, apperrors.ErrNotFound) {
 		t.Errorf("missing purchase: want ErrNotFound, got %v", err)
 	}
 }

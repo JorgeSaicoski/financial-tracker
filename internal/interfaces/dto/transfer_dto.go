@@ -5,9 +5,9 @@ import "time"
 // CreateTransferRequest is the API request body for POST /transfers. v1 is
 // same-currency only: FromAccountID and ToAccountID must reference
 // accounts holding the same currency. Timestamp defaults to now when
-// omitted.
+// omitted. user_id is not a field here — like CreateMovementRequest, it
+// comes from the authenticated request's token (BACK-02).
 type CreateTransferRequest struct {
-	UserID        string     `json:"user_id,omitempty"`
 	FromAccountID string     `json:"from_account_id"`
 	ToAccountID   string     `json:"to_account_id"`
 	Amount        int64      `json:"amount"`

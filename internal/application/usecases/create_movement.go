@@ -32,7 +32,10 @@ func (uc *createMovementUseCase) Execute(ctx context.Context, input CreateMoveme
 	}
 
 	// An account holds one currency; a movement in a different currency
-	// would silently corrupt that account's tracked balance.
+	// would silently corrupt that account's tracked balance. Ownership is
+	// checked here too (BACK-02) — without it, any authenticated user
+	// could attach a movement to another user's account by guessing its
+	// id, since currency-match alone doesn't prove ownership.
 	if input.AccountID != nil {
 		account, err := uc.accounts.GetByID(ctx, *input.AccountID)
 		if apperrors.Is(err, apperrors.ErrNotFound) {
@@ -40,6 +43,9 @@ func (uc *createMovementUseCase) Execute(ctx context.Context, input CreateMoveme
 		}
 		if err != nil {
 			return nil, err
+		}
+		if account.UserID != input.UserID {
+			return nil, fmt.Errorf("%w: account not found", apperrors.ErrInvalidInput)
 		}
 		if account.Currency != input.Currency {
 			return nil, fmt.Errorf("%w: movement currency %q does not match account currency %q",

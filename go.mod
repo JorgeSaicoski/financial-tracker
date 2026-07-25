@@ -3,6 +3,7 @@ module github.com/JorgeSaicoski/financial-tracker
 go 1.25.0
 
 require (
+	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/jackc/pgx/v5 v5.10.0
 	modernc.org/sqlite v1.54.0
 )

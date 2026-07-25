@@ -19,14 +19,17 @@ func NewReportAccountBalance(accounts repositories.AccountRepository, movements 
 	return &reportAccountBalanceUseCase{accounts: accounts, movements: movements}
 }
 
-func (uc *reportAccountBalanceUseCase) Execute(ctx context.Context, accountID string, balance int64) (AccountView, error) {
-	if accountID == "" {
+func (uc *reportAccountBalanceUseCase) Execute(ctx context.Context, userID, accountID string, balance int64) (AccountView, error) {
+	if userID == "" || accountID == "" {
 		return AccountView{}, apperrors.ErrInvalidInput
 	}
 
 	account, err := uc.accounts.GetByID(ctx, accountID)
 	if err != nil {
 		return AccountView{}, err
+	}
+	if account.UserID != userID {
+		return AccountView{}, apperrors.ErrNotFound
 	}
 
 	now := time.Now().UTC()
