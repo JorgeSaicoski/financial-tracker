@@ -18,8 +18,8 @@ func NewCancelTransfer(movements repositories.MovementRepository, sync services.
 	return &cancelTransferUseCase{movements: movements, sync: sync}
 }
 
-func (uc *cancelTransferUseCase) Execute(ctx context.Context, transferID string) (CancelTransferResult, error) {
-	if transferID == "" {
+func (uc *cancelTransferUseCase) Execute(ctx context.Context, userID, transferID string) (CancelTransferResult, error) {
+	if userID == "" || transferID == "" {
 		return CancelTransferResult{}, apperrors.ErrInvalidInput
 	}
 
@@ -31,6 +31,12 @@ func (uc *cancelTransferUseCase) Execute(ctx context.Context, transferID string)
 		return CancelTransferResult{}, apperrors.ErrNotFound
 	}
 	if len(legs) != 2 || legs[0].Amount >= 0 || legs[1].Amount <= 0 {
+		return CancelTransferResult{}, apperrors.ErrNotFound
+	}
+	if legs[0].UserID != userID || legs[1].UserID != userID {
+		// Both legs of a transfer always share one user (created that
+		// way by TransferBetweenAccountsUseCase) — either mismatching is
+		// enough to treat the whole transfer as not this caller's.
 		return CancelTransferResult{}, apperrors.ErrNotFound
 	}
 	if legs[0].ToEntity().IsCancelled() && legs[1].ToEntity().IsCancelled() {

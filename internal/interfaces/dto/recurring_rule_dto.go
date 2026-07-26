@@ -3,11 +3,11 @@ package dto
 import "time"
 
 // CreateRecurringRuleRequest is the API request body for
-// POST /recurring-rules. UserID/Category/PaymentMethod default like
+// POST /recurring-rules. UserID always comes from the caller's verified
+// token (BACK-02), never the body. Category/PaymentMethod default like
 // CreateMovementRequest; DayOfMonth is required ("1"-"28" or "last").
 // StartsAt omitted means "now"; EndsAt omitted means "no end date".
 type CreateRecurringRuleRequest struct {
-	UserID        string     `json:"user_id,omitempty"`
 	Amount        int64      `json:"amount"`
 	Currency      string     `json:"currency,omitempty"`
 	Description   string     `json:"description,omitempty"`

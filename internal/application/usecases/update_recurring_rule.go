@@ -19,10 +19,15 @@ func NewUpdateRecurringRule(rules repositories.RecurringRuleRepository) UpdateRe
 	return &updateRecurringRuleUseCase{rules: rules}
 }
 
-func (uc *updateRecurringRuleUseCase) Execute(ctx context.Context, id string, input UpdateRecurringRuleInput) (*dto.RecurringRuleDTO, error) {
+func (uc *updateRecurringRuleUseCase) Execute(ctx context.Context, userID, id string, input UpdateRecurringRuleInput) (*dto.RecurringRuleDTO, error) {
 	existing, err := uc.rules.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
+	}
+	if existing.UserID != userID {
+		// Don't distinguish "doesn't exist" from "exists but isn't
+		// yours" — either way the caller gets a plain 404.
+		return nil, apperrors.ErrNotFound
 	}
 
 	description := existing.Description

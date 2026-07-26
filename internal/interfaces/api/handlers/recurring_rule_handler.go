@@ -6,6 +6,7 @@ import (
 
 	"github.com/JorgeSaicoski/financial-tracker/internal/application/dto"
 	"github.com/JorgeSaicoski/financial-tracker/internal/application/usecases"
+	"github.com/JorgeSaicoski/financial-tracker/internal/interfaces/api/reqctx"
 	interfacedto "github.com/JorgeSaicoski/financial-tracker/internal/interfaces/dto"
 	apperrors "github.com/JorgeSaicoski/financial-tracker/internal/pkg/errors"
 	"github.com/JorgeSaicoski/financial-tracker/internal/pkg/logger"
@@ -16,8 +17,7 @@ type recurringRuleHandler struct {
 	listRules  usecases.ListRecurringRulesUseCase
 	updateRule usecases.UpdateRecurringRuleUseCase
 
-	defaultUserID string
-	log           logger.Logger
+	log logger.Logger
 }
 
 // NewRecurringRuleHandler returns interface type for dependency injection.
@@ -25,30 +25,30 @@ func NewRecurringRuleHandler(
 	createRule usecases.CreateRecurringRuleUseCase,
 	listRules usecases.ListRecurringRulesUseCase,
 	updateRule usecases.UpdateRecurringRuleUseCase,
-	defaultUserID string,
 	log logger.Logger,
 ) RecurringRuleHandler {
 	return &recurringRuleHandler{
-		createRule:    createRule,
-		listRules:     listRules,
-		updateRule:    updateRule,
-		defaultUserID: defaultUserID,
-		log:           log,
+		createRule: createRule,
+		listRules:  listRules,
+		updateRule: updateRule,
+		log:        log,
 	}
 }
 
 // CreateRecurringRule handles POST /recurring-rules.
 func (h *recurringRuleHandler) CreateRecurringRule(w http.ResponseWriter, r *http.Request) {
+	userID, ok := reqctx.UserID(r.Context())
+	if !ok {
+		writeError(h.log, w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
 	var req interfacedto.CreateRecurringRuleRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(h.log, w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
-	userID := req.UserID
-	if userID == "" {
-		userID = h.defaultUserID
-	}
 	var accountID *string
 	if req.AccountID != "" {
 		accountID = &req.AccountID
@@ -79,9 +79,10 @@ func (h *recurringRuleHandler) CreateRecurringRule(w http.ResponseWriter, r *htt
 
 // ListRecurringRules handles GET /recurring-rules.
 func (h *recurringRuleHandler) ListRecurringRules(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("user_id")
-	if userID == "" {
-		userID = h.defaultUserID
+	userID, ok := reqctx.UserID(r.Context())
+	if !ok {
+		writeError(h.log, w, http.StatusUnauthorized, "unauthorized")
+		return
 	}
 
 	rules, err := h.listRules.Execute(r.Context(), userID)
@@ -99,13 +100,19 @@ func (h *recurringRuleHandler) ListRecurringRules(w http.ResponseWriter, r *http
 
 // UpdateRecurringRule handles PATCH /recurring-rules/{id}.
 func (h *recurringRuleHandler) UpdateRecurringRule(w http.ResponseWriter, r *http.Request) {
+	userID, ok := reqctx.UserID(r.Context())
+	if !ok {
+		writeError(h.log, w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
 	var req interfacedto.UpdateRecurringRuleRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(h.log, w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
-	rule, err := h.updateRule.Execute(r.Context(), r.PathValue("id"), usecases.UpdateRecurringRuleInput{
+	rule, err := h.updateRule.Execute(r.Context(), userID, r.PathValue("id"), usecases.UpdateRecurringRuleInput{
 		Description:   req.Description,
 		Category:      req.Category,
 		PaymentMethod: req.PaymentMethod,

@@ -3,13 +3,15 @@ package dto
 import "time"
 
 // CreateMovementRequest is the API request body for POST /movements.
-// UserID and Currency are optional: the handler fills in configured
-// defaults when they're omitted. Description, Category and PaymentMethod
-// are optional too (category/payment_method default to "other").
-// Installments only matters when payment_method is "credit_card": a value
-// above 1 splits the purchase into that many monthly movements.
+// user_id is deliberately not a field here — BACK-02 derives it from the
+// authenticated request's token, never from the body, so a client can't
+// create a movement under another user's id. Currency is optional: the
+// handler fills in the configured default when omitted. Description,
+// Category and PaymentMethod are optional too (category/payment_method
+// default to "other"). Installments only matters when payment_method is
+// "credit_card": a value above 1 splits the purchase into that many
+// monthly movements.
 type CreateMovementRequest struct {
-	UserID        string `json:"user_id,omitempty"`
 	Amount        int64  `json:"amount"`
 	Currency      string `json:"currency,omitempty"`
 	Description   string `json:"description,omitempty"`

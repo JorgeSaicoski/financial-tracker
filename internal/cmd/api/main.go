@@ -12,6 +12,7 @@ import (
 	"github.com/JorgeSaicoski/financial-tracker/internal/application/repositories"
 	syncapp "github.com/JorgeSaicoski/financial-tracker/internal/application/sync"
 	"github.com/JorgeSaicoski/financial-tracker/internal/application/usecases"
+	"github.com/JorgeSaicoski/financial-tracker/internal/infrastructure/authentik"
 	"github.com/JorgeSaicoski/financial-tracker/internal/infrastructure/ledgerservice"
 	"github.com/JorgeSaicoski/financial-tracker/internal/infrastructure/postgresql"
 	"github.com/JorgeSaicoski/financial-tracker/internal/infrastructure/sqlite"
@@ -23,9 +24,10 @@ import (
 func main() {
 	ledgerServiceURL := envOr("LEDGER_SERVICE_URL", "http://localhost:8080")
 
-	// MVP has no auth yet: every request without an explicit user_id is
-	// attributed to this fixed dev user. Must be a lowercase UUID, since
-	// that's what ledger-service's validator requires.
+	// DEFAULT_USER_ID is now only a dev-mode escape hatch (see
+	// authDisabled below) — real requests get user_id from their verified
+	// Authentik token (BACK-02). Must be a lowercase UUID, since that's
+	// what ledger-service's validator requires.
 	defaultUserID := envOr("DEFAULT_USER_ID", "00000000-0000-0000-0000-000000000001")
 	defaultCurrency := envOr("DEFAULT_CURRENCY", "usd")
 	port := envOr("PORT", "8081")
@@ -37,6 +39,33 @@ func main() {
 	dbDriver := envOr("DB_DRIVER", "sqlite")
 
 	log := applogger.New()
+
+	// authDisabled=true skips Authentik token verification entirely and
+	// attributes every request to defaultUserID — for local dev and
+	// single-user self-hosting only. Defaults to false: a deployment that
+	// forgets to set OIDC_ISSUER_URL fails loudly at startup instead of
+	// silently running with no auth.
+	authDisabled := boolEnvOr(log, "AUTH_DISABLED", false)
+	oidcIssuerURL := os.Getenv("OIDC_ISSUER_URL")
+	oidcJWKSURL := os.Getenv("OIDC_JWKS_URL") // optional override, skips discovery
+	// Defaults to PUBLIC_OIDC_CLIENT_ID (deploy/.env.example's existing
+	// var, already "financial-tracker" in the deployed Authentik
+	// blueprint) since Authentik sets a token's aud to the requesting
+	// client_id — so aud validation works out of the box in this stack
+	// without a separate env var to keep in sync. Set OIDC_AUDIENCE
+	// explicitly to override.
+	oidcAudience := envOr("OIDC_AUDIENCE", envOr("PUBLIC_OIDC_CLIENT_ID", ""))
+
+	// FRONT-04's GET /config: tells the frontend whether to enforce its
+	// own login guard. Now that BACK-02's real server-side verification
+	// exists, this is just the inverse of AUTH_DISABLED rather than a
+	// separate flag — the frontend guard and the API's own enforcement
+	// stay in lockstep with nothing to keep in sync (this folds together
+	// the two flags the FRONT-04 PR description flagged as needing
+	// reconciling once BACK-02 landed). `standalone` is hardcoded false
+	// until BACK-09 exists.
+	authEnabled := !authDisabled
+	const standalone = false
 
 	syncInterval := durationEnvOr(log, "SYNC_INTERVAL", 30*time.Second)
 	retryCooldown := durationEnvOr(log, "SYNC_RETRY_COOLDOWN", 60*time.Second)
@@ -55,6 +84,8 @@ func main() {
 		currencyRepo      repositories.CurrencyRepository
 		exchangeRateRepo  repositories.ExchangeRateRepository
 		recurringRuleRepo repositories.RecurringRuleRepository
+		userRepo          repositories.UserRepository
+		settingsRepo      repositories.UserSettingsRepository
 	)
 
 	switch dbDriver {
@@ -85,6 +116,8 @@ func main() {
 		currencyRepo = postgresql.NewCurrencyRepository(db)
 		exchangeRateRepo = postgresql.NewExchangeRateRepository(db)
 		recurringRuleRepo = postgresql.NewRecurringRuleRepository(db)
+		userRepo = postgresql.NewUserRepository(db)
+		settingsRepo = postgresql.NewUserSettingsRepository(db)
 	case "sqlite":
 		db, err = sqlite.Open(dbPath)
 		if err != nil {
@@ -101,6 +134,8 @@ func main() {
 		currencyRepo = sqlite.NewCurrencyRepository(db)
 		exchangeRateRepo = sqlite.NewExchangeRateRepository(db)
 		recurringRuleRepo = sqlite.NewRecurringRuleRepository(db)
+		userRepo = sqlite.NewUserRepository(db)
+		settingsRepo = sqlite.NewUserSettingsRepository(db)
 	default:
 		log.Error("unknown DB_DRIVER %q (want sqlite or postgres)", dbDriver)
 		os.Exit(1)
@@ -109,11 +144,11 @@ func main() {
 
 	ledgerClient := ledgerservice.NewClient(ledgerServiceURL)
 	ledgerGateway := ledgerservice.NewLedgerGateway(ledgerClient)
-	syncService := syncapp.NewService(movementRepo, ledgerGateway, log, retryCooldown)
+	syncService := syncapp.NewService(movementRepo, settingsRepo, ledgerGateway, log, retryCooldown)
 	recurringService := recurringapp.NewService(recurringRuleRepo, log)
 
-	createMovement := usecases.NewCreateMovement(movementRepo, accountRepo)
-	createPurchase := usecases.NewCreateCreditCardPurchase(purchaseRepo)
+	createMovement := usecases.NewCreateMovement(movementRepo, accountRepo, settingsRepo)
+	createPurchase := usecases.NewCreateCreditCardPurchase(purchaseRepo, settingsRepo)
 	getMovement := usecases.NewGetMovement(movementRepo)
 	listMovements := usecases.NewListMovements(movementRepo)
 	updateMovement := usecases.NewUpdateMovement(movementRepo, accountRepo, syncService)
@@ -125,7 +160,7 @@ func main() {
 	reportBalance := usecases.NewReportAccountBalance(accountRepo, movementRepo)
 	listCurrencies := usecases.NewListCurrencies(currencyRepo)
 	addCurrency := usecases.NewAddCurrency(currencyRepo)
-	transferBetweenAccounts := usecases.NewTransferBetweenAccounts(movementRepo, accountRepo)
+	transferBetweenAccounts := usecases.NewTransferBetweenAccounts(movementRepo, accountRepo, settingsRepo)
 	cancelTransfer := usecases.NewCancelTransfer(movementRepo, syncService)
 	setExchangeRate := usecases.NewSetExchangeRate(exchangeRateRepo, currencyRepo)
 	listExchangeRates := usecases.NewListExchangeRates(exchangeRateRepo)
@@ -133,6 +168,10 @@ func main() {
 	createRecurringRule := usecases.NewCreateRecurringRule(recurringRuleRepo, accountRepo)
 	listRecurringRules := usecases.NewListRecurringRules(recurringRuleRepo)
 	updateRecurringRule := usecases.NewUpdateRecurringRule(recurringRuleRepo)
+	ensureUser := usecases.NewEnsureUser(userRepo)
+	getUser := usecases.NewGetUser(userRepo)
+	getSettings := usecases.NewGetUserSettings(settingsRepo)
+	updateSettings := usecases.NewUpdateUserSettings(settingsRepo, movementRepo)
 
 	movementHandler := handlers.NewMovementHandler(
 		createMovement,
@@ -144,17 +183,41 @@ func main() {
 		cancelPurchase,
 		getCashflow,
 		syncService,
-		defaultUserID,
 		defaultCurrency,
 		log,
 	)
-	accountHandler := handlers.NewAccountHandler(createAccount, listAccounts, reportBalance, defaultUserID, log)
+	accountHandler := handlers.NewAccountHandler(createAccount, listAccounts, reportBalance, log)
 	currencyHandler := handlers.NewCurrencyHandler(listCurrencies, addCurrency, log)
-	transferHandler := handlers.NewTransferHandler(transferBetweenAccounts, cancelTransfer, defaultUserID, log)
-	exchangeRateHandler := handlers.NewExchangeRateHandler(setExchangeRate, listExchangeRates, deleteExchangeRate, defaultUserID, log)
-	recurringRuleHandler := handlers.NewRecurringRuleHandler(createRecurringRule, listRecurringRules, updateRecurringRule, defaultUserID, log)
+	transferHandler := handlers.NewTransferHandler(transferBetweenAccounts, cancelTransfer, log)
+	exchangeRateHandler := handlers.NewExchangeRateHandler(setExchangeRate, listExchangeRates, deleteExchangeRate, log)
+	recurringRuleHandler := handlers.NewRecurringRuleHandler(createRecurringRule, listRecurringRules, updateRecurringRule, log)
+	settingsHandler := handlers.NewSettingsHandler(getSettings, updateSettings, log)
+	userHandler := handlers.NewUserHandler(getUser, log)
+	configHandler := handlers.NewConfigHandler(standalone, authEnabled, log)
 
-	router := api.NewRouter(movementHandler, accountHandler, currencyHandler, transferHandler, exchangeRateHandler, recurringRuleHandler, corsAllowedOrigin)
+	// Auth: AUTH_DISABLED is a dev-only escape hatch, off by default. A
+	// deployment that leaves OIDC_ISSUER_URL unset without explicitly
+	// opting into AUTH_DISABLED=true fails fast at startup rather than
+	// silently serving every request as the same fixed user.
+	var authMiddleware api.AuthMiddleware
+	if authDisabled {
+		log.Info("AUTH_DISABLED=true: skipping Authentik token verification — every request is attributed to DEFAULT_USER_ID=%s. Do not use this in a real deployment.", defaultUserID)
+		authMiddleware = api.DevUserMiddleware(defaultUserID, ensureUser, log)
+	} else {
+		if oidcIssuerURL == "" {
+			log.Error("OIDC_ISSUER_URL is required unless AUTH_DISABLED=true")
+			os.Exit(1)
+		}
+		// A dedicated client with a timeout, not http.DefaultClient: a stalled
+		// OIDC discovery/JWKS fetch must not be able to hang request auth
+		// indefinitely.
+		oidcHTTPClient := &http.Client{Timeout: 10 * time.Second}
+		verifier := authentik.NewVerifier(oidcIssuerURL, oidcAudience, oidcJWKSURL, oidcHTTPClient, log)
+		authMiddleware = api.Middleware(verifier, ensureUser, log)
+		log.Info("auth: validating Authorization bearer tokens against OIDC issuer %s (audience %q)", oidcIssuerURL, oidcAudience)
+	}
+
+	router := api.NewRouter(movementHandler, accountHandler, currencyHandler, transferHandler, exchangeRateHandler, recurringRuleHandler, settingsHandler, userHandler, configHandler, authMiddleware, corsAllowedOrigin)
 
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
@@ -167,7 +230,7 @@ func main() {
 	}
 	addr := ":" + port
 	log.Info("financial-tracker API listening on %s (db driver %s at %s, syncing to ledger-service at %s every %s)", addr, dbDriver, dbDescription, ledgerServiceURL, syncInterval)
-	log.Info("endpoints: POST /movements | GET /movements | PATCH /movements/{id} | POST /movements/{id}/cancel | POST /credit-card-purchases/{id}/cancel | POST /sync | GET /categories | GET /cashflow | GET|POST /accounts | POST /accounts/{id}/balance | GET|POST /currencies | POST /transfers | POST /transfers/{id}/cancel | GET|POST /exchange-rates | DELETE /exchange-rates/{id} | GET|POST /recurring-rules | PATCH /recurring-rules/{id}")
+	log.Info("endpoints: GET /config | GET|PATCH /settings | POST /movements | GET /movements | PATCH /movements/{id} | POST /movements/{id}/cancel | POST /credit-card-purchases/{id}/cancel | POST /sync | GET /categories | GET /cashflow | GET|POST /accounts | POST /accounts/{id}/balance | GET|POST /currencies | POST /transfers | POST /transfers/{id}/cancel | GET|POST /exchange-rates | DELETE /exchange-rates/{id} | GET|POST /recurring-rules | PATCH /recurring-rules/{id} | GET /me")
 
 	if err := http.ListenAndServe(addr, router); err != nil {
 		log.Error("server failed: %v", err)
@@ -206,4 +269,21 @@ func intEnvOr(log applogger.Logger, key string, fallback int) int {
 		return fallback
 	}
 	return n
+}
+
+// boolEnvOr parses a strict true/false (anything strconv.ParseBool
+// accepts); unset or invalid falls back — used only for AUTH_DISABLED,
+// where silently misreading a typo as "true" would be a real security
+// hole, so an invalid value logs loudly rather than guessing.
+func boolEnvOr(log applogger.Logger, key string, fallback bool) bool {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return fallback
+	}
+	b, err := strconv.ParseBool(raw)
+	if err != nil {
+		log.Error("invalid %s %q (want true or false), using default %v", key, raw, fallback)
+		return fallback
+	}
+	return b
 }

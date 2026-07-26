@@ -29,7 +29,7 @@ func TestUpdateRecurringRuleDeactivatesWithoutTouchingOtherFields(t *testing.T) 
 	uc := NewUpdateRecurringRule(repo)
 
 	active := false
-	updated, err := uc.Execute(context.Background(), rule.ID, UpdateRecurringRuleInput{Active: &active})
+	updated, err := uc.Execute(context.Background(), "u1", rule.ID, UpdateRecurringRuleInput{Active: &active})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestUpdateRecurringRuleEditsScheduleAndFinancialFields(t *testing.T) {
 
 	newAmount := int64(-2500)
 	newDay := "15"
-	updated, err := uc.Execute(context.Background(), rule.ID, UpdateRecurringRuleInput{
+	updated, err := uc.Execute(context.Background(), "u1", rule.ID, UpdateRecurringRuleInput{
 		Amount: &newAmount, DayOfMonth: &newDay,
 	})
 	if err != nil {
@@ -65,7 +65,7 @@ func TestUpdateRecurringRuleRejectsInvalidDayOfMonth(t *testing.T) {
 	uc := NewUpdateRecurringRule(repo)
 
 	bad := "31"
-	if _, err := uc.Execute(context.Background(), rule.ID, UpdateRecurringRuleInput{DayOfMonth: &bad}); !errors.Is(err, apperrors.ErrInvalidInput) {
+	if _, err := uc.Execute(context.Background(), "u1", rule.ID, UpdateRecurringRuleInput{DayOfMonth: &bad}); !errors.Is(err, apperrors.ErrInvalidInput) {
 		t.Errorf("want ErrInvalidInput, got %v", err)
 	}
 }
@@ -80,7 +80,7 @@ func TestUpdateRecurringRuleClearsAccount(t *testing.T) {
 	uc := NewUpdateRecurringRule(repo)
 
 	empty := ""
-	updated, err := uc.Execute(context.Background(), rule.ID, UpdateRecurringRuleInput{AccountID: &empty})
+	updated, err := uc.Execute(context.Background(), "u1", rule.ID, UpdateRecurringRuleInput{AccountID: &empty})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -91,7 +91,23 @@ func TestUpdateRecurringRuleClearsAccount(t *testing.T) {
 
 func TestUpdateRecurringRuleNotFound(t *testing.T) {
 	uc := NewUpdateRecurringRule(newFakeRecurringRuleRepo())
-	if _, err := uc.Execute(context.Background(), "missing", UpdateRecurringRuleInput{}); !errors.Is(err, apperrors.ErrNotFound) {
+	if _, err := uc.Execute(context.Background(), "u1", "missing", UpdateRecurringRuleInput{}); !errors.Is(err, apperrors.ErrNotFound) {
 		t.Errorf("want ErrNotFound, got %v", err)
+	}
+}
+
+// TestUpdateRecurringRuleRejectsOtherUsersRule guards the IDOR this
+// usecase used to allow: before the userID ownership check was added,
+// any caller could edit or deactivate another user's rule just by
+// guessing/enumerating its ID, since UpdateMetadata/SetActive etc. write
+// straight to the row by id alone.
+func TestUpdateRecurringRuleRejectsOtherUsersRule(t *testing.T) {
+	repo := newFakeRecurringRuleRepo()
+	rule := seedRule(t, repo) // owned by "u1"
+	uc := NewUpdateRecurringRule(repo)
+
+	active := false
+	if _, err := uc.Execute(context.Background(), "someone-else", rule.ID, UpdateRecurringRuleInput{Active: &active}); !errors.Is(err, apperrors.ErrNotFound) {
+		t.Errorf("want ErrNotFound for another user's rule, got %v", err)
 	}
 }
