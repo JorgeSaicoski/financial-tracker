@@ -133,8 +133,15 @@ implements.
 
 ## MVP scope / known limitations
 
-- **No auth.** Every request without an explicit `user_id` is attributed to
-  a fixed dev user (`DEFAULT_USER_ID`). Fine for single-user personal use.
+- **Auth is opt-out, not opt-in.** By default the API verifies every
+  request's Authentik-issued bearer token (`OIDC_ISSUER_URL` required) and
+  the frontend's OIDC login flow (`web/src/lib/auth.svelte.js`) enforces
+  its own guard, driven by `GET /config`'s `auth_enabled` — which is just
+  the inverse of `AUTH_DISABLED`, so the two always agree. Set
+  `AUTH_DISABLED=true` (see `.env.example`) for local dev / single-user
+  self-hosting without a running Authentik instance: every request is then
+  attributed to a fixed dev user (`DEFAULT_USER_ID`) and the frontend shows
+  no login guard either.
 - **No idempotency key on sync.** If a push to ledger-service succeeds but
   the response is lost, the retry duplicates the transaction there. The
   real fix is idempotency-key support in ledger-service's API (follow-up
@@ -144,12 +151,48 @@ implements.
 - **Ledger-service only stores money facts** (`user_id, amount, currency`):
   description/category/payment method live only in financial-tracker's DB.
 
+## Per-user settings & entitlements (`user_settings` table)
+
+Ledger sync is per-user, not global: each user has `ledger_sync_entitled`
+(operator/billing-controlled — what they're *allowed* to use) and
+`ledger_sync_enabled` (user preference — what they've *chosen*).
+Effective sync is `entitled AND enabled`. A missing row means
+all-`true` (today's default, unchanged behavior) — rows are only created
+lazily by the first `PATCH /settings` write, so existing users need no
+backfill. `cloud_storage_entitled` is stored and exposed the same way,
+but nothing enforces it yet (that's BACK-19's job, once there's a paid
+tier to sell).
+
+- The sync loop (`application/sync/service.go`) excludes every
+  sync-disabled user's movements from each pass — including movements
+  that were already `pending` before the user turned sync off, not just
+  new ones.
+- A movement created while a user's effective sync is off gets
+  `sync_status: "local"` instead of `"pending"`, so `GET /movements`
+  never shows fake "queued" work that will never actually sync.
+  Re-enabling (`PATCH /settings {"ledger_sync_enabled": true}`)
+  reclassifies that user's `"local"` rows back to `"pending"` in one
+  step, so the very next sync pass picks up exactly the backlog created
+  while it was off — nothing already-synced is touched.
+- **v1 has no admin API for entitlements** — they're operator-only, set
+  directly against the database, e.g.:
+  ```sql
+  -- SQLite
+  INSERT INTO user_settings (user_id, ledger_sync_entitled, ledger_sync_enabled, cloud_storage_entitled, created_at, updated_at)
+  VALUES ('<user-id>', 0, 0, 1, datetime('now'), datetime('now'))
+  ON CONFLICT(user_id) DO UPDATE SET ledger_sync_entitled = 0;
+  ```
+  A real admin surface is icebox (see `financial-tracker-plan.md`).
+
 ## API
 
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/import/movements/spec?user_id=` | BACK-03: the CSV history-import model — columns (with real allowed values: registered currencies, categories, payment methods, the user's own account names) plus a ready-to-copy template. The frontend renders this instead of hardcoding the spec. |
 | `POST` | `/import/movements?user_id=&dry_run=&allow_partial=&skip_duplicates=` | Import a CSV backstop (multipart `file` field or a raw `text/csv` body; header `date,amount,currency,description,category,payment_method,account`, max 1 MiB / 10k rows). Validates every row first; `dry_run=true` reports without writing. Default **strict**: any row error imports nothing (`allow_partial=true` imports the valid rows and skips the rest). Rows matching an existing movement or an earlier row in the same file on `(date, amount, currency, normalized description)` are flagged in `duplicates[]` but still import by default — `skip_duplicates=true` excludes them. Response: `{imported, skipped, errors[], duplicates[]}`. |
+| `GET` | `/config` | Unauthenticated. `{standalone, auth_enabled}` — what the frontend reads before deciding whether to show the login guard. |
+| `GET` | `/settings?user_id=` | The caller's own settings — entitlement (operator-controlled, read-only here) and preference. Defaults to all-`true` if the user has never touched them (no row needed). |
+| `PATCH` | `/settings?user_id=` | Body: `{ledger_sync_enabled}` — the only field a user may change. Any attempt to set `ledger_sync_entitled`/`cloud_storage_entitled` (or any other key) is rejected with 400. Re-enabling reclassifies movements created while sync was off (`sync_status: "local"`) back to `"pending"`, so the next `/sync` pass pushes exactly that backlog. |
 | `POST` | `/movements` | Create a movement. Body: `{amount, currency?, user_id?, description?, category?, payment_method?, installments?, account_id?}`. With `payment_method="credit_card"` and `installments > 1`, splits into monthly installments and returns the purchase + its movements (no `account_id` allowed in that case). An `account_id`'s currency must match the movement's. |
 | `GET` | `/movements?id={uuid}` | Fetch one movement. |
 | `GET` | `/movements?user_id={uuid}&currency=&from=&to=&limit=&offset=` | List movements + computed `balance` (voided rows excluded from the balance). `from`/`to` take `YYYY-MM-DD` or RFC 3339 (`to` is inclusive when date-only). Each row carries `status` and `sync_status`. |
@@ -241,6 +284,11 @@ already set in `docker-compose.yml` — without it `npm install` fails with
    Opens on `:5173`. CORS is wide open in `internal/interfaces/api/router.go` for
    local dev — tighten before deploying anywhere real.
 
+   `PUBLIC_OIDC_ISSUER`/`PUBLIC_OIDC_CLIENT_ID` (`web/.env.example`) are
+   only needed when the API enforces auth (the default — see
+   `AUTH_DISABLED` in `.env.example`); leave them blank when running with
+   `AUTH_DISABLED=true`.
+
 ### Deploying (PostgreSQL, production images)
 
 The stack above is dev-only (SQLite, Svelte dev server). For a deployable
@@ -259,7 +307,10 @@ Automated tests cover the trickiest correctness points: cancel semantics
 (void vs reversal, double-cancel conflicts, reversal-of-reversal
 rejection), installment split math (signed amounts, remainder cents,
 too-small totals), balance calculation with cancelled movements, the sync
-pass (success/failure recording, retry cooldown vs manual sync), and the
+pass (success/failure recording, retry cooldown vs manual sync), per-user
+sync toggles (two users, one disabled — the loop excludes only theirs,
+at the repository-query level; the full disable → create → enable →
+"local" rows reclassify to exactly the right backlog cycle), and the
 SQLite repositories (including the atomic reversal link). The Postgres
 repositories in `internal/infrastructure/postgresql` mirror the same test suite but
 only run against a real database, guarded by `TEST_DATABASE_URL` — unset,
@@ -277,6 +328,8 @@ balance netting to zero after a full purchase cancel.
 ## Roadmap
 
 - Idempotency keys for sync pushes (needs a ledger-service API change).
-- Real auth instead of `DEFAULT_USER_ID`.
+- Server-side JWT verification (the frontend's OIDC login flow already
+  exists; the API doesn't check tokens yet — see the MVP limitations note
+  above) instead of `DEFAULT_USER_ID`.
 - Installment dates aligned to a card's real statement/closing day.
 - Backfill script importing pre-SQLite history from ledger-service.

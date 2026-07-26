@@ -15,6 +15,14 @@ type AccountHandler interface {
 	ReportBalance(w http.ResponseWriter, r *http.Request)
 }
 
+// ConfigHandler exposes runtime flags the frontend needs before it can
+// decide how to render at all (today: whether to enforce the OIDC login
+// guard). See config_handler.go's doc comment for why this is a minimal
+// seed rather than BACK-02/BACK-09's final shape.
+type ConfigHandler interface {
+	GetConfig(w http.ResponseWriter, r *http.Request)
+}
+
 // CurrencyHandler exposes the user-extendable currency registry backing
 // the frontend's currency dropdown.
 type CurrencyHandler interface {
@@ -36,6 +44,14 @@ type ExchangeRateHandler interface {
 	SetExchangeRate(w http.ResponseWriter, r *http.Request)
 	ListExchangeRates(w http.ResponseWriter, r *http.Request)
 	DeleteExchangeRate(w http.ResponseWriter, r *http.Request)
+}
+
+// SettingsHandler exposes a user's own settings (BACK-13): entitlement
+// (operator/billing-controlled, read-only here) and preference
+// (user-controlled — ledger sync on/off today).
+type SettingsHandler interface {
+	GetSettings(w http.ResponseWriter, r *http.Request)
+	PatchSettings(w http.ResponseWriter, r *http.Request)
 }
 
 // MovementHandler exposes financial-tracker's own API. It never talks to

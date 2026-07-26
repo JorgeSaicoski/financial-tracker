@@ -46,7 +46,7 @@ func TestCancelUnsyncedMovementVoidsLocally(t *testing.T) {
 	}
 
 	// The sync worker must never pick a voided movement up.
-	pending, _ := repo.ListPendingSync(context.Background(), time.Now().UTC().Add(time.Hour), 0)
+	pending, _ := repo.ListPendingSync(context.Background(), time.Now().UTC().Add(time.Hour), 0, nil)
 	if len(pending) != 0 {
 		t.Errorf("voided movement still pending sync: %v", pending)
 	}
@@ -142,6 +142,16 @@ func TestCancelRejectsBadStates(t *testing.T) {
 				t.Fatalf("want %v, got %v", tc.want, err)
 			}
 		})
+	}
+}
+
+func TestCancelMovementRejectsCrossUserAccess(t *testing.T) {
+	repo := newFakeMovementRepo()
+	repo.add(activeMovement("m1", -500, entities.SyncStatusPending)) // owned by "u1"
+
+	_, err := NewCancelMovement(repo, &fakeSyncTrigger{}).Execute(context.Background(), "someone-else", "m1")
+	if !errors.Is(err, apperrors.ErrNotFound) {
+		t.Fatalf("want ErrNotFound for another user's movement, got %v", err)
 	}
 }
 

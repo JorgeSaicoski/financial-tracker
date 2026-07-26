@@ -1,18 +1,64 @@
 <script>
 	import '$lib/styles/tokens.css';
 	import Sidebar from '$lib/components/Sidebar.svelte';
+	import QuickAdd from '$lib/components/QuickAdd.svelte';
+	import { onMount } from 'svelte';
+	import { page } from '$app/stores';
+	import { goto } from '$app/navigation';
+	import { browser } from '$app/environment';
+	import { authState, initAuth } from '$lib/auth.svelte.js';
 
 	let { children } = $props();
+
+	onMount(() => {
+		initAuth();
+	});
+
+	const isAuthRoute = $derived(
+		$page.url.pathname === '/login' || $page.url.pathname === '/auth/callback'
+	);
+	// Standalone awareness (BACK-09): when auth is disabled (today's
+	// default — see .env.example's AUTH_ENABLED), the guard never
+	// applies and the app works without tokens, same as before this
+	// ticket.
+	const authorized = $derived(!authState.authEnabled || !!authState.user);
+
+	// Guard: send unauthenticated users to /login instead of rendering
+	// the app shell underneath them.
+	$effect(() => {
+		if (browser && authState.ready && !authorized && !isAuthRoute) {
+			goto('/login');
+		}
+	});
 </script>
 
-<div class="app-shell">
-	<Sidebar />
-	<div class="app-content">
-		{@render children()}
+{#if !authState.ready}
+	<div class="auth-loading">Loading…</div>
+{:else if isAuthRoute}
+	{@render children()}
+{:else if authorized}
+	<div class="app-shell">
+		<Sidebar />
+		<div class="app-content">
+			{@render children()}
+		</div>
+		<QuickAdd />
 	</div>
-</div>
+{:else}
+	<!-- $effect above is already navigating to /login; nothing protected renders meanwhile. -->
+	<div class="auth-loading">Redirecting to login…</div>
+{/if}
 
 <style>
+	.auth-loading {
+		min-height: 100vh;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		color: var(--color-text-secondary);
+		font: var(--text-body);
+	}
+
 	:global(*),
 	:global(*::before),
 	:global(*::after) {

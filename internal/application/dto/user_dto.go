@@ -14,8 +14,6 @@ type UserDTO struct {
 	Email       string
 	DisplayName string
 
-	CloudSyncEnabled bool
-
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -25,14 +23,13 @@ func UserFromEntity(u *entities.User) *UserDTO {
 		return nil
 	}
 	return &UserDTO{
-		ID:               u.ID,
-		Provider:         u.Provider,
-		ExternalID:       u.ExternalID,
-		Email:            u.Email,
-		DisplayName:      u.DisplayName,
-		CloudSyncEnabled: u.CloudSyncEnabled,
-		CreatedAt:        u.CreatedAt,
-		UpdatedAt:        u.UpdatedAt,
+		ID:          u.ID,
+		Provider:    u.Provider,
+		ExternalID:  u.ExternalID,
+		Email:       u.Email,
+		DisplayName: u.DisplayName,
+		CreatedAt:   u.CreatedAt,
+		UpdatedAt:   u.UpdatedAt,
 	}
 }
 
@@ -41,13 +38,12 @@ func (u *UserDTO) ToEntity() *entities.User {
 		return nil
 	}
 	return &entities.User{
-		ID:               u.ID,
-		Provider:         u.Provider,
-		ExternalID:       u.ExternalID,
-		Email:            u.Email,
-		DisplayName:      u.DisplayName,
-		CloudSyncEnabled: u.CloudSyncEnabled,
-		CreatedAt:        u.CreatedAt,
-		UpdatedAt:        u.UpdatedAt,
+		ID:          u.ID,
+		Provider:    u.Provider,
+		ExternalID:  u.ExternalID,
+		Email:       u.Email,
+		DisplayName: u.DisplayName,
+		CreatedAt:   u.CreatedAt,
+		UpdatedAt:   u.UpdatedAt,
 	}
 }

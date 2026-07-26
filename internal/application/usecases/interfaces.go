@@ -322,6 +322,35 @@ type AddCurrencyUseCase interface {
 	Execute(ctx context.Context, code string) (string, error)
 }
 
+// UserSettingsView is what GET/PATCH /settings return (BACK-13).
+// Entitled fields are operator/billing-controlled and read-only through
+// this API; Enabled fields are user preference. Effective capability is
+// Entitled AND Enabled.
+type UserSettingsView struct {
+	UserID               string
+	LedgerSyncEntitled   bool
+	LedgerSyncEnabled    bool
+	CloudStorageEntitled bool
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
+}
+
+// GetUserSettingsUseCase returns the caller's own settings, defaulting
+// to "everything true" if they've never touched them.
+type GetUserSettingsUseCase interface {
+	Execute(ctx context.Context, userID string) (UserSettingsView, error)
+}
+
+// UpdateUserSettingsUseCase changes ledger_sync_enabled — the only field
+// a user (as opposed to an operator) may write; entitlement fields are
+// never accepted here (rejected at the HTTP decode boundary, see
+// interfaces/dto). Toggling sync back on reclassifies the backlog
+// accumulated while it was off (SyncStatusLocal) back to "pending" so
+// the next sync pass picks it up.
+type UpdateUserSettingsUseCase interface {
+	Execute(ctx context.Context, userID string, ledgerSyncEnabled bool) (UserSettingsView, error)
+}
+
 // CurrencyFlow aggregates the interval's money in / money out for one
 // currency. In and Out are both positive; Net = In - Out. Totals are kept
 // per currency because summing usd and btc together is meaningless.

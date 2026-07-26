@@ -1,5 +1,5 @@
 <script>
-	import { onMount } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
 	import {
 		listMovements,
 		createMovement,
@@ -16,6 +16,7 @@
 		cancelTransfer,
 		syncNow
 	} from '$lib/api.js';
+	import { movementCreated, notifyMovementCreated } from '$lib/stores/movementEvents.js';
 	import { formatAmount } from '$lib/format.js';
 	import AppHeader from '$lib/components/AppHeader.svelte';
 	import BalanceCard from '$lib/components/BalanceCard.svelte';
@@ -125,7 +126,10 @@
 		if (payload.installments > 1) {
 			notice = `Purchase split into ${payload.installments} monthly installments`;
 		}
-		await load();
+		// The reload happens via the movementCreated subscription below, the
+		// same path QuickAdd's submits use (FRONT-09) — one refresh
+		// mechanism regardless of which form created the movement.
+		notifyMovementCreated();
 	}
 
 	async function handleCancel(movement) {
@@ -204,6 +208,19 @@
 			error = err.message;
 		}
 	}
+
+	// Skip the store's initial callback (fires immediately on subscribe with
+	// the current count) so mount doesn't double-load; react only to
+	// genuine new movements — created here, or via QuickAdd from any route.
+	let skippedInitialMovementEvent = false;
+	const unsubscribeMovementCreated = movementCreated.subscribe(() => {
+		if (!skippedInitialMovementEvent) {
+			skippedInitialMovementEvent = true;
+			return;
+		}
+		load();
+	});
+	onDestroy(unsubscribeMovementCreated);
 
 	onMount(() => {
 		load();

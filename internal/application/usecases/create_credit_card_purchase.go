@@ -12,11 +12,12 @@ import (
 
 type createCreditCardPurchaseUseCase struct {
 	purchases repositories.CreditCardPurchaseRepository
+	settings  repositories.UserSettingsRepository
 }
 
 // NewCreateCreditCardPurchase returns interface type for dependency injection.
-func NewCreateCreditCardPurchase(purchases repositories.CreditCardPurchaseRepository) CreateCreditCardPurchaseUseCase {
-	return &createCreditCardPurchaseUseCase{purchases: purchases}
+func NewCreateCreditCardPurchase(purchases repositories.CreditCardPurchaseRepository, settings repositories.UserSettingsRepository) CreateCreditCardPurchaseUseCase {
+	return &createCreditCardPurchaseUseCase{purchases: purchases, settings: settings}
 }
 
 func (uc *createCreditCardPurchaseUseCase) Execute(ctx context.Context, input CreateCreditCardPurchaseInput) (*dto.CreditCardPurchaseDTO, []*dto.MovementDTO, error) {
@@ -41,6 +42,11 @@ func (uc *createCreditCardPurchaseUseCase) Execute(ctx context.Context, input Cr
 		// A total too small to split leaves zero-amount installments,
 		// which ledger-service rejects — they could never sync.
 		return nil, nil, apperrors.ErrInvalidInput
+	}
+
+	syncStatus, err := effectiveSyncStatus(ctx, uc.settings, input.UserID)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	now := time.Now().UTC()
@@ -72,7 +78,7 @@ func (uc *createCreditCardPurchaseUseCase) Execute(ctx context.Context, input Cr
 			PaymentMethod:     entities.PaymentMethodCreditCard,
 			InstallmentNumber: &number,
 			Status:            entities.MovementStatusActive,
-			SyncStatus:        entities.SyncStatusPending,
+			SyncStatus:        syncStatus,
 			// One installment per month starting now. Future ones are
 			// invisible to the sync worker until their date arrives.
 			Timestamp: now.AddDate(0, i, 0),

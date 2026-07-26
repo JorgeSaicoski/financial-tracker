@@ -49,7 +49,9 @@ type jwkSet struct {
 }
 
 // discoverJWKSURL fetches issuerURL's OIDC discovery document and returns
-// its jwks_uri.
+// its jwks_uri, after checking the document's own issuer matches — a
+// misconfigured discovery endpoint returning a different issuer's document
+// would otherwise silently make this code trust the wrong provider's keys.
 func discoverJWKSURL(ctx context.Context, client *http.Client, issuerURL string) (string, error) {
 	discoveryURL := strings.TrimRight(issuerURL, "/") + "/.well-known/openid-configuration"
 
@@ -63,6 +65,10 @@ func discoverJWKSURL(ctx context.Context, client *http.Client, issuerURL string)
 	}
 	if doc.JWKSURI == "" {
 		return "", fmt.Errorf("authentik: OIDC discovery document %s has no jwks_uri", discoveryURL)
+	}
+	if strings.TrimRight(doc.Issuer, "/") != strings.TrimRight(issuerURL, "/") {
+		return "", fmt.Errorf("authentik: OIDC discovery document %s has issuer %q, want %q",
+			discoveryURL, doc.Issuer, issuerURL)
 	}
 	return doc.JWKSURI, nil
 }
@@ -85,6 +91,11 @@ func fetchJWKS(ctx context.Context, client *http.Client, jwksURL string) (map[st
 	keys := make(map[string]crypto.PublicKey, len(set.Keys))
 	for _, k := range set.Keys {
 		if k.Kid == "" {
+			continue
+		}
+		if k.Use != "" && k.Use != "sig" {
+			// Not a signing key (e.g. "enc") — never trust it for JWT
+			// verification, even if a provider publishes it in the same set.
 			continue
 		}
 		switch k.Kty {
@@ -146,12 +157,19 @@ func parseECKey(k jwk) (*ecdsa.PublicKey, error) {
 	if err != nil {
 		return nil, fmt.Errorf("invalid EC y coordinate: %w", err)
 	}
-	return &ecdsa.PublicKey{
-		Curve: curve,
-		X:     new(big.Int).SetBytes(xBytes),
-		Y:     new(big.Int).SetBytes(yBytes),
-	}, nil
+	x, y := new(big.Int).SetBytes(xBytes), new(big.Int).SetBytes(yBytes)
+	if !curve.IsOnCurve(x, y) {
+		return nil, fmt.Errorf("EC point (x,y) is not on curve %q", k.Crv)
+	}
+	return &ecdsa.PublicKey{Curve: curve, X: x, Y: y}, nil
 }
+
+// maxDiscoveryBodyBytes bounds how much of a discovery/JWKS response this
+// package will read — both documents are small JSON blobs in practice, so
+// this is generous headroom, not a tight fit; it exists only to stop a
+// misconfigured or malicious endpoint from exhausting memory via an
+// unbounded (or streamed-forever) response body.
+const maxDiscoveryBodyBytes = 1 << 20 // 1 MiB
 
 func getBody(ctx context.Context, client *http.Client, url string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -166,5 +184,12 @@ func getBody(ctx context.Context, client *http.Client, url string) ([]byte, erro
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("unexpected status %d", resp.StatusCode)
 	}
-	return io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxDiscoveryBodyBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > maxDiscoveryBodyBytes {
+		return nil, fmt.Errorf("response body exceeds %d bytes", maxDiscoveryBodyBytes)
+	}
+	return body, nil
 }
