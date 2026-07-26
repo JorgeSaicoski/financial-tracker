@@ -25,10 +25,12 @@ func NewCategoryRepository(db *sql.DB) repositories.CategoryRepository {
 
 const categoryColumns = `id, user_id, name, avoidability_percent, created_at`
 
-// EnsureByName is a plain check-then-insert, not an atomic upsert — same
-// race tolerance as CreateAccountUseCase's own duplicate-name check
-// (this codebase's existing precedent for per-user-unique names with no
-// DB-level unique constraint).
+// EnsureByName is a check-then-insert, not an atomic upsert, but stays
+// idempotent under concurrent callers despite the (user_id, lower(name))
+// unique index this table carries: if Create loses the race, that unique
+// violation is exactly the signal that a concurrent EnsureByName call
+// just won the insert, so re-reading returns its row instead of
+// propagating the DB error.
 func (r *categoryRepository) EnsureByName(ctx context.Context, userID, name string, avoidabilityPercent *int) (*dto.CategoryDTO, error) {
 	existing, err := r.getByUserAndName(ctx, userID, name)
 	if err == nil {
@@ -37,12 +39,19 @@ func (r *categoryRepository) EnsureByName(ctx context.Context, userID, name stri
 	if !errors.Is(err, apperrors.ErrNotFound) {
 		return nil, err
 	}
-	return r.Create(ctx, &dto.CategoryDTO{
+	created, err := r.Create(ctx, &dto.CategoryDTO{
 		UserID:              userID,
 		Name:                name,
 		AvoidabilityPercent: avoidabilityPercent,
 		CreatedAt:           time.Now().UTC(),
 	})
+	if err == nil {
+		return created, nil
+	}
+	if winner, getErr := r.getByUserAndName(ctx, userID, name); getErr == nil {
+		return winner, nil
+	}
+	return nil, err
 }
 
 func (r *categoryRepository) getByUserAndName(ctx context.Context, userID, name string) (*dto.CategoryDTO, error) {

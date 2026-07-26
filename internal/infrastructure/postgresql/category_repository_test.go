@@ -3,6 +3,7 @@ package postgresql
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/JorgeSaicoski/financial-tracker/internal/application/dto"
@@ -75,6 +76,55 @@ func TestCategoryCreateRejectsDuplicateName(t *testing.T) {
 	}
 	if _, err := repo.Create(ctx, dtoCategory(userID, "Food", nil)); err == nil {
 		t.Error("want an error inserting a case-variant duplicate name, got nil")
+	}
+}
+
+// TestCategoryEnsureByNameRecoversFromConcurrentInsert exercises the
+// actual race window a check-then-insert has: several goroutines all
+// miss the initial getByUserAndName read (name doesn't exist yet) and
+// all attempt Create for the same (user_id, lower(name)); the unique
+// index lets exactly one through, and the rest must recover by re-reading
+// the winner instead of surfacing the DB's unique-violation error.
+func TestCategoryEnsureByNameRecoversFromConcurrentInsert(t *testing.T) {
+	repo := NewCategoryRepository(openTestDB(t))
+	ctx := context.Background()
+	userID := "u1"
+	fifty := 50
+
+	const n = 8
+	var wg sync.WaitGroup
+	ids := make([]string, n)
+	errs := make([]error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			c, err := repo.EnsureByName(ctx, userID, "subscriptions", &fifty)
+			errs[i] = err
+			if c != nil {
+				ids[i] = c.ID
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("goroutine %d: EnsureByName returned an error instead of recovering: %v", i, err)
+		}
+	}
+	for i, id := range ids {
+		if id != ids[0] {
+			t.Errorf("goroutine %d resolved to a different category id (%s) than goroutine 0 (%s)", i, id, ids[0])
+		}
+	}
+
+	all, err := repo.ListByUser(ctx, userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 1 {
+		t.Errorf("want exactly one category row after %d concurrent EnsureByName calls, got %d", n, len(all))
 	}
 }
 
