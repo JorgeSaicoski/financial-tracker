@@ -679,3 +679,78 @@ func TestRecurringRuleGenerateAndAdvance(t *testing.T) {
 		t.Errorf("generate for missing rule: want ErrNotFound, got %v", err)
 	}
 }
+
+func TestPurchaseListByUser(t *testing.T) {
+	db := openTestDB(t)
+	purchases := NewCreditCardPurchaseRepository(db)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	mine := &dto.CreditCardPurchaseDTO{
+		UserID: "00000000-0000-0000-0000-000000000001", Category: string(entities.CategoryShopping),
+		TotalAmount: -900, Currency: "usd", InstallmentCount: 1, PurchaseDate: now, Status: string(entities.CreditCardPurchaseStatusActive), CreatedAt: now,
+	}
+	someoneElses := &dto.CreditCardPurchaseDTO{
+		UserID: "00000000-0000-0000-0000-000000000002", Category: string(entities.CategoryShopping),
+		TotalAmount: -100, Currency: "usd", InstallmentCount: 1, PurchaseDate: now, Status: string(entities.CreditCardPurchaseStatusActive), CreatedAt: now,
+	}
+	if _, _, err := purchases.CreateWithInstallments(ctx, mine, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := purchases.CreateWithInstallments(ctx, someoneElses, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := purchases.ListByUser(ctx, "00000000-0000-0000-0000-000000000001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != mine.ID {
+		t.Errorf("ListByUser = %+v, want exactly the one purchase belonging to that user", got)
+	}
+}
+
+func TestLocalArchiveSettingsRepository(t *testing.T) {
+	db := openTestDB(t)
+	repo := NewLocalArchiveSettingsRepository(db)
+	ctx := context.Background()
+
+	enabled, err := repo.IsEnabled(ctx, "user-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if enabled {
+		t.Error("a user with no row yet should default to disabled")
+	}
+
+	if err := repo.SetEnabled(ctx, "user-1", true); err != nil {
+		t.Fatal(err)
+	}
+	enabled, err = repo.IsEnabled(ctx, "user-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !enabled {
+		t.Error("setting was not persisted")
+	}
+
+	// Setting it again (upsert) doesn't error and reflects the new value.
+	if err := repo.SetEnabled(ctx, "user-1", false); err != nil {
+		t.Fatal(err)
+	}
+	enabled, err = repo.IsEnabled(ctx, "user-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if enabled {
+		t.Error("upsert did not overwrite the previous value")
+	}
+
+	other, err := repo.IsEnabled(ctx, "user-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if other {
+		t.Error("setting leaked across users")
+	}
+}

@@ -148,6 +148,14 @@ implements.
   date" through this endpoint (an omitted field means "leave unchanged",
   indistinguishable from "clear it" without a sentinel value this
   endpoint doesn't define yet).
+- **`POST /import/archive` drops reversal links.** `cancels_movement_id`/
+  `reversed_by_movement_id` are self-referencing foreign keys on
+  `movements`, checked immediately (not deferred) by both SQLite and
+  Postgres here; an original and its reversal reference each other in
+  opposite directions, so no single insertion order satisfies both within
+  one restore. Everything else about both rows (amount, status, currency,
+  ...) restores exactly — only the explicit cross-link between them is
+  lost.
 
 ## Per-user settings & entitlements (`user_settings` table)
 
@@ -211,6 +219,10 @@ tier to sell).
 | `GET` | `/recurring-rules?user_id=` | The user's recurring rules (rent, salary, subscriptions) that generate ordinary movements on schedule. |
 | `POST` | `/recurring-rules` | Create a rule. Body: `{amount, currency?, user_id?, description?, category?, payment_method?, account_id?, day_of_month, starts_at?, ends_at?}`. `day_of_month` is `"1"`-`"28"` or `"last"` (never 29-31, so a fixed day never drifts across months of different lengths); `starts_at` defaults to now. |
 | `PATCH` | `/recurring-rules/{id}` | Edit a rule / deactivate it (`{active: false}`) — any edit affects future generations only, movements already generated are never touched. Any subset of `{description, category, payment_method, account_id, amount, currency, day_of_month, ends_at, active}`; `account_id: ""` clears it. There's no way to clear an already-set `ends_at` back to "no end date" through this endpoint. |
+| `GET` | `/settings/local-archive?user_id=` | The user's `local_archive_enabled` toggle (BACK-15's "no cloud" tier; defaults to `false`). |
+| `PUT` | `/settings/local-archive` | Set the toggle: `{local_archive_enabled, user_id?}`. Independent of any cloud-storage setting — never deletes or stops writing anything server-side by itself. |
+| `GET` | `/export/archive?user_id=` | The user's full restorable state — accounts, movements, credit-card purchases — as plaintext JSON. The frontend's "Local backup" panel encrypts this client-side (AES-256-GCM, PBKDF2-SHA256-derived key) before it's ever saved to a file; this endpoint itself has no encryption of its own. |
+| `POST` | `/import/archive` | Restore a (frontend-decrypted) archive in the same shape `GET /export/archive` returns. Idempotent by row ID — a row that already exists is skipped, never overwritten; safe to import the same archive more than once. `cancels_movement_id`/`reversed_by_movement_id` are not restored (see Known limitations). Returns counts restored/skipped per collection. |
 
 `amount` is an integer in the smallest currency unit (cents), negative for
 expenses, positive for income, and cannot be zero. Splitting an amount too
