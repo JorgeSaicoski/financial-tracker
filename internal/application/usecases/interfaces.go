@@ -375,6 +375,50 @@ type DeleteExchangeRateUseCase interface {
 	Execute(ctx context.Context, userID, id string) error
 }
 
+// ArchiveBundle is the full restorable account state BACK-15's "no cloud"
+// archive needs: everything ExportArchiveUseCase gathers and
+// ImportArchiveUseCase consumes. Categories aren't included — they're
+// still the fixed, hardcoded list (BACK-14 hasn't landed), so there's
+// nothing user-defined to restore there yet; once BACK-14 lands, this
+// bundle should grow a Categories field too.
+type ArchiveBundle struct {
+	Accounts            []*dto.AccountDTO
+	Movements           []*dto.MovementDTO
+	CreditCardPurchases []*dto.CreditCardPurchaseDTO
+}
+
+type ExportArchiveUseCase interface {
+	Execute(ctx context.Context, userID string) (ArchiveBundle, error)
+}
+
+// ImportArchiveResult reports what a restore actually did. Restoring a
+// row whose ID already exists is a no-op ("skipped"), not an error — so
+// importing the same archive twice, or one that partially overlaps what's
+// already there, is safe. Restore is a disaster-recovery path, not a
+// merge tool: it never overwrites an existing row with the archive's copy.
+type ImportArchiveResult struct {
+	AccountsRestored, AccountsSkipped                       int
+	MovementsRestored, MovementsSkipped                     int
+	CreditCardPurchasesRestored, CreditCardPurchasesSkipped int
+}
+
+type ImportArchiveUseCase interface {
+	Execute(ctx context.Context, userID string, bundle ArchiveBundle) (ImportArchiveResult, error)
+}
+
+// GetLocalArchiveSettingUseCase reads BACK-15's local_archive_enabled
+// toggle, defaulting to false for a user who never set it.
+type GetLocalArchiveSettingUseCase interface {
+	Execute(ctx context.Context, userID string) (bool, error)
+}
+
+// SetLocalArchiveSettingUseCase flips the toggle. It never touches
+// cloud_storage_enabled (BACK-16) or any other setting — the two are
+// independent.
+type SetLocalArchiveSettingUseCase interface {
+	Execute(ctx context.Context, userID string, enabled bool) (bool, error)
+}
+
 // ToUSDUseCase converts amount (in currency's smallest unit) to USD's
 // smallest unit (cents), using the rate effective at or before "at" — the
 // row with the greatest EffectiveFrom <= at. Reused by BACK-12's
