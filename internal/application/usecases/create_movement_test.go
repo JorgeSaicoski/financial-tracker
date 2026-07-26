@@ -10,7 +10,7 @@ import (
 )
 
 func TestCreateMovementValidation(t *testing.T) {
-	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), newFakeUserSettingsRepo())
+	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), newFakePaymentMethodRepo(), newFakeUserSettingsRepo())
 
 	cases := []struct {
 		name  string
@@ -20,7 +20,6 @@ func TestCreateMovementValidation(t *testing.T) {
 		{"missing currency", CreateMovementInput{UserID: "u1", Amount: 100}},
 		{"zero amount", CreateMovementInput{UserID: "u1", Currency: "usd"}},
 		{"unknown category", CreateMovementInput{UserID: "u1", Amount: 100, Currency: "usd", Category: "yacht"}},
-		{"unknown payment method", CreateMovementInput{UserID: "u1", Amount: 100, Currency: "usd", PaymentMethod: "iou"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -31,9 +30,36 @@ func TestCreateMovementValidation(t *testing.T) {
 	}
 }
 
+// TestCreateMovementImplicitlyRegistersPaymentMethod covers BACK-17's
+// replacement for the old fixed-enum rejection: a payment method the
+// caller has never used before ("iou") is no longer invalid — it's
+// implicitly registered, same idempotent-Add shape as a brand-new
+// category or currency.
+func TestCreateMovementImplicitlyRegistersPaymentMethod(t *testing.T) {
+	methods := newFakePaymentMethodRepo()
+	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), methods, newFakeUserSettingsRepo())
+
+	m, err := uc.Execute(context.Background(), CreateMovementInput{
+		UserID: "u1", Amount: 100, Currency: "usd", PaymentMethod: "iou",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if m.PaymentMethod != "iou" {
+		t.Errorf("payment method = %q, want iou", m.PaymentMethod)
+	}
+	rows, err := methods.ListByUser(context.Background(), "u1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Name != "iou" {
+		t.Errorf("want exactly one implicitly-registered payment method %q, got %+v", "iou", rows)
+	}
+}
+
 func TestCreateMovementDefaultsAndState(t *testing.T) {
 	repo := newFakeMovementRepo()
-	uc := NewCreateMovement(repo, newFakeAccountRepo(), newFakeUserSettingsRepo())
+	uc := NewCreateMovement(repo, newFakeAccountRepo(), newFakePaymentMethodRepo(), newFakeUserSettingsRepo())
 
 	m, err := uc.Execute(context.Background(), CreateMovementInput{
 		UserID: "u1", Amount: -500, Currency: "usd",
@@ -45,7 +71,7 @@ func TestCreateMovementDefaultsAndState(t *testing.T) {
 	if m.Category != string(entities.CategoryOther) {
 		t.Errorf("category = %q, want other", m.Category)
 	}
-	if m.PaymentMethod != string(entities.PaymentMethodOther) {
+	if m.PaymentMethod != "other" {
 		t.Errorf("payment method = %q, want other", m.PaymentMethod)
 	}
 	if m.Status != string(entities.MovementStatusActive) {
@@ -60,18 +86,18 @@ func TestCreateMovementDefaultsAndState(t *testing.T) {
 }
 
 func TestCreateMovementKeepsExplicitFields(t *testing.T) {
-	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), newFakeUserSettingsRepo())
+	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), newFakePaymentMethodRepo(), newFakeUserSettingsRepo())
 
 	m, err := uc.Execute(context.Background(), CreateMovementInput{
 		UserID: "u1", Amount: -500, Currency: "usd",
 		Description:   "groceries",
 		Category:      string(entities.CategoryFood),
-		PaymentMethod: string(entities.PaymentMethodPix),
+		PaymentMethod: "pix",
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if m.Description != "groceries" || m.Category != string(entities.CategoryFood) || m.PaymentMethod != string(entities.PaymentMethodPix) {
+	if m.Description != "groceries" || m.Category != string(entities.CategoryFood) || m.PaymentMethod != "pix" {
 		t.Errorf("fields not preserved: %+v", m)
 	}
 }

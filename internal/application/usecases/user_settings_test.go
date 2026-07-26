@@ -25,7 +25,7 @@ func TestGetUserSettingsDefaultsWhenUntouched(t *testing.T) {
 func TestCreateMovementUsesLocalStatusWhenSyncDisabled(t *testing.T) {
 	settings := newFakeUserSettingsRepo()
 	movements := newFakeMovementRepo()
-	createMovement := NewCreateMovement(movements, newFakeAccountRepo(), settings)
+	createMovement := NewCreateMovement(movements, newFakeAccountRepo(), newFakePaymentMethodRepo(), settings)
 	updateSettings := NewUpdateUserSettings(settings, movements)
 
 	if _, err := updateSettings.Execute(context.Background(), "u1", false); err != nil {
@@ -60,7 +60,7 @@ func TestCreateMovementUsesLocalStatusWhenSyncDisabled(t *testing.T) {
 func TestDisableCreateEnableCyclePushesExactlyTheBacklog(t *testing.T) {
 	settings := newFakeUserSettingsRepo()
 	movements := newFakeMovementRepo()
-	createMovement := NewCreateMovement(movements, newFakeAccountRepo(), settings)
+	createMovement := NewCreateMovement(movements, newFakeAccountRepo(), newFakePaymentMethodRepo(), settings)
 	updateSettings := NewUpdateUserSettings(settings, movements)
 	ctx := context.Background()
 
@@ -120,7 +120,7 @@ func TestEntitlementBlocksEffectiveSyncEvenWhenEnabled(t *testing.T) {
 	settings := newFakeUserSettingsRepo()
 	settings.setEntitled("u1", false)
 	movements := newFakeMovementRepo()
-	createMovement := NewCreateMovement(movements, newFakeAccountRepo(), settings)
+	createMovement := NewCreateMovement(movements, newFakeAccountRepo(), newFakePaymentMethodRepo(), settings)
 
 	m, err := createMovement.Execute(context.Background(), CreateMovementInput{
 		UserID: "u1", Currency: "usd", Amount: -100,

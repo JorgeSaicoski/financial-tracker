@@ -14,12 +14,13 @@ import (
 type createMovementUseCase struct {
 	repo     repositories.MovementRepository
 	accounts repositories.AccountRepository
+	methods  repositories.PaymentMethodRepository
 	settings repositories.UserSettingsRepository
 }
 
 // NewCreateMovement returns interface type for dependency injection.
-func NewCreateMovement(repo repositories.MovementRepository, accounts repositories.AccountRepository, settings repositories.UserSettingsRepository) CreateMovementUseCase {
-	return &createMovementUseCase{repo: repo, accounts: accounts, settings: settings}
+func NewCreateMovement(repo repositories.MovementRepository, accounts repositories.AccountRepository, methods repositories.PaymentMethodRepository, settings repositories.UserSettingsRepository) CreateMovementUseCase {
+	return &createMovementUseCase{repo: repo, accounts: accounts, methods: methods, settings: settings}
 }
 
 func (uc *createMovementUseCase) Execute(ctx context.Context, input CreateMovementInput) (*dto.MovementDTO, error) {
@@ -27,7 +28,11 @@ func (uc *createMovementUseCase) Execute(ctx context.Context, input CreateMoveme
 		return nil, apperrors.ErrInvalidInput
 	}
 
-	category, paymentMethod, err := normalizeCategoryAndMethod(input.Category, input.PaymentMethod)
+	category, err := normalizeCategory(input.Category)
+	if err != nil {
+		return nil, err
+	}
+	paymentMethod, err := resolvePaymentMethod(ctx, uc.methods, input.UserID, input.PaymentMethod)
 	if err != nil {
 		return nil, err
 	}
@@ -77,21 +82,17 @@ func (uc *createMovementUseCase) Execute(ctx context.Context, input CreateMoveme
 	return uc.repo.Create(ctx, dto.MovementFromEntity(movement))
 }
 
-// normalizeCategoryAndMethod applies the empty-means-other default and
-// rejects values outside the domain's fixed lists. Inputs arrive as
-// plain strings (application/dto convention); the domain types do the
-// validating.
-func normalizeCategoryAndMethod(category, method string) (entities.Category, entities.PaymentMethod, error) {
+// normalizeCategory applies the empty-means-other default and rejects
+// values outside the domain's fixed category list. Payment method no
+// longer goes through here (BACK-17 turned it into a per-user registry,
+// resolved via resolvePaymentMethod in payment_methods.go).
+func normalizeCategory(category string) (entities.Category, error) {
 	c := entities.Category(category)
-	m := entities.PaymentMethod(method)
 	if c == "" {
 		c = entities.CategoryOther
 	}
-	if m == "" {
-		m = entities.PaymentMethodOther
+	if !c.IsValid() {
+		return "", apperrors.ErrInvalidInput
 	}
-	if !c.IsValid() || !m.IsValid() {
-		return "", "", apperrors.ErrInvalidInput
-	}
-	return c, m, nil
+	return c, nil
 }

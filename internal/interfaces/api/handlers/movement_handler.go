@@ -16,15 +16,16 @@ import (
 )
 
 type movementHandler struct {
-	createMovement usecases.CreateMovementUseCase
-	createPurchase usecases.CreateCreditCardPurchaseUseCase
-	getMovement    usecases.GetMovementUseCase
-	listMovements  usecases.ListMovementsUseCase
-	updateMovement usecases.UpdateMovementUseCase
-	cancelMovement usecases.CancelMovementUseCase
-	cancelPurchase usecases.CancelCreditCardPurchaseUseCase
-	getCashflow    usecases.GetCashflowUseCase
-	syncRunner     services.SyncRunner
+	createMovement     usecases.CreateMovementUseCase
+	createPurchase     usecases.CreateCreditCardPurchaseUseCase
+	getMovement        usecases.GetMovementUseCase
+	listMovements      usecases.ListMovementsUseCase
+	updateMovement     usecases.UpdateMovementUseCase
+	cancelMovement     usecases.CancelMovementUseCase
+	cancelPurchase     usecases.CancelCreditCardPurchaseUseCase
+	getCashflow        usecases.GetCashflowUseCase
+	listPaymentMethods usecases.ListPaymentMethodsUseCase
+	syncRunner         services.SyncRunner
 
 	defaultCurrency string
 	log             logger.Logger
@@ -40,22 +41,24 @@ func NewMovementHandler(
 	cancelMovement usecases.CancelMovementUseCase,
 	cancelPurchase usecases.CancelCreditCardPurchaseUseCase,
 	getCashflow usecases.GetCashflowUseCase,
+	listPaymentMethods usecases.ListPaymentMethodsUseCase,
 	syncRunner services.SyncRunner,
 	defaultCurrency string,
 	log logger.Logger,
 ) MovementHandler {
 	return &movementHandler{
-		createMovement:  createMovement,
-		createPurchase:  createPurchase,
-		getMovement:     getMovement,
-		listMovements:   listMovements,
-		updateMovement:  updateMovement,
-		cancelMovement:  cancelMovement,
-		cancelPurchase:  cancelPurchase,
-		getCashflow:     getCashflow,
-		syncRunner:      syncRunner,
-		defaultCurrency: defaultCurrency,
-		log:             log,
+		createMovement:     createMovement,
+		createPurchase:     createPurchase,
+		getMovement:        getMovement,
+		listMovements:      listMovements,
+		updateMovement:     updateMovement,
+		cancelMovement:     cancelMovement,
+		cancelPurchase:     cancelPurchase,
+		getCashflow:        getCashflow,
+		listPaymentMethods: listPaymentMethods,
+		syncRunner:         syncRunner,
+		defaultCurrency:    defaultCurrency,
+		log:                log,
 	}
 }
 
@@ -86,7 +89,7 @@ func (h *movementHandler) CreateMovement(w http.ResponseWriter, r *http.Request)
 	}
 
 	if req.Installments > 1 {
-		if entities.PaymentMethod(req.PaymentMethod) != entities.PaymentMethodCreditCard {
+		if req.PaymentMethod != entities.PaymentMethodCreditCard {
 			h.writeError(w, http.StatusBadRequest, "installments require payment_method \"credit_card\"")
 			return
 		}
@@ -354,21 +357,43 @@ func (h *movementHandler) Cashflow(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusOK, resp)
 }
 
-// ListCategories handles GET /categories so the frontend never hardcodes
-// the fixed category/payment-method lists.
-func (h *movementHandler) ListCategories(w http.ResponseWriter, _ *http.Request) {
+// ListCategories handles GET /categories: the still-fixed category list
+// plus the caller's own payment-method registry (BACK-17 — id, name;
+// system rows "credit_card"/"bank_transfer" and the ordinary first-run
+// defaults lazily ensured first).
+func (h *movementHandler) ListCategories(w http.ResponseWriter, r *http.Request) {
+	userID, ok := reqctx.UserID(r.Context())
+	if !ok {
+		h.writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
 	categories := make([]string, 0)
 	for _, c := range entities.Categories() {
 		categories = append(categories, string(c))
 	}
-	methods := make([]string, 0)
-	for _, m := range entities.PaymentMethods() {
-		methods = append(methods, string(m))
+
+	methodRows, err := h.listPaymentMethods.Execute(r.Context(), userID)
+	if err != nil {
+		h.writeUsecaseError(w, "list payment methods", err)
+		return
 	}
+	methods := make([]interfacedto.PaymentMethodResponse, 0, len(methodRows))
+	for _, m := range methodRows {
+		methods = append(methods, toPaymentMethodResponse(m))
+	}
+
 	h.writeJSON(w, http.StatusOK, interfacedto.CategoriesResponse{
 		Categories:     categories,
 		PaymentMethods: methods,
 	})
+}
+
+func toPaymentMethodResponse(m *dto.PaymentMethodDTO) interfacedto.PaymentMethodResponse {
+	return interfacedto.PaymentMethodResponse{
+		ID:   m.ID,
+		Name: m.Name,
+	}
 }
 
 func parseNonNegativeIntParam(r *http.Request, name string) (int, error) {

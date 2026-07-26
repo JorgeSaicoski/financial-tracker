@@ -16,12 +16,13 @@ import (
 type updateMovementUseCase struct {
 	repo     repositories.MovementRepository
 	accounts repositories.AccountRepository
+	methods  repositories.PaymentMethodRepository
 	sync     services.SyncTrigger
 }
 
 // NewUpdateMovement returns interface type for dependency injection.
-func NewUpdateMovement(repo repositories.MovementRepository, accounts repositories.AccountRepository, sync services.SyncTrigger) UpdateMovementUseCase {
-	return &updateMovementUseCase{repo: repo, accounts: accounts, sync: sync}
+func NewUpdateMovement(repo repositories.MovementRepository, accounts repositories.AccountRepository, methods repositories.PaymentMethodRepository, sync services.SyncTrigger) UpdateMovementUseCase {
+	return &updateMovementUseCase{repo: repo, accounts: accounts, methods: methods, sync: sync}
 }
 
 func (uc *updateMovementUseCase) Execute(ctx context.Context, userID, id string, input UpdateMovementInput) (UpdateMovementResult, error) {
@@ -84,7 +85,11 @@ func (uc *updateMovementUseCase) Execute(ctx context.Context, userID, id string,
 		}
 	}
 
-	category, paymentMethod, err := normalizeCategoryAndMethod(categoryInput, paymentMethodInput)
+	category, err := normalizeCategory(categoryInput)
+	if err != nil {
+		return UpdateMovementResult{}, err
+	}
+	paymentMethod, err := resolvePaymentMethod(ctx, uc.methods, movement.UserID, paymentMethodInput)
 	if err != nil {
 		return UpdateMovementResult{}, err
 	}

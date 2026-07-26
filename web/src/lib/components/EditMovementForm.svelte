@@ -74,8 +74,8 @@
 	</div>
 	<div class="form-row">
 		<select bind:value={paymentMethod} aria-label="Payment method">
-			{#each paymentMethods as m (m)}
-				<option value={m}>{labelFor(m)}</option>
+			{#each paymentMethods as m (m.id)}
+				<option value={m.name}>{labelFor(m.name)}</option>
 			{/each}
 		</select>
 		<select bind:value={accountId} aria-label="Account">

@@ -28,7 +28,7 @@ func (uc *createCreditCardPurchaseUseCase) Execute(ctx context.Context, input Cr
 		return nil, nil, apperrors.ErrInvalidInput
 	}
 
-	category, _, err := normalizeCategoryAndMethod(input.Category, string(entities.PaymentMethodCreditCard))
+	category, err := normalizeCategory(input.Category)
 	if err != nil {
 		return nil, nil, err
 	}

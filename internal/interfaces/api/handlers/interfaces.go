@@ -86,3 +86,14 @@ type TransferHandler interface {
 type UserHandler interface {
 	Me(w http.ResponseWriter, r *http.Request)
 }
+
+// PaymentMethodHandler exposes the user-extendable payment-method
+// registry (BACK-17), replacing the old fixed enum. ListPaymentMethods
+// itself isn't here — it's exposed through MovementHandler.ListCategories
+// (GET /categories), same as CategoryHandler leaves listing to that
+// endpoint too.
+type PaymentMethodHandler interface {
+	CreatePaymentMethod(w http.ResponseWriter, r *http.Request)
+	UpdatePaymentMethod(w http.ResponseWriter, r *http.Request)
+	DeletePaymentMethod(w http.ResponseWriter, r *http.Request)
+}
