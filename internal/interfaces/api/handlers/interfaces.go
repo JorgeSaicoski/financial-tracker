@@ -37,6 +37,13 @@ type ImportHandler interface {
 	ImportMovements(w http.ResponseWriter, r *http.Request)
 }
 
+// ExportHandler exposes BACK-09's CSV export: the user's own movement
+// history in exactly BACK-03's import model, available in every mode so
+// data is always portable — not standalone-only.
+type ExportHandler interface {
+	ExportMovements(w http.ResponseWriter, r *http.Request)
+}
+
 // ExchangeRateHandler exposes user-managed, historical exchange rates
 // against USD (BACK-11) — reference data the user maintains themselves,
 // no external rate API involved.

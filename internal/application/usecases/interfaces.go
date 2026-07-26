@@ -139,6 +139,36 @@ type ImportMovementsUseCase interface {
 	Execute(ctx context.Context, input ImportMovementsInput) (ImportMovementsResult, error)
 }
 
+// ExportedRow is one CSV row of GET /export/movements — the first seven
+// fields are exactly BACK-03's import model (Account already resolved to
+// its name, not id), so export -> import round-trips. Status/
+// CancelsMovementID/ReversedByMovementID are only populated (and only
+// rendered by the handler) when the caller asked for IncludeCancelled.
+type ExportedRow struct {
+	Date          string // YYYY-MM-DD
+	Amount        int64
+	Currency      string
+	Description   string
+	Category      string
+	PaymentMethod string
+	Account       string
+
+	Status               string
+	CancelsMovementID    string
+	ReversedByMovementID string
+}
+
+// ExportMovementsUseCase implements BACK-09's GET /export/movements: a
+// CSV export in the exact BACK-03 import model, available in every mode
+// (not just standalone) so a user's data is always portable. Default
+// (includeCancelled=false) excludes voided movements and any movement
+// that is a reversal or has been reversed — an export meant for re-import
+// should read like the user's real history, not ledger-service's
+// append-only correction trail.
+type ExportMovementsUseCase interface {
+	Execute(ctx context.Context, userID string, includeCancelled bool) ([]ExportedRow, error)
+}
+
 type CreateMovementUseCase interface {
 	Execute(ctx context.Context, input CreateMovementInput) (*dto.MovementDTO, error)
 }

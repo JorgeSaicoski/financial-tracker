@@ -3,8 +3,11 @@ package main
 import (
 	"context"
 	"database/sql"
+	"io/fs"
 	"net/http"
 	"os"
+	"path/filepath"
+	"slices"
 	"strconv"
 	"time"
 
@@ -18,15 +21,19 @@ import (
 	"github.com/JorgeSaicoski/financial-tracker/internal/interfaces/api"
 	"github.com/JorgeSaicoski/financial-tracker/internal/interfaces/api/handlers"
 	applogger "github.com/JorgeSaicoski/financial-tracker/internal/pkg/logger"
+	"github.com/JorgeSaicoski/financial-tracker/internal/webui"
 )
 
 func main() {
+	log := applogger.New()
+
 	ledgerServiceURL := envOr("LEDGER_SERVICE_URL", "http://localhost:8080")
 
 	// DEFAULT_USER_ID is now only a dev-mode escape hatch (see
 	// authDisabled below) — real requests get user_id from their verified
 	// Authentik token (BACK-02). Must be a lowercase UUID, since that's
-	// what ledger-service's validator requires.
+	// what ledger-service's validator requires. Standalone (BACK-09)
+	// always uses this same fixed id — there is only ever one user.
 	defaultUserID := envOr("DEFAULT_USER_ID", "00000000-0000-0000-0000-000000000001")
 	defaultCurrency := envOr("DEFAULT_CURRENCY", "usd")
 	port := envOr("PORT", "8081")
@@ -34,17 +41,36 @@ func main() {
 	// proxy sets this to the proxied origin in deploy/compose.yaml once
 	// frontend+API share one hostname.
 	corsAllowedOrigin := envOr("CORS_ALLOWED_ORIGIN", "*")
-	dbPath := envOr("DB_PATH", "./data/financial-tracker.db")
-	dbDriver := envOr("DB_DRIVER", "sqlite")
 
-	log := applogger.New()
+	// standalone (BACK-09): one binary, no server, no account — accepts
+	// either STANDALONE=true or a --standalone flag, since a
+	// single-binary distribution is exactly the case where a user is
+	// more likely to reach for a flag than an env var.
+	standalone := boolEnvOr(log, "STANDALONE", false) || slices.Contains(os.Args[1:], "--standalone")
+
+	dbDriver := envOr("DB_DRIVER", "sqlite")
+	if standalone && dbDriver != "sqlite" {
+		log.Info("STANDALONE=true forces DB_DRIVER=sqlite (was %q)", dbDriver)
+	}
+	if standalone {
+		dbDriver = "sqlite"
+	}
+	dbPath := os.Getenv("DB_PATH")
+	if dbPath == "" {
+		if standalone {
+			dbPath = standaloneDefaultDBPath(log)
+		} else {
+			dbPath = "./data/financial-tracker.db"
+		}
+	}
 
 	// authDisabled=true skips Authentik token verification entirely and
-	// attributes every request to defaultUserID — for local dev and
-	// single-user self-hosting only. Defaults to false: a deployment that
-	// forgets to set OIDC_ISSUER_URL fails loudly at startup instead of
-	// silently running with no auth.
-	authDisabled := boolEnvOr(log, "AUTH_DISABLED", false)
+	// attributes every request to defaultUserID — for local dev,
+	// single-user self-hosting, and standalone (which has no account
+	// system at all — see BACK-09) only. Defaults to false: a deployment
+	// that forgets to set OIDC_ISSUER_URL fails loudly at startup rather
+	// than silently running with no auth.
+	authDisabled := standalone || boolEnvOr(log, "AUTH_DISABLED", false)
 	oidcIssuerURL := os.Getenv("OIDC_ISSUER_URL")
 	oidcJWKSURL := os.Getenv("OIDC_JWKS_URL") // optional override, skips discovery
 	// Defaults to PUBLIC_OIDC_CLIENT_ID (deploy/.env.example's existing
@@ -61,10 +87,8 @@ func main() {
 	// separate flag — the frontend guard and the API's own enforcement
 	// stay in lockstep with nothing to keep in sync (this folds together
 	// the two flags the FRONT-04 PR description flagged as needing
-	// reconciling once BACK-02 landed). `standalone` is hardcoded false
-	// until BACK-09 exists.
+	// reconciling once BACK-02 landed).
 	authEnabled := !authDisabled
-	const standalone = false
 
 	syncInterval := durationEnvOr(log, "SYNC_INTERVAL", 30*time.Second)
 	retryCooldown := durationEnvOr(log, "SYNC_RETRY_COOLDOWN", 60*time.Second)
@@ -162,8 +186,26 @@ func main() {
 	ensureUser := usecases.NewEnsureUser(userRepo)
 	getUser := usecases.NewGetUser(userRepo)
 	importMovements := usecases.NewImportMovements(movementRepo, accountRepo, currencyRepo)
+	exportMovements := usecases.NewExportMovements(movementRepo, accountRepo)
 	getSettings := usecases.NewGetUserSettings(settingsRepo)
 	updateSettings := usecases.NewUpdateUserSettings(settingsRepo, movementRepo)
+
+	ctx, stop := context.WithCancel(context.Background())
+	defer stop()
+
+	if standalone {
+		// Forces the fixed local user's effective ledger sync off (BACK-13's
+		// existing mechanism) so every movement is created with
+		// sync_status="local" instead of a "pending" row nothing will ever
+		// pick up, and cancels always void (cancel_movement.go only
+		// reverses a *synced* movement, which can now never happen) — see
+		// the ticket's "Open decisions" note in plan.md for why this reuses
+		// BACK-13 rather than inventing a second terminal state.
+		if _, err := updateSettings.Execute(ctx, defaultUserID, false); err != nil {
+			log.Error("standalone: disabling ledger sync for the local user failed: %v", err)
+			os.Exit(1)
+		}
+	}
 
 	movementHandler := handlers.NewMovementHandler(
 		createMovement,
@@ -183,6 +225,7 @@ func main() {
 	transferHandler := handlers.NewTransferHandler(transferBetweenAccounts, cancelTransfer, log)
 	exchangeRateHandler := handlers.NewExchangeRateHandler(setExchangeRate, listExchangeRates, deleteExchangeRate, log)
 	importHandler := handlers.NewImportHandler(importMovements, listAccounts, listCurrencies, log)
+	exportHandler := handlers.NewExportHandler(exportMovements, log)
 	settingsHandler := handlers.NewSettingsHandler(getSettings, updateSettings, log)
 	userHandler := handlers.NewUserHandler(getUser, log)
 	configHandler := handlers.NewConfigHandler(standalone, authEnabled, log)
@@ -193,7 +236,11 @@ func main() {
 	// silently serving every request as the same fixed user.
 	var authMiddleware api.AuthMiddleware
 	if authDisabled {
-		log.Info("AUTH_DISABLED=true: skipping Authentik token verification — every request is attributed to DEFAULT_USER_ID=%s. Do not use this in a real deployment.", defaultUserID)
+		if standalone {
+			log.Info("standalone: no auth — every request is attributed to the fixed local user %s", defaultUserID)
+		} else {
+			log.Info("AUTH_DISABLED=true: skipping Authentik token verification — every request is attributed to DEFAULT_USER_ID=%s. Do not use this in a real deployment.", defaultUserID)
+		}
 		authMiddleware = api.DevUserMiddleware(defaultUserID, ensureUser, log)
 	} else {
 		if oidcIssuerURL == "" {
@@ -209,24 +256,67 @@ func main() {
 		log.Info("auth: validating Authorization bearer tokens against OIDC issuer %s (audience %q)", oidcIssuerURL, oidcAudience)
 	}
 
-	router := api.NewRouter(movementHandler, accountHandler, currencyHandler, transferHandler, exchangeRateHandler, importHandler, settingsHandler, userHandler, configHandler, authMiddleware, corsAllowedOrigin)
+	// frontendFS is nil (not an error) when nobody ran the real frontend
+	// build before compiling this binary — see internal/webui's doc
+	// comment; the router serves a clear explanation instead of the
+	// embedded SPA in that case. Only relevant in standalone: the
+	// deployed stack always serves the frontend as its own container
+	// (INFRA-03).
+	var frontendFS fs.FS
+	if standalone {
+		if embedded, ok := webui.FS(); ok {
+			frontendFS = embedded
+		} else {
+			log.Info("standalone: no frontend embedded in this binary (see internal/webui's doc comment) — the API itself still works")
+		}
+	}
 
-	ctx, stop := context.WithCancel(context.Background())
-	defer stop()
-	syncService.Start(ctx, syncInterval)
+	router := api.NewRouter(movementHandler, accountHandler, currencyHandler, transferHandler, exchangeRateHandler, importHandler, exportHandler, settingsHandler, userHandler, configHandler, authMiddleware, corsAllowedOrigin, standalone, frontendFS)
+
+	if !standalone {
+		// Standalone has no ledger-service to sync to at all — starting
+		// this loop would just retry-fail forever against
+		// LEDGER_SERVICE_URL's default (localhost:8080), which the
+		// acceptance criteria explicitly rules out ("no ledger-service
+		// calls ever attempted").
+		syncService.Start(ctx, syncInterval)
+	}
 
 	dbDescription := dbPath
 	if dbDriver == "postgres" {
 		dbDescription = "postgres"
 	}
 	addr := ":" + port
-	log.Info("financial-tracker API listening on %s (db driver %s at %s, syncing to ledger-service at %s every %s)", addr, dbDriver, dbDescription, ledgerServiceURL, syncInterval)
-	log.Info("endpoints: GET /config | GET|PATCH /settings | GET /import/movements/spec | POST /import/movements | POST /movements | GET /movements | PATCH /movements/{id} | POST /movements/{id}/cancel | POST /credit-card-purchases/{id}/cancel | POST /sync | GET /categories | GET /cashflow | GET|POST /accounts | POST /accounts/{id}/balance | GET|POST /currencies | POST /transfers | POST /transfers/{id}/cancel | GET|POST /exchange-rates | DELETE /exchange-rates/{id} | GET /me")
+	if standalone {
+		absPath, err := filepath.Abs(dbPath)
+		if err != nil {
+			absPath = dbPath
+		}
+		log.Info("financial-tracker running in STANDALONE mode on %s: no server, no account, no sync — data is one file at %s", addr, absPath)
+	} else {
+		log.Info("financial-tracker API listening on %s (db driver %s at %s, syncing to ledger-service at %s every %s)", addr, dbDriver, dbDescription, ledgerServiceURL, syncInterval)
+	}
+	log.Info("endpoints: GET /config | GET|PATCH /settings | GET /import/movements/spec | POST /import/movements | GET /export/movements | POST /movements | GET /movements | PATCH /movements/{id} | POST /movements/{id}/cancel | POST /credit-card-purchases/{id}/cancel | POST /sync | GET /categories | GET /cashflow | GET|POST /accounts | POST /accounts/{id}/balance | GET|POST /currencies | POST /transfers | POST /transfers/{id}/cancel | GET|POST /exchange-rates | DELETE /exchange-rates/{id} | GET /me")
 
 	if err := http.ListenAndServe(addr, router); err != nil {
 		log.Error("server failed: %v", err)
 		os.Exit(1)
 	}
+}
+
+// standaloneDefaultDBPath is DB_PATH's default when STANDALONE=true: an
+// OS-appropriate per-user data directory instead of "./data" (which
+// assumes a server's working directory, not a program a user
+// double-clicks from anywhere). Falls back to "./data/financial-tracker.db"
+// with a loud log if the OS doesn't define one — better than failing to
+// start entirely.
+func standaloneDefaultDBPath(log applogger.Logger) string {
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		log.Error("standalone: os.UserConfigDir() failed (%v), falling back to ./data", err)
+		return "./data/financial-tracker.db"
+	}
+	return filepath.Join(configDir, "financial-tracker", "financial-tracker.db")
 }
 
 func envOr(key, fallback string) string {
