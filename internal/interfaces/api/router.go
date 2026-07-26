@@ -23,6 +23,7 @@ func NewRouter(
 	settingsHandler handlers.SettingsHandler,
 	userHandler handlers.UserHandler,
 	configHandler handlers.ConfigHandler,
+	reportHandler handlers.ReportHandler,
 	authMiddleware AuthMiddleware,
 	allowedOrigin string,
 ) http.Handler {
@@ -51,6 +52,7 @@ func NewRouter(
 	protected.HandleFunc("PATCH /categories/{id}", categoryHandler.UpdateCategory)
 	protected.HandleFunc("DELETE /categories/{id}", categoryHandler.DeleteCategory)
 	protected.HandleFunc("GET /cashflow", movementHandler.Cashflow)
+	protected.HandleFunc("GET /reports/purchasing-power", reportHandler.PurchasingPower)
 
 	protected.HandleFunc("GET /accounts", accountHandler.ListAccounts)
 	protected.HandleFunc("POST /accounts", accountHandler.CreateAccount)

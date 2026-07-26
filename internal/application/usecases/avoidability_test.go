@@ -32,9 +32,9 @@ func TestEffectiveAvoidabilityFallsBackToCategory(t *testing.T) {
 
 func TestEffectiveAvoidabilityNoneWhenNeitherResolves(t *testing.T) {
 	cases := []*dto.MovementDTO{
-		{Category: ""},                    // uncategorized, no override
-		{Category: "unknown-category"},    // category not in the map (e.g. deleted)
-		{Category: "transfer"},            // system category, nil avoidability
+		{Category: ""},                 // uncategorized, no override
+		{Category: "unknown-category"}, // category not in the map (e.g. deleted)
+		{Category: "transfer"},         // system category, nil avoidability
 	}
 	byName := CategoriesByName([]*dto.CategoryDTO{
 		{Name: "transfer", AvoidabilityPercent: nil},

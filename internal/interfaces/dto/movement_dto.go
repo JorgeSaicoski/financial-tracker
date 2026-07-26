@@ -37,14 +37,14 @@ type MovementResponse struct {
 	SyncStatus    string    `json:"sync_status"`
 	Timestamp     time.Time `json:"timestamp"`
 
-	AccountID            string `json:"account_id,omitempty"`
-	LedgerTransactionID  string `json:"ledger_transaction_id,omitempty"`
-	CreditCardPurchaseID string `json:"credit_card_purchase_id,omitempty"`
-	InstallmentNumber    int    `json:"installment_number,omitempty"`
-	CancelsMovementID    string `json:"cancels_movement_id,omitempty"`
-	ReversedByMovementID string `json:"reversed_by_movement_id,omitempty"`
-	TransferID           string `json:"transfer_id,omitempty"`
-	AvoidabilityOverridePercent *int `json:"avoidability_percent,omitempty"`
+	AccountID                   string `json:"account_id,omitempty"`
+	LedgerTransactionID         string `json:"ledger_transaction_id,omitempty"`
+	CreditCardPurchaseID        string `json:"credit_card_purchase_id,omitempty"`
+	InstallmentNumber           int    `json:"installment_number,omitempty"`
+	CancelsMovementID           string `json:"cancels_movement_id,omitempty"`
+	ReversedByMovementID        string `json:"reversed_by_movement_id,omitempty"`
+	TransferID                  string `json:"transfer_id,omitempty"`
+	AvoidabilityOverridePercent *int   `json:"avoidability_percent,omitempty"`
 }
 
 // UpdateMovementRequest is the API request body for PATCH /movements/{id}.

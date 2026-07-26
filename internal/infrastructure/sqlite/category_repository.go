@@ -43,7 +43,7 @@ func (r *categoryRepository) EnsureByName(ctx context.Context, userID, name stri
 		UserID:              userID,
 		Name:                name,
 		AvoidabilityPercent: avoidabilityPercent,
-		CreatedAt:            time.Now().UTC(),
+		CreatedAt:           time.Now().UTC(),
 	})
 }
 
@@ -148,9 +148,9 @@ func nullableInt(v *int) interface{} {
 
 func scanCategory(row scannable) (*dto.CategoryDTO, error) {
 	var (
-		c                    dto.CategoryDTO
-		avoidabilityPercent  sql.NullInt64
-		createdAt            string
+		c                   dto.CategoryDTO
+		avoidabilityPercent sql.NullInt64
+		createdAt           string
 	)
 	if err := row.Scan(&c.ID, &c.UserID, &c.Name, &avoidabilityPercent, &createdAt); err != nil {
 		return nil, err
