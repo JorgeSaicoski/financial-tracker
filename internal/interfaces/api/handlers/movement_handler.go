@@ -10,6 +10,7 @@ import (
 	"github.com/JorgeSaicoski/financial-tracker/internal/application/services"
 	"github.com/JorgeSaicoski/financial-tracker/internal/application/usecases"
 	"github.com/JorgeSaicoski/financial-tracker/internal/domain/entities"
+	"github.com/JorgeSaicoski/financial-tracker/internal/interfaces/api/reqctx"
 	interfacedto "github.com/JorgeSaicoski/financial-tracker/internal/interfaces/dto"
 	"github.com/JorgeSaicoski/financial-tracker/internal/pkg/logger"
 )
@@ -25,7 +26,6 @@ type movementHandler struct {
 	getCashflow    usecases.GetCashflowUseCase
 	syncRunner     services.SyncRunner
 
-	defaultUserID   string
 	defaultCurrency string
 	log             logger.Logger
 }
@@ -41,7 +41,6 @@ func NewMovementHandler(
 	cancelPurchase usecases.CancelCreditCardPurchaseUseCase,
 	getCashflow usecases.GetCashflowUseCase,
 	syncRunner services.SyncRunner,
-	defaultUserID string,
 	defaultCurrency string,
 	log logger.Logger,
 ) MovementHandler {
@@ -55,7 +54,6 @@ func NewMovementHandler(
 		cancelPurchase:  cancelPurchase,
 		getCashflow:     getCashflow,
 		syncRunner:      syncRunner,
-		defaultUserID:   defaultUserID,
 		defaultCurrency: defaultCurrency,
 		log:             log,
 	}
@@ -65,16 +63,18 @@ func NewMovementHandler(
 // "credit_card" and installments > 1 it creates an installment purchase
 // (one purchase record + N monthly movements) instead of a single row.
 func (h *movementHandler) CreateMovement(w http.ResponseWriter, r *http.Request) {
+	userID, ok := reqctx.UserID(r.Context())
+	if !ok {
+		h.writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
 	var req interfacedto.CreateMovementRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		h.writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
-	userID := req.UserID
-	if userID == "" {
-		userID = h.defaultUserID
-	}
 	currency := req.Currency
 	if currency == "" {
 		currency = h.defaultCurrency
@@ -130,11 +130,18 @@ func (h *movementHandler) CreateMovement(w http.ResponseWriter, r *http.Request)
 	h.writeJSON(w, http.StatusCreated, toMovementResponse(movement))
 }
 
-// GetMovement handles GET /movements?id=X
+// GetMovement handles GET /movements?id=X. Scoped to the authenticated
+// user: a movement id that exists but belongs to someone else is
+// indistinguishable from one that doesn't exist — both 404 (BACK-02).
 func (h *movementHandler) GetMovement(w http.ResponseWriter, r *http.Request) {
+	userID, ok := reqctx.UserID(r.Context())
+	if !ok {
+		h.writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
 	id := r.URL.Query().Get("id")
 
-	movement, err := h.getMovement.Execute(r.Context(), id)
+	movement, err := h.getMovement.Execute(r.Context(), userID, id)
 	if err != nil {
 		h.writeUsecaseError(w, "get movement", err)
 		return
@@ -143,12 +150,15 @@ func (h *movementHandler) GetMovement(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusOK, toMovementResponse(movement))
 }
 
-// ListMovements handles GET /movements?user_id=X&currency=Y&from=&to=&limit=&offset=
-// from/to accept RFC 3339 or YYYY-MM-DD (to is inclusive when date-only).
+// ListMovements handles GET /movements?currency=Y&from=&to=&limit=&offset=,
+// always scoped to the authenticated user (BACK-02 — user_id is no longer
+// an accepted query param). from/to accept RFC 3339 or YYYY-MM-DD (to is
+// inclusive when date-only).
 func (h *movementHandler) ListMovements(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("user_id")
-	if userID == "" {
-		userID = h.defaultUserID
+	userID, ok := reqctx.UserID(r.Context())
+	if !ok {
+		h.writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
 	}
 
 	var currency *string
@@ -201,6 +211,12 @@ func (h *movementHandler) ListMovements(w http.ResponseWriter, r *http.Request) 
 // replacement instead of an in-place edit (ledger-service never deletes);
 // the response's reversal/replacement fields tell the UI which happened.
 func (h *movementHandler) UpdateMovement(w http.ResponseWriter, r *http.Request) {
+	userID, ok := reqctx.UserID(r.Context())
+	if !ok {
+		h.writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
 	var req interfacedto.UpdateMovementRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		h.writeError(w, http.StatusBadRequest, "invalid request body")
@@ -217,7 +233,7 @@ func (h *movementHandler) UpdateMovement(w http.ResponseWriter, r *http.Request)
 		Timestamp:     req.Timestamp,
 	}
 
-	result, err := h.updateMovement.Execute(r.Context(), r.PathValue("id"), input)
+	result, err := h.updateMovement.Execute(r.Context(), userID, r.PathValue("id"), input)
 	if err != nil {
 		h.writeUsecaseError(w, "update movement", err)
 		return
@@ -237,7 +253,13 @@ func (h *movementHandler) UpdateMovement(w http.ResponseWriter, r *http.Request)
 
 // CancelMovement handles POST /movements/{id}/cancel
 func (h *movementHandler) CancelMovement(w http.ResponseWriter, r *http.Request) {
-	result, err := h.cancelMovement.Execute(r.Context(), r.PathValue("id"))
+	userID, ok := reqctx.UserID(r.Context())
+	if !ok {
+		h.writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	result, err := h.cancelMovement.Execute(r.Context(), userID, r.PathValue("id"))
 	if err != nil {
 		h.writeUsecaseError(w, "cancel movement", err)
 		return
@@ -248,7 +270,13 @@ func (h *movementHandler) CancelMovement(w http.ResponseWriter, r *http.Request)
 
 // CancelCreditCardPurchase handles POST /credit-card-purchases/{id}/cancel
 func (h *movementHandler) CancelCreditCardPurchase(w http.ResponseWriter, r *http.Request) {
-	result, err := h.cancelPurchase.Execute(r.Context(), r.PathValue("id"))
+	userID, ok := reqctx.UserID(r.Context())
+	if !ok {
+		h.writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	result, err := h.cancelPurchase.Execute(r.Context(), userID, r.PathValue("id"))
 	if err != nil {
 		h.writeUsecaseError(w, "cancel credit card purchase", err)
 		return
@@ -279,12 +307,14 @@ func (h *movementHandler) Sync(w http.ResponseWriter, r *http.Request) {
 }
 
 // Cashflow handles GET /cashflow?from=&to=: money in / money out / net
-// over the interval, per currency and per account. from/to accept
-// RFC 3339 or YYYY-MM-DD (to is inclusive when date-only).
+// over the interval, per currency and per account, scoped to the
+// authenticated user (BACK-02). from/to accept RFC 3339 or YYYY-MM-DD
+// (to is inclusive when date-only).
 func (h *movementHandler) Cashflow(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("user_id")
-	if userID == "" {
-		userID = h.defaultUserID
+	userID, ok := reqctx.UserID(r.Context())
+	if !ok {
+		h.writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
 	}
 
 	from, err := parseTimeParam(r, "from", false)

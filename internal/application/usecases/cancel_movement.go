@@ -22,14 +22,17 @@ func NewCancelMovement(repo repositories.MovementRepository, sync services.SyncT
 	return &cancelMovementUseCase{repo: repo, sync: sync}
 }
 
-func (uc *cancelMovementUseCase) Execute(ctx context.Context, id string) (CancelMovementResult, error) {
-	if id == "" {
+func (uc *cancelMovementUseCase) Execute(ctx context.Context, userID, id string) (CancelMovementResult, error) {
+	if userID == "" || id == "" {
 		return CancelMovementResult{}, apperrors.ErrInvalidInput
 	}
 
 	movement, err := uc.repo.GetByID(ctx, id)
 	if err != nil {
 		return CancelMovementResult{}, err
+	}
+	if movement.UserID != userID {
+		return CancelMovementResult{}, apperrors.ErrNotFound
 	}
 	if movement.TransferID != nil {
 		// Cancelling one leg alone would leave the other stranded,

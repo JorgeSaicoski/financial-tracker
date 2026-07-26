@@ -126,17 +126,15 @@ implements.
 
 ## MVP scope / known limitations
 
-- **No server-side auth enforcement yet.** Every request without an
-  explicit `user_id` is attributed to a fixed dev user (`DEFAULT_USER_ID`).
-  Fine for single-user personal use. The frontend has a full OIDC (Authentik)
-  login flow (`web/src/lib/auth.svelte.js`) gated by `GET /config`'s
-  `auth_enabled` flag (`AUTH_ENABLED` env, default `false`) — but that flag
-  only controls whether the *frontend* shows a login guard; the API itself
-  doesn't verify tokens until the separate JWT-middleware work lands
-  (`OIDC_ISSUER_URL`/`AUTH_DISABLED`, see the auth PR). Don't set
-  `AUTH_ENABLED=true` in a real deployment until that's merged and live —
-  today it would just make the frontend ask for a login that nothing
-  server-side checks.
+- **Auth is opt-out, not opt-in.** By default the API verifies every
+  request's Authentik-issued bearer token (`OIDC_ISSUER_URL` required) and
+  the frontend's OIDC login flow (`web/src/lib/auth.svelte.js`) enforces
+  its own guard, driven by `GET /config`'s `auth_enabled` — which is just
+  the inverse of `AUTH_DISABLED`, so the two always agree. Set
+  `AUTH_DISABLED=true` (see `.env.example`) for local dev / single-user
+  self-hosting without a running Authentik instance: every request is then
+  attributed to a fixed dev user (`DEFAULT_USER_ID`) and the frontend shows
+  no login guard either.
 - **No idempotency key on sync.** If a push to ledger-service succeeds but
   the response is lost, the retry duplicates the transaction there. The
   real fix is idempotency-key support in ledger-service's API (follow-up
@@ -243,8 +241,9 @@ already set in `docker-compose.yml` — without it `npm install` fails with
    local dev — tighten before deploying anywhere real.
 
    `PUBLIC_OIDC_ISSUER`/`PUBLIC_OIDC_CLIENT_ID` (`web/.env.example`) are
-   only needed when the API's `AUTH_ENABLED=true`; leave them blank for
-   the default no-auth flow.
+   only needed when the API enforces auth (the default — see
+   `AUTH_DISABLED` in `.env.example`); leave them blank when running with
+   `AUTH_DISABLED=true`.
 
 ### Deploying (PostgreSQL, production images)
 

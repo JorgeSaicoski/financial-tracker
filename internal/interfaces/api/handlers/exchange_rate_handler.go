@@ -7,6 +7,7 @@ import (
 
 	"github.com/JorgeSaicoski/financial-tracker/internal/application/dto"
 	"github.com/JorgeSaicoski/financial-tracker/internal/application/usecases"
+	"github.com/JorgeSaicoski/financial-tracker/internal/interfaces/api/reqctx"
 	interfacedto "github.com/JorgeSaicoski/financial-tracker/internal/interfaces/dto"
 	apperrors "github.com/JorgeSaicoski/financial-tracker/internal/pkg/errors"
 	"github.com/JorgeSaicoski/financial-tracker/internal/pkg/logger"
@@ -17,8 +18,7 @@ type exchangeRateHandler struct {
 	listRates  usecases.ListExchangeRatesUseCase
 	deleteRate usecases.DeleteExchangeRateUseCase
 
-	defaultUserID string
-	log           logger.Logger
+	log logger.Logger
 }
 
 // NewExchangeRateHandler returns interface type for dependency injection.
@@ -26,21 +26,25 @@ func NewExchangeRateHandler(
 	setRate usecases.SetExchangeRateUseCase,
 	listRates usecases.ListExchangeRatesUseCase,
 	deleteRate usecases.DeleteExchangeRateUseCase,
-	defaultUserID string,
 	log logger.Logger,
 ) ExchangeRateHandler {
 	return &exchangeRateHandler{
-		setRate:       setRate,
-		listRates:     listRates,
-		deleteRate:    deleteRate,
-		defaultUserID: defaultUserID,
-		log:           log,
+		setRate:    setRate,
+		listRates:  listRates,
+		deleteRate: deleteRate,
+		log:        log,
 	}
 }
 
 // SetExchangeRate handles POST /exchange-rates: registers today's (or a
 // backdated) rate; posting the same currency+date again corrects it.
 func (h *exchangeRateHandler) SetExchangeRate(w http.ResponseWriter, r *http.Request) {
+	userID, ok := reqctx.UserID(r.Context())
+	if !ok {
+		writeError(h.log, w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
 	var req interfacedto.SetExchangeRateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(h.log, w, http.StatusBadRequest, "invalid request body")
@@ -53,7 +57,7 @@ func (h *exchangeRateHandler) SetExchangeRate(w http.ResponseWriter, r *http.Req
 	}
 
 	rate, err := h.setRate.Execute(r.Context(), usecases.SetExchangeRateInput{
-		UserID:        h.defaultUserID,
+		UserID:        userID,
 		Currency:      req.Currency,
 		UnitsPerUSD:   req.UnitsPerUSD,
 		EffectiveFrom: effectiveFrom,
@@ -65,10 +69,17 @@ func (h *exchangeRateHandler) SetExchangeRate(w http.ResponseWriter, r *http.Req
 	writeJSON(h.log, w, http.StatusCreated, toExchangeRateResponse(rate))
 }
 
-// ListExchangeRates handles GET /exchange-rates: every currency the user
-// has rates for, each with its currently-effective rate and full history.
+// ListExchangeRates handles GET /exchange-rates: every currency the
+// authenticated user has rates for, each with its currently-effective
+// rate and full history.
 func (h *exchangeRateHandler) ListExchangeRates(w http.ResponseWriter, r *http.Request) {
-	groups, err := h.listRates.Execute(r.Context(), h.defaultUserID)
+	userID, ok := reqctx.UserID(r.Context())
+	if !ok {
+		writeError(h.log, w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	groups, err := h.listRates.Execute(r.Context(), userID)
 	if err != nil {
 		h.writeUsecaseError(w, "list exchange rates", err)
 		return
@@ -93,9 +104,18 @@ func (h *exchangeRateHandler) ListExchangeRates(w http.ResponseWriter, r *http.R
 }
 
 // DeleteExchangeRate handles DELETE /exchange-rates/{id}: fixing a typo
-// in history is legitimate, this is user-owned reference data.
+// in history is legitimate, this is user-owned reference data. Scoped to
+// the authenticated user (BACK-02) — the repository's Delete already
+// required a matching userID, so this just stops trusting a fixed
+// default for it.
 func (h *exchangeRateHandler) DeleteExchangeRate(w http.ResponseWriter, r *http.Request) {
-	if err := h.deleteRate.Execute(r.Context(), h.defaultUserID, r.PathValue("id")); err != nil {
+	userID, ok := reqctx.UserID(r.Context())
+	if !ok {
+		writeError(h.log, w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	if err := h.deleteRate.Execute(r.Context(), userID, r.PathValue("id")); err != nil {
 		h.writeUsecaseError(w, "delete exchange rate", err)
 		return
 	}

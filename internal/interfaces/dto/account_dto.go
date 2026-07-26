@@ -3,10 +3,11 @@ package dto
 import "time"
 
 // CreateAccountRequest is the API request body for POST /accounts.
-// UserID defaults like movements; Type defaults to "other"; Currency must
-// already be registered via POST /currencies.
+// user_id is not a field here — like CreateMovementRequest, it comes from
+// the authenticated request's token (BACK-02), never the body. Type
+// defaults to "other"; Currency must already be registered via
+// POST /currencies.
 type CreateAccountRequest struct {
-	UserID   string `json:"user_id,omitempty"`
 	Name     string `json:"name"`
 	Type     string `json:"type,omitempty"`
 	Currency string `json:"currency,omitempty"`
