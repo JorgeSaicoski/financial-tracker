@@ -46,7 +46,7 @@ func TestCancelUnsyncedMovementVoidsLocally(t *testing.T) {
 	}
 
 	// The sync worker must never pick a voided movement up.
-	pending, _ := repo.ListPendingSync(context.Background(), time.Now().UTC().Add(time.Hour), 0)
+	pending, _ := repo.ListPendingSync(context.Background(), time.Now().UTC().Add(time.Hour), 0, nil)
 	if len(pending) != 0 {
 		t.Errorf("voided movement still pending sync: %v", pending)
 	}

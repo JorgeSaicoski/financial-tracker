@@ -19,6 +19,7 @@ func NewRouter(
 	currencyHandler handlers.CurrencyHandler,
 	transferHandler handlers.TransferHandler,
 	exchangeRateHandler handlers.ExchangeRateHandler,
+	settingsHandler handlers.SettingsHandler,
 	userHandler handlers.UserHandler,
 	configHandler handlers.ConfigHandler,
 	authMiddleware AuthMiddleware,
@@ -28,6 +29,9 @@ func NewRouter(
 	// its own mux wrapped in authMiddleware — see below for why /config
 	// itself must stay outside that wrapping.
 	protected := http.NewServeMux()
+
+	protected.HandleFunc("GET /settings", settingsHandler.GetSettings)
+	protected.HandleFunc("PATCH /settings", settingsHandler.PatchSettings)
 
 	protected.HandleFunc("POST /movements", movementHandler.CreateMovement)
 	protected.HandleFunc("GET /movements", func(w http.ResponseWriter, r *http.Request) {
