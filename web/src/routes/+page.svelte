@@ -21,6 +21,7 @@
 	import AppHeader from '$lib/components/AppHeader.svelte';
 	import BalanceCard from '$lib/components/BalanceCard.svelte';
 	import AccountsPanel from '$lib/components/AccountsPanel.svelte';
+	import LocalBackupPanel from '$lib/components/LocalBackupPanel.svelte';
 	import TransferForm from '$lib/components/TransferForm.svelte';
 	import AddMovementForm from '$lib/components/AddMovementForm.svelte';
 	import CashflowPanel from '$lib/components/CashflowPanel.svelte';
@@ -237,6 +238,8 @@
 	<CashflowPanel />
 
 	<AccountsPanel {accounts} {accountTypes} {currencies} onAddAccount={handleAddAccount} onReportBalance={handleReportBalance} />
+
+	<LocalBackupPanel />
 
 	<TransferForm {accounts} onCreate={handleCreateTransfer} />
 

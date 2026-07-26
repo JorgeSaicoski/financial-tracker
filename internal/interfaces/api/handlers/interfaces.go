@@ -62,6 +62,16 @@ type MovementHandler interface {
 	Cashflow(w http.ResponseWriter, r *http.Request)
 }
 
+// ArchiveHandler exposes BACK-15's "no cloud" local archive tier: the
+// per-user setting, the full-account export the frontend encrypts
+// client-side, and the import that restores a (already-decrypted) one.
+type ArchiveHandler interface {
+	GetLocalArchiveSetting(w http.ResponseWriter, r *http.Request)
+	SetLocalArchiveSetting(w http.ResponseWriter, r *http.Request)
+	ExportArchive(w http.ResponseWriter, r *http.Request)
+	ImportArchive(w http.ResponseWriter, r *http.Request)
+}
+
 // TransferHandler exposes account-to-account transfers: a linked
 // debit/credit pair of movements that nets to zero, so it never changes
 // the user's overall net worth.
