@@ -21,52 +21,64 @@ func NewRouter(
 	exchangeRateHandler handlers.ExchangeRateHandler,
 	settingsHandler handlers.SettingsHandler,
 	userHandler handlers.UserHandler,
+	configHandler handlers.ConfigHandler,
 	authMiddleware AuthMiddleware,
 	allowedOrigin string,
 ) http.Handler {
-	mux := http.NewServeMux()
+	// Every route except /config needs a resolved user_id, so it lives on
+	// its own mux wrapped in authMiddleware — see below for why /config
+	// itself must stay outside that wrapping.
+	protected := http.NewServeMux()
 
-	mux.HandleFunc("GET /settings", settingsHandler.GetSettings)
-	mux.HandleFunc("PATCH /settings", settingsHandler.PatchSettings)
+	protected.HandleFunc("GET /settings", settingsHandler.GetSettings)
+	protected.HandleFunc("PATCH /settings", settingsHandler.PatchSettings)
 
-	mux.HandleFunc("POST /movements", movementHandler.CreateMovement)
-	mux.HandleFunc("GET /movements", func(w http.ResponseWriter, r *http.Request) {
+	protected.HandleFunc("POST /movements", movementHandler.CreateMovement)
+	protected.HandleFunc("GET /movements", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Has("id") {
 			movementHandler.GetMovement(w, r)
 		} else {
 			movementHandler.ListMovements(w, r)
 		}
 	})
-	mux.HandleFunc("PATCH /movements/{id}", movementHandler.UpdateMovement)
-	mux.HandleFunc("POST /movements/{id}/cancel", movementHandler.CancelMovement)
-	mux.HandleFunc("POST /credit-card-purchases/{id}/cancel", movementHandler.CancelCreditCardPurchase)
-	mux.HandleFunc("POST /sync", movementHandler.Sync)
-	mux.HandleFunc("GET /categories", movementHandler.ListCategories)
-	mux.HandleFunc("GET /cashflow", movementHandler.Cashflow)
+	protected.HandleFunc("PATCH /movements/{id}", movementHandler.UpdateMovement)
+	protected.HandleFunc("POST /movements/{id}/cancel", movementHandler.CancelMovement)
+	protected.HandleFunc("POST /credit-card-purchases/{id}/cancel", movementHandler.CancelCreditCardPurchase)
+	protected.HandleFunc("POST /sync", movementHandler.Sync)
+	protected.HandleFunc("GET /categories", movementHandler.ListCategories)
+	protected.HandleFunc("GET /cashflow", movementHandler.Cashflow)
 
-	mux.HandleFunc("GET /accounts", accountHandler.ListAccounts)
-	mux.HandleFunc("POST /accounts", accountHandler.CreateAccount)
-	mux.HandleFunc("POST /accounts/{id}/balance", accountHandler.ReportBalance)
+	protected.HandleFunc("GET /accounts", accountHandler.ListAccounts)
+	protected.HandleFunc("POST /accounts", accountHandler.CreateAccount)
+	protected.HandleFunc("POST /accounts/{id}/balance", accountHandler.ReportBalance)
 
-	mux.HandleFunc("GET /currencies", currencyHandler.ListCurrencies)
-	mux.HandleFunc("POST /currencies", currencyHandler.AddCurrency)
+	protected.HandleFunc("GET /currencies", currencyHandler.ListCurrencies)
+	protected.HandleFunc("POST /currencies", currencyHandler.AddCurrency)
 
-	mux.HandleFunc("POST /transfers", transferHandler.CreateTransfer)
-	mux.HandleFunc("POST /transfers/{id}/cancel", transferHandler.CancelTransfer)
+	protected.HandleFunc("POST /transfers", transferHandler.CreateTransfer)
+	protected.HandleFunc("POST /transfers/{id}/cancel", transferHandler.CancelTransfer)
 
-	mux.HandleFunc("GET /exchange-rates", exchangeRateHandler.ListExchangeRates)
-	mux.HandleFunc("POST /exchange-rates", exchangeRateHandler.SetExchangeRate)
-	mux.HandleFunc("DELETE /exchange-rates/{id}", exchangeRateHandler.DeleteExchangeRate)
+	protected.HandleFunc("GET /exchange-rates", exchangeRateHandler.ListExchangeRates)
+	protected.HandleFunc("POST /exchange-rates", exchangeRateHandler.SetExchangeRate)
+	protected.HandleFunc("DELETE /exchange-rates/{id}", exchangeRateHandler.DeleteExchangeRate)
 
-	mux.HandleFunc("GET /me", userHandler.Me)
+	protected.HandleFunc("GET /me", userHandler.Me)
 
-	// Auth wraps every route: user_id always comes from the verified
-	// token (or the AUTH_DISABLED dev stand-in), never from a request
-	// body or query string — see BACK-02. CORS wraps auth, not the other
-	// way around, so a browser's OPTIONS preflight (which never carries
-	// an Authorization header) gets its 204 from withCORS before auth
-	// ever runs.
-	return withCORS(authMiddleware(mux), allowedOrigin)
+	mux := http.NewServeMux()
+	// Unauthenticated by design (see config_handler.go): the frontend
+	// calls this before it has a token to decide whether it needs one, so
+	// it must not go through authMiddleware like everything else does —
+	// mounted on the outer mux instead of protected.
+	mux.HandleFunc("GET /config", configHandler.GetConfig)
+	// user_id always comes from the verified token (or the AUTH_DISABLED
+	// dev stand-in), never from a request body or query string — see
+	// BACK-02.
+	mux.Handle("/", authMiddleware(protected))
+
+	// CORS wraps everything, not the other way around, so a browser's
+	// OPTIONS preflight (which never carries an Authorization header)
+	// gets its 204 from withCORS before auth ever runs.
+	return withCORS(mux, allowedOrigin)
 }
 
 // withCORS allows one configured origin (see cmd/api's CORS_ALLOWED_ORIGIN;

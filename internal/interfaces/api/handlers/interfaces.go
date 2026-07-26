@@ -15,6 +15,14 @@ type AccountHandler interface {
 	ReportBalance(w http.ResponseWriter, r *http.Request)
 }
 
+// ConfigHandler exposes runtime flags the frontend needs before it can
+// decide how to render at all (today: whether to enforce the OIDC login
+// guard). See config_handler.go's doc comment for why this is a minimal
+// seed rather than BACK-02/BACK-09's final shape.
+type ConfigHandler interface {
+	GetConfig(w http.ResponseWriter, r *http.Request)
+}
+
 // CurrencyHandler exposes the user-extendable currency registry backing
 // the frontend's currency dropdown.
 type CurrencyHandler interface {
