@@ -82,7 +82,10 @@ func scanPurchase(row scannable) (*dto.CreditCardPurchaseDTO, error) {
 	err := row.Scan(&p.ID, &p.UserID, &description, &p.Category, &p.TotalAmount, &p.Currency,
 		&p.InstallmentCount, &date, &p.Status, &born)
 	if err != nil {
-		return nil, err
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, err
+		}
+		return nil, fmt.Errorf("sqlite: scan purchase: %w", err)
 	}
 
 	p.Description = description.String

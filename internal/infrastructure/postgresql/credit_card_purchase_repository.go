@@ -100,7 +100,10 @@ func scanPurchase(row scannable) (*dto.CreditCardPurchaseDTO, error) {
 	err := row.Scan(&p.ID, &p.UserID, &description, &p.Category, &p.TotalAmount, &p.Currency,
 		&p.InstallmentCount, &p.PurchaseDate, &p.Status, &p.CreatedAt)
 	if err != nil {
-		return nil, err
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, err
+		}
+		return nil, fmt.Errorf("postgresql: scan purchase: %w", err)
 	}
 	p.Description = description.String
 	return &p, nil

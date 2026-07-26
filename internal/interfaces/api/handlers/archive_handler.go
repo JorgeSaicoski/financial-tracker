@@ -13,6 +13,11 @@ import (
 	"github.com/JorgeSaicoski/financial-tracker/internal/pkg/logger"
 )
 
+// maxArchiveImportBytes bounds the archive body ImportArchive will decode.
+// A full account archive (years of movements) is much larger than a CSV
+// import, so this is well above jwks.go's 1 MiB discovery-body limit.
+const maxArchiveImportBytes = 64 << 20 // 64 MiB
+
 type archiveHandler struct {
 	getSetting    usecases.GetLocalArchiveSettingUseCase
 	setSetting    usecases.SetLocalArchiveSettingUseCase
@@ -107,6 +112,8 @@ func (h *archiveHandler) ImportArchive(w http.ResponseWriter, r *http.Request) {
 		writeError(h.log, w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, maxArchiveImportBytes)
 
 	var req interfacedto.ImportArchiveRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

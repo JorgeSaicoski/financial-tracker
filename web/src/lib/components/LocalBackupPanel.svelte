@@ -33,11 +33,14 @@
 
 	async function handleToggle() {
 		error = '';
+		const previous = enabled;
+		enabled = !enabled; // optimistic: flip immediately, roll back on failure
 		togglingSetting = true;
 		try {
-			const data = await setLocalArchiveSetting(!enabled);
+			const data = await setLocalArchiveSetting(enabled);
 			enabled = data.local_archive_enabled;
 		} catch (err) {
+			enabled = previous;
 			error = err.message;
 		} finally {
 			togglingSetting = false;
@@ -96,7 +99,7 @@
 <section class="local-backup card">
 	<div class="section-head">
 		<h2>Local backup</h2>
-		<label class="toggle" title="Whether this device is set up for the no-cloud tier">
+		<label class="toggle" title="Whether your account is set up for the no-cloud tier — this follows you to any device you log in from">
 			<input type="checkbox" checked={enabled} disabled={loadingSetting || togglingSetting} onchange={handleToggle} />
 			<span class="track" aria-hidden="true"></span>
 			<span class="toggle-label">{enabled ? 'Enabled' : 'Disabled'}</span>
@@ -200,7 +203,7 @@
 		width: calc(1.3rem - 4px);
 		height: calc(1.3rem - 4px);
 		border-radius: 50%;
-		background: #fff;
+		background: var(--color-surface);
 		transition: transform var(--transition-fast);
 		box-shadow: var(--shadow-soft);
 	}

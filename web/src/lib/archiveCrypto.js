@@ -21,6 +21,11 @@
 const KDF_NAME = 'PBKDF2-SHA256';
 const PBKDF2_ITERATIONS = 600_000;
 const FORMAT_VERSION = 1;
+// Caps how many PBKDF2 iterations decryptArchive will honor from a file's
+// own envelope. Without this, a malicious or corrupted file could set
+// `iterations` to an extreme value and freeze the tab for minutes deriving
+// a key nobody asked for.
+const MAX_PBKDF2_ITERATIONS = 2_000_000;
 
 export class ArchiveDecryptError extends Error {
 	constructor() {
@@ -30,7 +35,15 @@ export class ArchiveDecryptError extends Error {
 }
 
 function toBase64(bytes) {
-	return btoa(String.fromCharCode(...bytes));
+	// Avoid String.fromCharCode(...bytes): spreading a large archive's byte
+	// array into function arguments can throw "Maximum call stack size
+	// exceeded" or be very slow. Building the string in chunks avoids both.
+	const CHUNK_SIZE = 0x8000;
+	let binary = '';
+	for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
+		binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK_SIZE));
+	}
+	return btoa(binary);
 }
 
 function fromBase64(b64) {
@@ -87,6 +100,16 @@ export async function decryptArchive(passphrase, envelopeJSON) {
 		envelope = JSON.parse(envelopeJSON);
 		if (!envelope.salt || !envelope.iv || !envelope.ciphertext) {
 			throw new Error('missing fields');
+		}
+		if (envelope.version !== FORMAT_VERSION || envelope.kdf !== KDF_NAME) {
+			throw new Error('unsupported envelope version/kdf');
+		}
+		const iterations = envelope.iterations;
+		if (
+			iterations !== undefined &&
+			(!Number.isInteger(iterations) || iterations < 1 || iterations > MAX_PBKDF2_ITERATIONS)
+		) {
+			throw new Error('iterations out of range');
 		}
 	} catch {
 		throw new ArchiveDecryptError();

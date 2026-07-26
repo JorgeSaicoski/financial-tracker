@@ -34,6 +34,28 @@ func (uc *importArchiveUseCase) Execute(ctx context.Context, userID string, bund
 		return ImportArchiveResult{}, apperrors.ErrInvalidInput
 	}
 
+	// Existing IDs are fetched once per entity type up front — three
+	// queries total — instead of one GetByID per bundle row. A restored
+	// archive can carry years of movements, so an O(n) round-trip per row
+	// would make large restores very slow.
+	existingAccounts, err := uc.accounts.ListByUser(ctx, userID)
+	if err != nil {
+		return ImportArchiveResult{}, err
+	}
+	existingAccountIDs := toIDSet(existingAccounts, func(a *dto.AccountDTO) string { return a.ID })
+
+	existingPurchases, err := uc.purchases.ListByUser(ctx, userID)
+	if err != nil {
+		return ImportArchiveResult{}, err
+	}
+	existingPurchaseIDs := toIDSet(existingPurchases, func(p *dto.CreditCardPurchaseDTO) string { return p.ID })
+
+	existingMovements, err := uc.movements.ListByUser(ctx, userID, nil, nil, nil, 0, 0)
+	if err != nil {
+		return ImportArchiveResult{}, err
+	}
+	existingMovementIDs := toIDSet(existingMovements, func(m *dto.MovementDTO) string { return m.ID })
+
 	var result ImportArchiveResult
 
 	for _, a := range bundle.Accounts {
@@ -41,11 +63,7 @@ func (uc *importArchiveUseCase) Execute(ctx context.Context, userID string, bund
 			return ImportArchiveResult{}, fmt.Errorf("%w: account missing id", apperrors.ErrInvalidInput)
 		}
 		a.UserID = userID
-		exists, err := uc.accountExists(ctx, a.ID)
-		if err != nil {
-			return ImportArchiveResult{}, err
-		}
-		if exists {
+		if existingAccountIDs[a.ID] {
 			result.AccountsSkipped++
 			continue
 		}
@@ -60,11 +78,7 @@ func (uc *importArchiveUseCase) Execute(ctx context.Context, userID string, bund
 			return ImportArchiveResult{}, fmt.Errorf("%w: credit card purchase missing id", apperrors.ErrInvalidInput)
 		}
 		p.UserID = userID
-		exists, err := uc.purchaseExists(ctx, p.ID)
-		if err != nil {
-			return ImportArchiveResult{}, err
-		}
-		if exists {
+		if existingPurchaseIDs[p.ID] {
 			result.CreditCardPurchasesSkipped++
 			continue
 		}
@@ -83,11 +97,7 @@ func (uc *importArchiveUseCase) Execute(ctx context.Context, userID string, bund
 			return ImportArchiveResult{}, fmt.Errorf("%w: movement missing id", apperrors.ErrInvalidInput)
 		}
 		m.UserID = userID
-		exists, err := uc.movementExists(ctx, m.ID)
-		if err != nil {
-			return ImportArchiveResult{}, err
-		}
-		if exists {
+		if existingMovementIDs[m.ID] {
 			result.MovementsSkipped++
 			continue
 		}
@@ -113,35 +123,12 @@ func (uc *importArchiveUseCase) Execute(ctx context.Context, userID string, bund
 	return result, nil
 }
 
-func (uc *importArchiveUseCase) accountExists(ctx context.Context, id string) (bool, error) {
-	_, err := uc.accounts.GetByID(ctx, id)
-	if err == nil {
-		return true, nil
+// toIDSet builds a membership set from a slice using keyFn to extract each
+// element's ID — shared by Execute's three up-front existence prefetches.
+func toIDSet[T any](items []T, keyFn func(T) string) map[string]bool {
+	set := make(map[string]bool, len(items))
+	for _, item := range items {
+		set[keyFn(item)] = true
 	}
-	if apperrors.Is(err, apperrors.ErrNotFound) {
-		return false, nil
-	}
-	return false, err
-}
-
-func (uc *importArchiveUseCase) purchaseExists(ctx context.Context, id string) (bool, error) {
-	_, err := uc.purchases.GetByID(ctx, id)
-	if err == nil {
-		return true, nil
-	}
-	if apperrors.Is(err, apperrors.ErrNotFound) {
-		return false, nil
-	}
-	return false, err
-}
-
-func (uc *importArchiveUseCase) movementExists(ctx context.Context, id string) (bool, error) {
-	_, err := uc.movements.GetByID(ctx, id)
-	if err == nil {
-		return true, nil
-	}
-	if apperrors.Is(err, apperrors.ErrNotFound) {
-		return false, nil
-	}
-	return false, err
+	return set
 }
