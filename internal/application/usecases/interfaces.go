@@ -28,6 +28,32 @@ type CreateAccountUseCase interface {
 	Execute(ctx context.Context, input CreateAccountInput) (*dto.AccountDTO, error)
 }
 
+// EnsureUserInput carries what the identity provider asserted about the
+// caller (services.Identity, unpacked so this package doesn't depend on
+// infrastructure/authentik). Called once per request by the auth
+// middleware right after token verification succeeds — never hit
+// directly over HTTP. Idempotent: the first sight of UserID inserts a
+// row, every sight after refreshes the profile fields.
+type EnsureUserInput struct {
+	UserID      string
+	Provider    string
+	ExternalID  string
+	Email       string
+	DisplayName string
+}
+
+type EnsureUserUseCase interface {
+	Execute(ctx context.Context, input EnsureUserInput) (*dto.UserDTO, error)
+}
+
+// GetUserUseCase backs GET /me. By the time any handler runs, the auth
+// middleware's EnsureUser call has already provisioned the row, so
+// ErrNotFound here would only mean a bug in that wiring, not a normal
+// "new user" case.
+type GetUserUseCase interface {
+	Execute(ctx context.Context, userID string) (*dto.UserDTO, error)
+}
+
 type CreateCreditCardPurchaseInput struct {
 	UserID       string
 	TotalAmount  int64
@@ -59,8 +85,12 @@ type CreateMovementUseCase interface {
 	Execute(ctx context.Context, input CreateMovementInput) (*dto.MovementDTO, error)
 }
 
+// GetMovementUseCase requires the caller's userID and returns
+// apperrors.ErrNotFound (not a distinguishable "forbidden") when the
+// movement exists but belongs to someone else — the API must not leak
+// whether an id exists at all to a caller who doesn't own it (BACK-02).
 type GetMovementUseCase interface {
-	Execute(ctx context.Context, id string) (*dto.MovementDTO, error)
+	Execute(ctx context.Context, userID, id string) (*dto.MovementDTO, error)
 }
 
 // ListMovementsResult also carries the computed balance, since
@@ -104,8 +134,11 @@ type UpdateMovementResult struct {
 	Replacement *dto.MovementDTO
 }
 
+// UpdateMovementUseCase requires the caller's userID and returns
+// apperrors.ErrNotFound when id belongs to someone else (BACK-02) — same
+// ownership rule as GetMovementUseCase.
 type UpdateMovementUseCase interface {
-	Execute(ctx context.Context, id string, input UpdateMovementInput) (UpdateMovementResult, error)
+	Execute(ctx context.Context, userID, id string, input UpdateMovementInput) (UpdateMovementResult, error)
 }
 
 // CancelMovementResult reports how the cancel was carried out: a
@@ -117,8 +150,11 @@ type CancelMovementResult struct {
 	Reversal *dto.MovementDTO
 }
 
+// CancelMovementUseCase requires the caller's userID and returns
+// apperrors.ErrNotFound when id belongs to someone else (BACK-02) — same
+// ownership rule as GetMovementUseCase.
 type CancelMovementUseCase interface {
-	Execute(ctx context.Context, id string) (CancelMovementResult, error)
+	Execute(ctx context.Context, userID, id string) (CancelMovementResult, error)
 }
 
 // CancelCreditCardPurchaseResult reports what happened to each
@@ -130,8 +166,11 @@ type CancelCreditCardPurchaseResult struct {
 	Reversals []*dto.MovementDTO
 }
 
+// CancelCreditCardPurchaseUseCase requires the caller's userID and
+// returns apperrors.ErrNotFound when id belongs to someone else
+// (BACK-02) — same ownership rule as GetMovementUseCase.
 type CancelCreditCardPurchaseUseCase interface {
-	Execute(ctx context.Context, id string) (CancelCreditCardPurchaseResult, error)
+	Execute(ctx context.Context, userID, id string) (CancelCreditCardPurchaseResult, error)
 }
 
 // CancelTransferResult reports what happened to each leg — same
@@ -142,8 +181,11 @@ type CancelTransferResult struct {
 	Credit CancelMovementResult
 }
 
+// CancelTransferUseCase requires the caller's userID and returns
+// apperrors.ErrNotFound when transferID belongs to someone else
+// (BACK-02) — same ownership rule as GetMovementUseCase.
 type CancelTransferUseCase interface {
-	Execute(ctx context.Context, transferID string) (CancelTransferResult, error)
+	Execute(ctx context.Context, userID, transferID string) (CancelTransferResult, error)
 }
 
 // TransferBetweenAccountsInput describes a move of money between two of
@@ -207,9 +249,12 @@ type ListAccountsUseCase interface {
 // exposes the account's return since the previous report. A zero
 // timestamp means "now" — same convention as
 // TransferBetweenAccountsInput.Timestamp — letting a caller backfill a
-// report for an earlier date instead of always today.
+// report for an earlier date instead of always today. Requires the
+// caller's userID and returns apperrors.ErrNotFound when accountID
+// belongs to someone else (BACK-02) — same ownership rule as
+// GetMovementUseCase.
 type ReportAccountBalanceUseCase interface {
-	Execute(ctx context.Context, accountID string, balance int64, timestamp time.Time) (AccountView, error)
+	Execute(ctx context.Context, userID, accountID string, balance int64, timestamp time.Time) (AccountView, error)
 }
 
 // AccountSnapshotView is one reported snapshot plus its own computed
@@ -228,9 +273,11 @@ type AccountSnapshotView struct {
 // ListAccountSnapshotsUseCase returns one account's full reported-balance
 // history, newest first, each entry paired with its own return — the
 // per-snapshot generalization of AccountView's single LastReturn (which
-// only ever covers the latest two).
+// only ever covers the latest two). Requires the caller's userID and
+// returns apperrors.ErrNotFound when accountID belongs to someone else
+// (BACK-02) — same ownership rule as GetMovementUseCase.
 type ListAccountSnapshotsUseCase interface {
-	Execute(ctx context.Context, accountID string) ([]AccountSnapshotView, error)
+	Execute(ctx context.Context, userID, accountID string) ([]AccountSnapshotView, error)
 }
 
 type ListCurrenciesUseCase interface {
@@ -241,6 +288,35 @@ type ListCurrenciesUseCase interface {
 // code is a no-op. Returns the normalized (lowercased) code.
 type AddCurrencyUseCase interface {
 	Execute(ctx context.Context, code string) (string, error)
+}
+
+// UserSettingsView is what GET/PATCH /settings return (BACK-13).
+// Entitled fields are operator/billing-controlled and read-only through
+// this API; Enabled fields are user preference. Effective capability is
+// Entitled AND Enabled.
+type UserSettingsView struct {
+	UserID               string
+	LedgerSyncEntitled   bool
+	LedgerSyncEnabled    bool
+	CloudStorageEntitled bool
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
+}
+
+// GetUserSettingsUseCase returns the caller's own settings, defaulting
+// to "everything true" if they've never touched them.
+type GetUserSettingsUseCase interface {
+	Execute(ctx context.Context, userID string) (UserSettingsView, error)
+}
+
+// UpdateUserSettingsUseCase changes ledger_sync_enabled — the only field
+// a user (as opposed to an operator) may write; entitlement fields are
+// never accepted here (rejected at the HTTP decode boundary, see
+// interfaces/dto). Toggling sync back on reclassifies the backlog
+// accumulated while it was off (SyncStatusLocal) back to "pending" so
+// the next sync pass picks it up.
+type UpdateUserSettingsUseCase interface {
+	Execute(ctx context.Context, userID string, ledgerSyncEnabled bool) (UserSettingsView, error)
 }
 
 // CurrencyFlow aggregates the interval's money in / money out for one

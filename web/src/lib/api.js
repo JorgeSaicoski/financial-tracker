@@ -1,12 +1,24 @@
 import { env } from '$env/dynamic/public';
+import { getAccessToken, handleUnauthorized } from './auth.svelte.js';
 
 const BASE_URL = env.PUBLIC_API_URL || 'http://localhost:8081';
 
 async function request(path, options = {}) {
+	const headers = { 'Content-Type': 'application/json', ...options.headers };
+	const token = getAccessToken();
+	if (token) {
+		headers['Authorization'] = `Bearer ${token}`;
+	}
+
 	const res = await fetch(`${BASE_URL}${path}`, {
-		headers: { 'Content-Type': 'application/json' },
-		...options
+		...options,
+		headers
 	});
+
+	if (res.status === 401) {
+		handleUnauthorized();
+		throw new Error('session expired — please log in again');
+	}
 
 	const body = await res.json().catch(() => null);
 

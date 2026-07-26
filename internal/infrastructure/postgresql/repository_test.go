@@ -37,7 +37,7 @@ func openTestDB(t *testing.T) *sql.DB {
 	if err := Migrate(db); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	if _, err := db.Exec(`TRUNCATE TABLE account_snapshots, movements, credit_card_purchases, accounts CASCADE`); err != nil {
+	if _, err := db.Exec(`TRUNCATE TABLE account_snapshots, movements, credit_card_purchases, accounts, user_settings CASCADE`); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
 	return db
@@ -177,7 +177,7 @@ func TestListPendingSyncFilters(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	pending, err := repo.ListPendingSync(ctx, now, time.Minute)
+	pending, err := repo.ListPendingSync(ctx, now, time.Minute, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +187,7 @@ func TestListPendingSyncFilters(t *testing.T) {
 
 	// Zero cooldown (manual sync) also picks up the fresh failure — but
 	// never the future, synced, or voided rows.
-	pending, err = repo.ListPendingSync(ctx, now, 0)
+	pending, err = repo.ListPendingSync(ctx, now, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -14,6 +14,7 @@ import (
 
 type service struct {
 	repo          repositories.MovementRepository
+	settings      repositories.UserSettingsRepository
 	gateway       services.LedgerGateway
 	log           logger.Logger
 	retryCooldown time.Duration
@@ -21,10 +22,13 @@ type service struct {
 	asyncTimeout time.Duration
 }
 
-// NewService returns interface type for dependency injection.
-func NewService(repo repositories.MovementRepository, gateway services.LedgerGateway, log logger.Logger, retryCooldown time.Duration) Service {
+// NewService returns interface type for dependency injection. settings
+// is BACK-13's per-user ledger sync toggle — every pass excludes users
+// whose effective sync is currently off.
+func NewService(repo repositories.MovementRepository, settings repositories.UserSettingsRepository, gateway services.LedgerGateway, log logger.Logger, retryCooldown time.Duration) Service {
 	return &service{
 		repo:          repo,
+		settings:      settings,
 		gateway:       gateway,
 		log:           log,
 		retryCooldown: retryCooldown,
@@ -46,7 +50,13 @@ func (s *service) RunPassNow(ctx context.Context) services.Summary {
 func (s *service) run(ctx context.Context, cooldown time.Duration) services.Summary {
 	var sum services.Summary
 
-	pending, err := s.repo.ListPendingSync(ctx, time.Now().UTC(), cooldown)
+	excludedUserIDs, err := s.settings.ListSyncDisabledUserIDs(ctx)
+	if err != nil {
+		s.log.Error("sync: listing sync-disabled users failed: %v", err)
+		return sum
+	}
+
+	pending, err := s.repo.ListPendingSync(ctx, time.Now().UTC(), cooldown, excludedUserIDs)
 	if err != nil {
 		s.log.Error("sync: listing pending movements failed: %v", err)
 		return sum

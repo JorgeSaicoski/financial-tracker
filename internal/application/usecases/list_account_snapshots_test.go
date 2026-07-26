@@ -41,7 +41,7 @@ func TestListAccountSnapshotsComputesReturnPerEntry(t *testing.T) {
 	accounts.AddSnapshot(ctx, &dto.AccountSnapshotDTO{AccountID: acc.ID, Balance: 2000, Timestamp: day2, CreatedAt: day2})
 
 	uc := NewListAccountSnapshots(accounts, movements)
-	views, err := uc.Execute(ctx, acc.ID)
+	views, err := uc.Execute(ctx, "u1", acc.ID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -67,8 +67,22 @@ func TestListAccountSnapshotsComputesReturnPerEntry(t *testing.T) {
 
 func TestListAccountSnapshotsRejectsUnknownAccount(t *testing.T) {
 	uc := NewListAccountSnapshots(newFakeAccountRepo(), newFakeMovementRepo())
-	if _, err := uc.Execute(context.Background(), "missing"); !errors.Is(err, apperrors.ErrNotFound) {
+	if _, err := uc.Execute(context.Background(), "u1", "missing"); !errors.Is(err, apperrors.ErrNotFound) {
 		t.Errorf("want ErrNotFound, got %v", err)
+	}
+}
+
+// TestListAccountSnapshotsRejectsOtherUsersAccount guards the IDOR this
+// usecase used to allow: before the userID ownership check was added,
+// any caller could read another user's reported-balance history (and
+// computed returns) just by guessing/enumerating the account ID.
+func TestListAccountSnapshotsRejectsOtherUsersAccount(t *testing.T) {
+	accounts := newFakeAccountRepo()
+	acc, _ := accounts.Create(context.Background(), &dto.AccountDTO{UserID: "u1", Name: "Checking", Currency: "usd"})
+
+	uc := NewListAccountSnapshots(accounts, newFakeMovementRepo())
+	if _, err := uc.Execute(context.Background(), "someone-else", acc.ID); !errors.Is(err, apperrors.ErrNotFound) {
+		t.Errorf("want ErrNotFound for another user's account, got %v", err)
 	}
 }
 
@@ -77,7 +91,7 @@ func TestListAccountSnapshotsEmptyHistory(t *testing.T) {
 	acc, _ := accounts.Create(context.Background(), &dto.AccountDTO{UserID: "u1", Name: "Checking", Currency: "usd"})
 
 	uc := NewListAccountSnapshots(accounts, newFakeMovementRepo())
-	views, err := uc.Execute(context.Background(), acc.ID)
+	views, err := uc.Execute(context.Background(), "u1", acc.ID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

@@ -24,14 +24,17 @@ func NewCancelCreditCardPurchase(
 	return &cancelCreditCardPurchaseUseCase{purchases: purchases, movements: movements, sync: sync}
 }
 
-func (uc *cancelCreditCardPurchaseUseCase) Execute(ctx context.Context, id string) (CancelCreditCardPurchaseResult, error) {
-	if id == "" {
+func (uc *cancelCreditCardPurchaseUseCase) Execute(ctx context.Context, userID, id string) (CancelCreditCardPurchaseResult, error) {
+	if userID == "" || id == "" {
 		return CancelCreditCardPurchaseResult{}, apperrors.ErrInvalidInput
 	}
 
 	purchase, err := uc.purchases.GetByID(ctx, id)
 	if err != nil {
 		return CancelCreditCardPurchaseResult{}, err
+	}
+	if purchase.UserID != userID {
+		return CancelCreditCardPurchaseResult{}, apperrors.ErrNotFound
 	}
 	if purchase.Status == string(entities.CreditCardPurchaseStatusCancelled) {
 		return CancelCreditCardPurchaseResult{}, apperrors.ErrConflict

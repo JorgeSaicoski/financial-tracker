@@ -7,6 +7,7 @@ import (
 
 	"github.com/JorgeSaicoski/financial-tracker/internal/application/usecases"
 	"github.com/JorgeSaicoski/financial-tracker/internal/domain/entities"
+	"github.com/JorgeSaicoski/financial-tracker/internal/interfaces/api/reqctx"
 	interfacedto "github.com/JorgeSaicoski/financial-tracker/internal/interfaces/dto"
 	apperrors "github.com/JorgeSaicoski/financial-tracker/internal/pkg/errors"
 	"github.com/JorgeSaicoski/financial-tracker/internal/pkg/logger"
@@ -18,8 +19,7 @@ type accountHandler struct {
 	reportBalance usecases.ReportAccountBalanceUseCase
 	listSnapshots usecases.ListAccountSnapshotsUseCase
 
-	defaultUserID string
-	log           logger.Logger
+	log logger.Logger
 }
 
 // NewAccountHandler returns interface type for dependency injection.
@@ -28,7 +28,6 @@ func NewAccountHandler(
 	listAccounts usecases.ListAccountsUseCase,
 	reportBalance usecases.ReportAccountBalanceUseCase,
 	listSnapshots usecases.ListAccountSnapshotsUseCase,
-	defaultUserID string,
 	log logger.Logger,
 ) AccountHandler {
 	return &accountHandler{
@@ -36,22 +35,22 @@ func NewAccountHandler(
 		listAccounts:  listAccounts,
 		reportBalance: reportBalance,
 		listSnapshots: listSnapshots,
-		defaultUserID: defaultUserID,
 		log:           log,
 	}
 }
 
 // CreateAccount handles POST /accounts.
 func (h *accountHandler) CreateAccount(w http.ResponseWriter, r *http.Request) {
+	userID, ok := reqctx.UserID(r.Context())
+	if !ok {
+		writeError(h.log, w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
 	var req interfacedto.CreateAccountRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(h.log, w, http.StatusBadRequest, "invalid request body")
 		return
-	}
-
-	userID := req.UserID
-	if userID == "" {
-		userID = h.defaultUserID
 	}
 
 	account, err := h.createAccount.Execute(r.Context(), usecases.CreateAccountInput{
@@ -71,11 +70,13 @@ func (h *accountHandler) CreateAccount(w http.ResponseWriter, r *http.Request) {
 }
 
 // ListAccounts handles GET /accounts: every account with its estimated
-// balance, last reported balance and last computed return.
+// balance, last reported balance and last computed return, scoped to the
+// authenticated user (BACK-02).
 func (h *accountHandler) ListAccounts(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("user_id")
-	if userID == "" {
-		userID = h.defaultUserID
+	userID, ok := reqctx.UserID(r.Context())
+	if !ok {
+		writeError(h.log, w, http.StatusUnauthorized, "unauthorized")
+		return
 	}
 
 	views, err := h.listAccounts.Execute(r.Context(), userID)
@@ -100,7 +101,15 @@ func (h *accountHandler) ListAccounts(w http.ResponseWriter, r *http.Request) {
 // ReportBalance handles POST /accounts/{id}/balance: the user reports
 // what the account really holds right now (or, with an explicit
 // timestamp, held on an earlier date — backfilling a past report).
+// Scoped to the authenticated user (BACK-02) — {id} must be one of their
+// own accounts.
 func (h *accountHandler) ReportBalance(w http.ResponseWriter, r *http.Request) {
+	userID, ok := reqctx.UserID(r.Context())
+	if !ok {
+		writeError(h.log, w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
 	var req interfacedto.ReportBalanceRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Balance == nil {
 		writeError(h.log, w, http.StatusBadRequest, "balance is required (smallest currency unit)")
@@ -112,7 +121,7 @@ func (h *accountHandler) ReportBalance(w http.ResponseWriter, r *http.Request) {
 		timestamp = *req.Timestamp
 	}
 
-	view, err := h.reportBalance.Execute(r.Context(), r.PathValue("id"), *req.Balance, timestamp)
+	view, err := h.reportBalance.Execute(r.Context(), userID, r.PathValue("id"), *req.Balance, timestamp)
 	if err != nil {
 		h.writeUsecaseError(w, "report balance", err)
 		return
@@ -122,8 +131,16 @@ func (h *accountHandler) ReportBalance(w http.ResponseWriter, r *http.Request) {
 
 // ListSnapshots handles GET /accounts/{id}/balance: the account's full
 // reported-balance history, each entry paired with its own return.
+// Scoped to the authenticated user (BACK-02) — {id} must be one of their
+// own accounts.
 func (h *accountHandler) ListSnapshots(w http.ResponseWriter, r *http.Request) {
-	views, err := h.listSnapshots.Execute(r.Context(), r.PathValue("id"))
+	userID, ok := reqctx.UserID(r.Context())
+	if !ok {
+		writeError(h.log, w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	views, err := h.listSnapshots.Execute(r.Context(), userID, r.PathValue("id"))
 	if err != nil {
 		h.writeUsecaseError(w, "list account snapshots", err)
 		return

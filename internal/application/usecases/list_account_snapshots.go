@@ -24,12 +24,18 @@ func NewListAccountSnapshots(accounts repositories.AccountRepository, movements 
 	return &listAccountSnapshotsUseCase{accounts: accounts, movements: movements}
 }
 
-func (uc *listAccountSnapshotsUseCase) Execute(ctx context.Context, accountID string) ([]AccountSnapshotView, error) {
-	if accountID == "" {
+func (uc *listAccountSnapshotsUseCase) Execute(ctx context.Context, userID, accountID string) ([]AccountSnapshotView, error) {
+	if userID == "" || accountID == "" {
 		return nil, apperrors.ErrInvalidInput
 	}
-	if _, err := uc.accounts.GetByID(ctx, accountID); err != nil {
+	account, err := uc.accounts.GetByID(ctx, accountID)
+	if err != nil {
 		return nil, err
+	}
+	if account.UserID != userID {
+		// Don't distinguish "doesn't exist" from "exists but isn't
+		// yours" — either way the caller gets a plain 404.
+		return nil, apperrors.ErrNotFound
 	}
 
 	// LatestSnapshots returns newest-first; work oldest-first instead so

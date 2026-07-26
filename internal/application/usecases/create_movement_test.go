@@ -10,7 +10,7 @@ import (
 )
 
 func TestCreateMovementValidation(t *testing.T) {
-	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo())
+	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), newFakeUserSettingsRepo())
 
 	cases := []struct {
 		name  string
@@ -33,7 +33,7 @@ func TestCreateMovementValidation(t *testing.T) {
 
 func TestCreateMovementDefaultsAndState(t *testing.T) {
 	repo := newFakeMovementRepo()
-	uc := NewCreateMovement(repo, newFakeAccountRepo())
+	uc := NewCreateMovement(repo, newFakeAccountRepo(), newFakeUserSettingsRepo())
 
 	m, err := uc.Execute(context.Background(), CreateMovementInput{
 		UserID: "u1", Amount: -500, Currency: "usd",
@@ -60,7 +60,7 @@ func TestCreateMovementDefaultsAndState(t *testing.T) {
 }
 
 func TestCreateMovementKeepsExplicitFields(t *testing.T) {
-	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo())
+	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), newFakeUserSettingsRepo())
 
 	m, err := uc.Execute(context.Background(), CreateMovementInput{
 		UserID: "u1", Amount: -500, Currency: "usd",
