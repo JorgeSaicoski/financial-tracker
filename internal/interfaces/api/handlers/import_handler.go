@@ -26,7 +26,6 @@ const (
 
 type importHandler struct {
 	importMovements usecases.ImportMovementsUseCase
-	listMovements   usecases.ListMovementsUseCase
 	listAccounts    usecases.ListAccountsUseCase
 	listCurrencies  usecases.ListCurrenciesUseCase
 
@@ -36,14 +35,12 @@ type importHandler struct {
 // NewImportHandler returns interface type for dependency injection.
 func NewImportHandler(
 	importMovements usecases.ImportMovementsUseCase,
-	listMovements usecases.ListMovementsUseCase,
 	listAccounts usecases.ListAccountsUseCase,
 	listCurrencies usecases.ListCurrenciesUseCase,
 	log logger.Logger,
 ) ImportHandler {
 	return &importHandler{
 		importMovements: importMovements,
-		listMovements:   listMovements,
 		listAccounts:    listAccounts,
 		listCurrencies:  listCurrencies,
 		log:             log,
@@ -198,58 +195,6 @@ func csvReaderFromRequest(r *http.Request) (io.Reader, error) {
 		return bytes.NewReader(data), nil
 	}
 	return r.Body, nil
-}
-
-// ExportMovements handles GET /export/movements: the revert direction of
-// ImportMovements — every active movement of the caller's, rendered back
-// into BACK-03's fixed CSV model (see internal/infrastructure/csv), so a
-// file round-tripped through import then export reproduces the same
-// rows. Query params: currency, from, to (same as GET /movements).
-func (h *importHandler) ExportMovements(w http.ResponseWriter, r *http.Request) {
-	userID, ok := reqctx.UserID(r.Context())
-	if !ok {
-		h.writeError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
-
-	var currency *string
-	if c := r.URL.Query().Get("currency"); c != "" {
-		currency = &c
-	}
-	from, err := parseTimeParam(r, "from", false)
-	if err != nil {
-		h.writeError(w, http.StatusBadRequest, "invalid from (want YYYY-MM-DD or RFC 3339)")
-		return
-	}
-	to, err := parseTimeParam(r, "to", true)
-	if err != nil {
-		h.writeError(w, http.StatusBadRequest, "invalid to (want YYYY-MM-DD or RFC 3339)")
-		return
-	}
-
-	result, err := h.listMovements.Execute(r.Context(), userID, currency, from, to, 0, 0)
-	if err != nil {
-		h.writeUsecaseError(w, "export movements", err)
-		return
-	}
-
-	accountViews, err := h.listAccounts.Execute(r.Context(), userID)
-	if err != nil {
-		h.log.Error("export movements: list accounts failed: %v", err)
-		writeError(h.log, w, http.StatusInternalServerError, "internal error")
-		return
-	}
-	accountNames := make(map[string]string, len(accountViews))
-	for _, a := range accountViews {
-		accountNames[a.Account.ID] = a.Account.Name
-	}
-
-	w.Header().Set("Content-Type", "text/csv")
-	w.Header().Set("Content-Disposition", `attachment; filename="movements.csv"`)
-	w.WriteHeader(http.StatusOK)
-	if err := csvformat.WriteMovements(w, result.Movements, accountNames); err != nil {
-		h.log.Error("export movements: write CSV failed: %v", err)
-	}
 }
 
 func toImportResponse(result usecases.ImportMovementsResult) interfacedto.ImportMovementsResponse {

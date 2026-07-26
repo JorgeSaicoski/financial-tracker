@@ -1,6 +1,7 @@
 package api
 
 import (
+	"io/fs"
 	"net/http"
 
 	"github.com/JorgeSaicoski/financial-tracker/internal/interfaces/api/handlers"
@@ -20,11 +21,18 @@ func NewRouter(
 	transferHandler handlers.TransferHandler,
 	exchangeRateHandler handlers.ExchangeRateHandler,
 	importHandler handlers.ImportHandler,
+	exportHandler handlers.ExportHandler,
 	settingsHandler handlers.SettingsHandler,
 	userHandler handlers.UserHandler,
 	configHandler handlers.ConfigHandler,
 	authMiddleware AuthMiddleware,
 	allowedOrigin string,
+	// standalone (BACK-09) rejects /sync (there is no ledger-service to
+	// push to) and, when frontendFS is non-nil, serves the embedded
+	// SvelteKit build as a fallback for any path that isn't a registered
+	// API route.
+	standalone bool,
+	frontendFS fs.FS,
 ) http.Handler {
 	// Every route except /config needs a resolved user_id, so it lives on
 	// its own mux wrapped in authMiddleware — see below for why /config
@@ -33,7 +41,7 @@ func NewRouter(
 
 	protected.HandleFunc("GET /import/movements/spec", importHandler.GetImportSpec)
 	protected.HandleFunc("POST /import/movements", importHandler.ImportMovements)
-	protected.HandleFunc("GET /export/movements", importHandler.ExportMovements)
+	protected.HandleFunc("GET /export/movements", exportHandler.ExportMovements)
 
 	protected.HandleFunc("GET /settings", settingsHandler.GetSettings)
 	protected.HandleFunc("PATCH /settings", settingsHandler.PatchSettings)
@@ -49,7 +57,17 @@ func NewRouter(
 	protected.HandleFunc("PATCH /movements/{id}", movementHandler.UpdateMovement)
 	protected.HandleFunc("POST /movements/{id}/cancel", movementHandler.CancelMovement)
 	protected.HandleFunc("POST /credit-card-purchases/{id}/cancel", movementHandler.CancelCreditCardPurchase)
-	protected.HandleFunc("POST /sync", movementHandler.Sync)
+	if standalone {
+		// Explicit rather than just leaving the route unregistered: an
+		// unregistered path here would still resolve to the "/" SPA
+		// fallback registered below for the same (GET-agnostic) pattern
+		// space, silently returning the app shell instead of an error —
+		// a clear rejection is what BACK-09's acceptance criteria asks
+		// for, not a bare 404 that happens to fall out of routing order.
+		protected.HandleFunc("POST /sync", standaloneSyncRejectedHandler)
+	} else {
+		protected.HandleFunc("POST /sync", movementHandler.Sync)
+	}
 	protected.HandleFunc("GET /categories", movementHandler.ListCategories)
 	protected.HandleFunc("GET /cashflow", movementHandler.Cashflow)
 
@@ -68,6 +86,20 @@ func NewRouter(
 	protected.HandleFunc("DELETE /exchange-rates/{id}", exchangeRateHandler.DeleteExchangeRate)
 
 	protected.HandleFunc("GET /me", userHandler.Me)
+
+	if standalone {
+		// Registered on protected (behind the no-op standalone auth
+		// middleware, not unauthenticated) so it sits below every
+		// explicit API pattern above — Go's ServeMux always prefers a
+		// more specific match, so this only ever catches paths that
+		// aren't one of this API's own routes (every real route above,
+		// including /sync, is registered explicitly regardless of mode).
+		if frontendFS != nil {
+			protected.Handle("/", newSPAHandler(frontendFS))
+		} else {
+			protected.Handle("/", noFrontendEmbeddedHandler())
+		}
+	}
 
 	mux := http.NewServeMux()
 	// Unauthenticated by design (see config_handler.go): the frontend

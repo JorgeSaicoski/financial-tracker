@@ -31,12 +31,19 @@ type CurrencyHandler interface {
 }
 
 // ImportHandler exposes BACK-03's CSV history backfill: the spec the
-// frontend renders (not hardcoded), the import endpoint itself, and its
-// revert direction (ExportMovements) — same fixed CSV model both ways,
-// see internal/infrastructure/csv.
+// frontend renders (not hardcoded) and the import endpoint itself. Its
+// revert direction lives on ExportHandler instead (BACK-09's fuller
+// export, with include_cancelled support) — see that type's doc comment.
 type ImportHandler interface {
 	GetImportSpec(w http.ResponseWriter, r *http.Request)
 	ImportMovements(w http.ResponseWriter, r *http.Request)
+}
+
+// ExportHandler exposes BACK-09's CSV export: the user's own movement
+// history in exactly BACK-03's import model (see internal/infrastructure/csv
+// for the shared column model), available in every mode so data is always
+// portable — not standalone-only.
+type ExportHandler interface {
 	ExportMovements(w http.ResponseWriter, r *http.Request)
 }
 
