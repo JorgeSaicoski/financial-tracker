@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/JorgeSaicoski/financial-tracker/internal/application/usecases"
+	csvformat "github.com/JorgeSaicoski/financial-tracker/internal/infrastructure/csv"
 	"github.com/JorgeSaicoski/financial-tracker/internal/interfaces/api/reqctx"
 	"github.com/JorgeSaicoski/financial-tracker/internal/pkg/logger"
 )
@@ -54,7 +55,7 @@ func (h *exportHandler) ExportMovements(w http.ResponseWriter, r *http.Request) 
 	w.WriteHeader(http.StatusOK)
 
 	writer := csv.NewWriter(w)
-	header := []string{"date", "amount", "currency", "description", "category", "payment_method", "account"}
+	header := append([]string{}, csvformat.Header...)
 	if includeCancelled {
 		header = append(header, "status", "cancels_movement_id", "reversed_by_movement_id")
 	}
