@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/JorgeSaicoski/financial-tracker/internal/application/usecases"
+	"github.com/JorgeSaicoski/financial-tracker/internal/interfaces/api/reqctx"
 	interfacedto "github.com/JorgeSaicoski/financial-tracker/internal/interfaces/dto"
 	"github.com/JorgeSaicoski/financial-tracker/internal/pkg/logger"
 )
@@ -13,7 +14,6 @@ import (
 type transferHandler struct {
 	createTransfer usecases.TransferBetweenAccountsUseCase
 	cancelTransfer usecases.CancelTransferUseCase
-	defaultUserID  string
 	log            logger.Logger
 }
 
@@ -21,29 +21,29 @@ type transferHandler struct {
 func NewTransferHandler(
 	createTransfer usecases.TransferBetweenAccountsUseCase,
 	cancelTransfer usecases.CancelTransferUseCase,
-	defaultUserID string,
 	log logger.Logger,
 ) TransferHandler {
 	return &transferHandler{
 		createTransfer: createTransfer,
 		cancelTransfer: cancelTransfer,
-		defaultUserID:  defaultUserID,
 		log:            log,
 	}
 }
 
 // CreateTransfer handles POST /transfers.
 func (h *transferHandler) CreateTransfer(w http.ResponseWriter, r *http.Request) {
+	userID, ok := reqctx.UserID(r.Context())
+	if !ok {
+		writeError(h.log, w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
 	var req interfacedto.CreateTransferRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(h.log, w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
-	userID := req.UserID
-	if userID == "" {
-		userID = h.defaultUserID
-	}
 	var timestamp time.Time
 	if req.Timestamp != nil {
 		timestamp = *req.Timestamp
@@ -70,9 +70,16 @@ func (h *transferHandler) CreateTransfer(w http.ResponseWriter, r *http.Request)
 }
 
 // CancelTransfer handles POST /transfers/{id}/cancel, where {id} is the
-// transfer_id shared by both legs.
+// transfer_id shared by both legs. Scoped to the authenticated user
+// (BACK-02).
 func (h *transferHandler) CancelTransfer(w http.ResponseWriter, r *http.Request) {
-	result, err := h.cancelTransfer.Execute(r.Context(), r.PathValue("id"))
+	userID, ok := reqctx.UserID(r.Context())
+	if !ok {
+		writeError(h.log, w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	result, err := h.cancelTransfer.Execute(r.Context(), userID, r.PathValue("id"))
 	if err != nil {
 		writeUsecaseError(h.log, w, "cancel transfer", err)
 		return

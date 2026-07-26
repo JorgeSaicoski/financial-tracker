@@ -66,6 +66,14 @@ const (
 	SyncStatusPending SyncStatus = "pending"
 	SyncStatusSynced  SyncStatus = "synced"
 	SyncStatusFailed  SyncStatus = "failed"
+	// SyncStatusLocal marks a movement created while the user's
+	// effective ledger sync was off (BACK-13's user_settings) — it was
+	// never going to sync, so "pending" would misreport it as queued
+	// work. Not permanent: re-enabling sync reclassifies a user's
+	// "local" movements back to "pending" (see
+	// UpdateUserSettingsUseCase / MovementRepository.MarkLocalPending)
+	// so the accumulated backlog gets pushed like anything else.
+	SyncStatusLocal SyncStatus = "local"
 )
 
 func (m Movement) IsCredit() bool {

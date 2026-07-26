@@ -7,6 +7,7 @@ import (
 
 	"github.com/JorgeSaicoski/financial-tracker/internal/application/dto"
 	"github.com/JorgeSaicoski/financial-tracker/internal/application/usecases"
+	"github.com/JorgeSaicoski/financial-tracker/internal/interfaces/api/reqctx"
 	interfacedto "github.com/JorgeSaicoski/financial-tracker/internal/interfaces/dto"
 	apperrors "github.com/JorgeSaicoski/financial-tracker/internal/pkg/errors"
 	"github.com/JorgeSaicoski/financial-tracker/internal/pkg/logger"
@@ -18,8 +19,7 @@ type archiveHandler struct {
 	exportArchive usecases.ExportArchiveUseCase
 	importArchive usecases.ImportArchiveUseCase
 
-	defaultUserID string
-	log           logger.Logger
+	log logger.Logger
 }
 
 // NewArchiveHandler returns interface type for dependency injection.
@@ -28,7 +28,6 @@ func NewArchiveHandler(
 	setSetting usecases.SetLocalArchiveSettingUseCase,
 	exportArchive usecases.ExportArchiveUseCase,
 	importArchive usecases.ImportArchiveUseCase,
-	defaultUserID string,
 	log logger.Logger,
 ) ArchiveHandler {
 	return &archiveHandler{
@@ -36,16 +35,16 @@ func NewArchiveHandler(
 		setSetting:    setSetting,
 		exportArchive: exportArchive,
 		importArchive: importArchive,
-		defaultUserID: defaultUserID,
 		log:           log,
 	}
 }
 
 // GetLocalArchiveSetting handles GET /settings/local-archive.
 func (h *archiveHandler) GetLocalArchiveSetting(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("user_id")
-	if userID == "" {
-		userID = h.defaultUserID
+	userID, ok := reqctx.UserID(r.Context())
+	if !ok {
+		writeError(h.log, w, http.StatusUnauthorized, "unauthorized")
+		return
 	}
 
 	enabled, err := h.getSetting.Execute(r.Context(), userID)
@@ -60,15 +59,16 @@ func (h *archiveHandler) GetLocalArchiveSetting(w http.ResponseWriter, r *http.R
 // this never touches cloud_storage_enabled (BACK-16) or deletes any
 // server-side row — the two settings are independent.
 func (h *archiveHandler) SetLocalArchiveSetting(w http.ResponseWriter, r *http.Request) {
+	userID, ok := reqctx.UserID(r.Context())
+	if !ok {
+		writeError(h.log, w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
 	var req interfacedto.SetLocalArchiveSettingRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(h.log, w, http.StatusBadRequest, "invalid request body")
 		return
-	}
-
-	userID := req.UserID
-	if userID == "" {
-		userID = h.defaultUserID
 	}
 
 	enabled, err := h.setSetting.Execute(r.Context(), userID, req.Enabled)
@@ -83,9 +83,10 @@ func (h *archiveHandler) SetLocalArchiveSetting(w http.ResponseWriter, r *http.R
 // account state (BACK-15). The frontend encrypts this client-side before
 // it ever leaves the page — this handler always returns plaintext JSON.
 func (h *archiveHandler) ExportArchive(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("user_id")
-	if userID == "" {
-		userID = h.defaultUserID
+	userID, ok := reqctx.UserID(r.Context())
+	if !ok {
+		writeError(h.log, w, http.StatusUnauthorized, "unauthorized")
+		return
 	}
 
 	bundle, err := h.exportArchive.Execute(r.Context(), userID)
@@ -101,15 +102,16 @@ func (h *archiveHandler) ExportArchive(w http.ResponseWriter, r *http.Request) {
 // call more than once — rows that already exist are skipped, not
 // duplicated or overwritten.
 func (h *archiveHandler) ImportArchive(w http.ResponseWriter, r *http.Request) {
+	userID, ok := reqctx.UserID(r.Context())
+	if !ok {
+		writeError(h.log, w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
 	var req interfacedto.ImportArchiveRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(h.log, w, http.StatusBadRequest, "invalid request body")
 		return
-	}
-
-	userID := req.UserID
-	if userID == "" {
-		userID = h.defaultUserID
 	}
 
 	result, err := h.importArchive.Execute(r.Context(), userID, fromArchiveRequest(req))

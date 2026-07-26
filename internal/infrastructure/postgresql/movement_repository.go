@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/JorgeSaicoski/financial-tracker/internal/application/dto"
@@ -13,6 +15,24 @@ import (
 	apperrors "github.com/JorgeSaicoski/financial-tracker/internal/pkg/errors"
 	"github.com/JorgeSaicoski/financial-tracker/internal/pkg/id"
 )
+
+// excludedUserIDsClause builds a "AND user_id NOT IN ($3, $4, ...)" SQL
+// fragment for ListPendingSync (BACK-13's per-user ledger sync toggle),
+// numbering placeholders from paramOffset+1 so callers can append it
+// after their own positional params. Empty when there's nothing to
+// exclude, so callers don't need an empty-IN-list special case.
+func excludedUserIDsClause(excludedUserIDs []string, paramOffset int) (string, []any) {
+	if len(excludedUserIDs) == 0 {
+		return "", nil
+	}
+	placeholders := make([]string, len(excludedUserIDs))
+	args := make([]any, len(excludedUserIDs))
+	for i, uid := range excludedUserIDs {
+		placeholders[i] = "$" + strconv.Itoa(paramOffset+i+1)
+		args[i] = uid
+	}
+	return " AND user_id NOT IN (" + strings.Join(placeholders, ", ") + ")", args
+}
 
 type movementRepository struct {
 	db *sql.DB
@@ -129,14 +149,30 @@ func (r *movementRepository) NetByAccount(ctx context.Context, accountID string,
 	return net, nil
 }
 
-func (r *movementRepository) ListPendingSync(ctx context.Context, now time.Time, retryCooldown time.Duration) ([]*dto.MovementDTO, error) {
+func (r *movementRepository) ListPendingSync(ctx context.Context, now time.Time, retryCooldown time.Duration, excludedUserIDs []string) ([]*dto.MovementDTO, error) {
+	clause, excludeArgs := excludedUserIDsClause(excludedUserIDs, 2)
+	args := []any{now, now.Add(-retryCooldown)}
+	args = append(args, excludeArgs...)
 	return r.queryMovements(ctx,
 		`SELECT `+movementColumns+` FROM movements
 		 WHERE status = 'active' AND sync_status IN ('pending', 'failed')
 		   AND timestamp <= $1
-		   AND (last_sync_attempt_at IS NULL OR last_sync_attempt_at <= $2)
+		   AND (last_sync_attempt_at IS NULL OR last_sync_attempt_at <= $2)`+clause+`
 		 ORDER BY timestamp ASC`,
-		now, now.Add(-retryCooldown))
+		args...)
+}
+
+// MarkLocalPending is BACK-13's "re-enable" path: movements created while
+// this user's ledger sync was off (SyncStatusLocal) go back to "pending"
+// so the next sync pass picks up the accumulated backlog. Zero matching
+// rows is a normal outcome (nothing to reclassify), not an error.
+func (r *movementRepository) MarkLocalPending(ctx context.Context, userID string) error {
+	if _, err := r.db.ExecContext(ctx,
+		`UPDATE movements SET sync_status = 'pending' WHERE user_id = $1 AND sync_status = 'local' AND status = 'active'`,
+		userID); err != nil {
+		return fmt.Errorf("postgresql: mark local movements pending: %w", err)
+	}
+	return nil
 }
 
 func (r *movementRepository) MarkSynced(ctx context.Context, movementID, ledgerTransactionID string, at time.Time) error {
@@ -368,14 +404,26 @@ func (r *movementRepositoryTx) NetByAccount(ctx context.Context, accountID strin
 	return net, nil
 }
 
-func (r *movementRepositoryTx) ListPendingSync(ctx context.Context, now time.Time, retryCooldown time.Duration) ([]*dto.MovementDTO, error) {
+func (r *movementRepositoryTx) ListPendingSync(ctx context.Context, now time.Time, retryCooldown time.Duration, excludedUserIDs []string) ([]*dto.MovementDTO, error) {
+	clause, excludeArgs := excludedUserIDsClause(excludedUserIDs, 2)
+	args := []any{now, now.Add(-retryCooldown)}
+	args = append(args, excludeArgs...)
 	return queryMovements(ctx, r.tx,
 		`SELECT `+movementColumns+` FROM movements
 		 WHERE status = 'active' AND sync_status IN ('pending', 'failed')
 		   AND timestamp <= $1
-		   AND (last_sync_attempt_at IS NULL OR last_sync_attempt_at <= $2)
+		   AND (last_sync_attempt_at IS NULL OR last_sync_attempt_at <= $2)`+clause+`
 		 ORDER BY timestamp ASC`,
-		now, now.Add(-retryCooldown))
+		args...)
+}
+
+func (r *movementRepositoryTx) MarkLocalPending(ctx context.Context, userID string) error {
+	if _, err := r.tx.ExecContext(ctx,
+		`UPDATE movements SET sync_status = 'pending' WHERE user_id = $1 AND sync_status = 'local' AND status = 'active'`,
+		userID); err != nil {
+		return fmt.Errorf("postgresql: mark local movements pending: %w", err)
+	}
+	return nil
 }
 
 func (r *movementRepositoryTx) MarkSynced(ctx context.Context, movementID, ledgerTransactionID string, at time.Time) error {

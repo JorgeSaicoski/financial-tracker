@@ -25,7 +25,7 @@ func TestTransferBetweenAccountsHappyPath(t *testing.T) {
 	from := mustCreateAccount(t, accounts, "u1", "usd")
 	to := mustCreateAccount(t, accounts, "u1", "usd")
 
-	uc := NewTransferBetweenAccounts(movements, accounts)
+	uc := NewTransferBetweenAccounts(movements, accounts, newFakeUserSettingsRepo())
 	result, err := uc.Execute(context.Background(), TransferBetweenAccountsInput{
 		UserID: "u1", FromAccountID: from.ID, ToAccountID: to.ID, Amount: 500, Description: "moving cash",
 	})
@@ -66,7 +66,7 @@ func TestTransferBetweenAccountsRejectsCurrencyMismatch(t *testing.T) {
 	from := mustCreateAccount(t, accounts, "u1", "usd")
 	to := mustCreateAccount(t, accounts, "u1", "brl")
 
-	uc := NewTransferBetweenAccounts(movements, accounts)
+	uc := NewTransferBetweenAccounts(movements, accounts, newFakeUserSettingsRepo())
 	_, err := uc.Execute(context.Background(), TransferBetweenAccountsInput{
 		UserID: "u1", FromAccountID: from.ID, ToAccountID: to.ID, Amount: 100,
 	})
@@ -80,7 +80,7 @@ func TestTransferBetweenAccountsRejectsSameAccount(t *testing.T) {
 	accounts := newFakeAccountRepo()
 	account := mustCreateAccount(t, accounts, "u1", "usd")
 
-	uc := NewTransferBetweenAccounts(movements, accounts)
+	uc := NewTransferBetweenAccounts(movements, accounts, newFakeUserSettingsRepo())
 	_, err := uc.Execute(context.Background(), TransferBetweenAccountsInput{
 		UserID: "u1", FromAccountID: account.ID, ToAccountID: account.ID, Amount: 100,
 	})
@@ -95,7 +95,7 @@ func TestTransferBetweenAccountsRejectsUnknownOrForeignAccount(t *testing.T) {
 	mine := mustCreateAccount(t, accounts, "u1", "usd")
 	someoneElses := mustCreateAccount(t, accounts, "u2", "usd")
 
-	uc := NewTransferBetweenAccounts(movements, accounts)
+	uc := NewTransferBetweenAccounts(movements, accounts, newFakeUserSettingsRepo())
 
 	if _, err := uc.Execute(context.Background(), TransferBetweenAccountsInput{
 		UserID: "u1", FromAccountID: mine.ID, ToAccountID: "does-not-exist", Amount: 100,
@@ -116,7 +116,7 @@ func TestTransferBetweenAccountsRejectsNonPositiveAmount(t *testing.T) {
 	from := mustCreateAccount(t, accounts, "u1", "usd")
 	to := mustCreateAccount(t, accounts, "u1", "usd")
 
-	uc := NewTransferBetweenAccounts(movements, accounts)
+	uc := NewTransferBetweenAccounts(movements, accounts, newFakeUserSettingsRepo())
 	for _, amount := range []int64{0, -100} {
 		if _, err := uc.Execute(context.Background(), TransferBetweenAccountsInput{
 			UserID: "u1", FromAccountID: from.ID, ToAccountID: to.ID, Amount: amount,
@@ -148,7 +148,7 @@ func TestCancelTransferCancelsBothLegsPerSyncStatus(t *testing.T) {
 			from := mustCreateAccount(t, accounts, "u1", "usd")
 			to := mustCreateAccount(t, accounts, "u1", "usd")
 
-			transferUC := NewTransferBetweenAccounts(movements, accounts)
+			transferUC := NewTransferBetweenAccounts(movements, accounts, newFakeUserSettingsRepo())
 			transfer, err := transferUC.Execute(context.Background(), TransferBetweenAccountsInput{
 				UserID: "u1", FromAccountID: from.ID, ToAccountID: to.ID, Amount: 500,
 			})
@@ -167,7 +167,7 @@ func TestCancelTransferCancelsBothLegsPerSyncStatus(t *testing.T) {
 			}
 
 			trigger := &fakeSyncTrigger{}
-			result, err := NewCancelTransfer(movements, trigger).Execute(context.Background(), transfer.TransferID)
+			result, err := NewCancelTransfer(movements, trigger).Execute(context.Background(), "u1", transfer.TransferID)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -219,7 +219,7 @@ func TestCancelTransferRollsBackFirstLegWhenSecondLegFails(t *testing.T) {
 	from := mustCreateAccount(t, accounts, "u1", "usd")
 	to := mustCreateAccount(t, accounts, "u1", "usd")
 
-	transferUC := NewTransferBetweenAccounts(movements, accounts)
+	transferUC := NewTransferBetweenAccounts(movements, accounts, newFakeUserSettingsRepo())
 	transfer, err := transferUC.Execute(context.Background(), TransferBetweenAccountsInput{
 		UserID: "u1", FromAccountID: from.ID, ToAccountID: to.ID, Amount: 500,
 	})
@@ -240,7 +240,7 @@ func TestCancelTransferRollsBackFirstLegWhenSecondLegFails(t *testing.T) {
 	movements.createReversalErrForID = transfer.Credit.ID
 
 	trigger := &fakeSyncTrigger{}
-	_, err = NewCancelTransfer(movements, trigger).Execute(context.Background(), transfer.TransferID)
+	_, err = NewCancelTransfer(movements, trigger).Execute(context.Background(), "u1", transfer.TransferID)
 	if err == nil {
 		t.Fatal("expected the cancel to fail when the second leg's reversal fails")
 	}
@@ -267,7 +267,7 @@ func TestCancelTransferRollsBackFirstLegWhenSecondLegFails(t *testing.T) {
 func TestCancelTransferMissingID(t *testing.T) {
 	movements := newFakeMovementRepo()
 	uc := NewCancelTransfer(movements, &fakeSyncTrigger{})
-	if _, err := uc.Execute(context.Background(), "nope"); !errors.Is(err, apperrors.ErrNotFound) {
+	if _, err := uc.Execute(context.Background(), "u1", "nope"); !errors.Is(err, apperrors.ErrNotFound) {
 		t.Fatalf("want ErrNotFound, got %v", err)
 	}
 }
@@ -278,7 +278,7 @@ func TestCancelMovementRejectsDirectSingleLegCancel(t *testing.T) {
 	from := mustCreateAccount(t, accounts, "u1", "usd")
 	to := mustCreateAccount(t, accounts, "u1", "usd")
 
-	transfer, err := NewTransferBetweenAccounts(movements, accounts).Execute(context.Background(), TransferBetweenAccountsInput{
+	transfer, err := NewTransferBetweenAccounts(movements, accounts, newFakeUserSettingsRepo()).Execute(context.Background(), TransferBetweenAccountsInput{
 		UserID: "u1", FromAccountID: from.ID, ToAccountID: to.ID, Amount: 500,
 	})
 	if err != nil {
@@ -286,7 +286,7 @@ func TestCancelMovementRejectsDirectSingleLegCancel(t *testing.T) {
 	}
 
 	uc := NewCancelMovement(movements, &fakeSyncTrigger{})
-	if _, err := uc.Execute(context.Background(), transfer.Debit.ID); !errors.Is(err, apperrors.ErrConflict) {
+	if _, err := uc.Execute(context.Background(), "u1", transfer.Debit.ID); !errors.Is(err, apperrors.ErrConflict) {
 		t.Fatalf("want ErrConflict, got %v", err)
 	}
 }

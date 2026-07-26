@@ -153,7 +153,7 @@ func TestListPendingSyncFilters(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	pending, err := repo.ListPendingSync(ctx, now, time.Minute)
+	pending, err := repo.ListPendingSync(ctx, now, time.Minute, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +163,7 @@ func TestListPendingSyncFilters(t *testing.T) {
 
 	// Zero cooldown (manual sync) also picks up the fresh failure — but
 	// never the future, synced, or voided rows.
-	pending, err = repo.ListPendingSync(ctx, now, 0)
+	pending, err = repo.ListPendingSync(ctx, now, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,6 +179,81 @@ func TestListPendingSyncFilters(t *testing.T) {
 	got, _ = repo.GetByID(ctx, synced.ID)
 	if got.LedgerTransactionID == nil || *got.LedgerTransactionID != "ledger-1" || got.SyncedAt == nil {
 		t.Errorf("sync success not recorded: %+v", got)
+	}
+}
+
+// TestListPendingSyncExcludesUsers is BACK-13's acceptance criterion at
+// the repository-query level: two users, one excluded — the query
+// returns only the other one's pending movement, even though both rows
+// are otherwise identical and due.
+func TestListPendingSyncExcludesUsers(t *testing.T) {
+	repo := NewMovementRepository(openTestDB(t))
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	enabled := testMovement(-100)
+	enabled.UserID = "11111111-1111-1111-1111-111111111111"
+	enabled.Timestamp = now.Add(-time.Hour)
+	enabled, _ = repo.Create(ctx, enabled)
+
+	disabled := testMovement(-200)
+	disabled.UserID = "22222222-2222-2222-2222-222222222222"
+	disabled.Timestamp = now.Add(-time.Hour)
+	disabled, _ = repo.Create(ctx, disabled)
+
+	pending, err := repo.ListPendingSync(ctx, now, 0, []string{disabled.UserID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0].ID != enabled.ID {
+		t.Fatalf("want only %s (the non-excluded user), got %d rows: %+v", enabled.ID, len(pending), pending)
+	}
+}
+
+// TestMarkLocalPendingReclassifiesOnlyThatUsersLocalMovements is BACK-13's
+// "re-enable" path: only the target user's "local" rows flip to
+// "pending"; another user's local row and this user's already-synced row
+// are left untouched.
+func TestMarkLocalPendingReclassifiesOnlyThatUsersLocalMovements(t *testing.T) {
+	repo := NewMovementRepository(openTestDB(t))
+	ctx := context.Background()
+
+	local := testMovement(-100)
+	local.SyncStatus = string(entities.SyncStatusLocal)
+	local, _ = repo.Create(ctx, local)
+
+	otherUserLocal := testMovement(-200)
+	otherUserLocal.UserID = "99999999-9999-9999-9999-999999999999"
+	otherUserLocal.SyncStatus = string(entities.SyncStatusLocal)
+	otherUserLocal, _ = repo.Create(ctx, otherUserLocal)
+
+	alreadySynced := testMovement(-300)
+	alreadySynced, _ = repo.Create(ctx, alreadySynced)
+	if err := repo.MarkSynced(ctx, alreadySynced.ID, "ledger-1", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := repo.MarkLocalPending(ctx, local.UserID); err != nil {
+		t.Fatal(err)
+	}
+
+	got, _ := repo.GetByID(ctx, local.ID)
+	if got.SyncStatus != string(entities.SyncStatusPending) {
+		t.Errorf("local.SyncStatus = %q, want pending", got.SyncStatus)
+	}
+	got, _ = repo.GetByID(ctx, otherUserLocal.ID)
+	if got.SyncStatus != string(entities.SyncStatusLocal) {
+		t.Errorf("other user's local movement must stay untouched, got %q", got.SyncStatus)
+	}
+	got, _ = repo.GetByID(ctx, alreadySynced.ID)
+	if got.SyncStatus != string(entities.SyncStatusSynced) {
+		t.Errorf("already-synced movement must stay untouched, got %q", got.SyncStatus)
+	}
+
+	// Calling it again with nothing left to reclassify is a normal no-op,
+	// not an error.
+	if err := repo.MarkLocalPending(ctx, local.UserID); err != nil {
+		t.Errorf("second call should be a no-op, got %v", err)
 	}
 }
 

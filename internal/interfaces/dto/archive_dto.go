@@ -8,11 +8,8 @@ type LocalArchiveSettingResponse struct {
 }
 
 // SetLocalArchiveSettingRequest is the body of PUT /settings/local-archive.
-// UserID is optional, like every other write request here; the handler
-// fills in the configured default when it's omitted.
 type SetLocalArchiveSettingRequest struct {
-	UserID  string `json:"user_id,omitempty"`
-	Enabled bool   `json:"local_archive_enabled"`
+	Enabled bool `json:"local_archive_enabled"`
 }
 
 // ArchiveAccountDTO is an account's full restorable state — unlike
@@ -98,11 +95,11 @@ type ArchiveResponse struct {
 }
 
 // ImportArchiveRequest is the body of POST /import/archive — the same
-// shape ArchiveResponse exports, so the frontend's decrypted archive can
-// be posted back unmodified. UserID is optional like every other write
-// request; the handler fills in the configured default when omitted.
+// shape ArchiveResponse exports (minus the top-level UserID, which like
+// every other write request always comes from the caller's verified
+// token, never the body), so the frontend's decrypted archive can be
+// posted back unmodified.
 type ImportArchiveRequest struct {
-	UserID              string                         `json:"user_id,omitempty"`
 	Accounts            []ArchiveAccountDTO            `json:"accounts"`
 	Movements           []ArchiveMovementDTO           `json:"movements"`
 	CreditCardPurchases []ArchiveCreditCardPurchaseDTO `json:"credit_card_purchases"`

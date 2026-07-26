@@ -175,10 +175,17 @@ func (f *fakeMovementRepo) ListByCreditCardPurchase(_ context.Context, purchaseI
 	return out, nil
 }
 
-func (f *fakeMovementRepo) ListPendingSync(_ context.Context, now time.Time, retryCooldown time.Duration) ([]*dto.MovementDTO, error) {
+func (f *fakeMovementRepo) ListPendingSync(_ context.Context, now time.Time, retryCooldown time.Duration, excludedUserIDs []string) ([]*dto.MovementDTO, error) {
+	excluded := make(map[string]bool, len(excludedUserIDs))
+	for _, uid := range excludedUserIDs {
+		excluded[uid] = true
+	}
 	var out []*dto.MovementDTO
 	for _, m := range f.byID {
-		if m.Status != string(entities.MovementStatusActive) || m.SyncStatus == string(entities.SyncStatusSynced) {
+		if m.Status != string(entities.MovementStatusActive) || (m.SyncStatus != string(entities.SyncStatusPending) && m.SyncStatus != string(entities.SyncStatusFailed)) {
+			continue
+		}
+		if excluded[m.UserID] {
 			continue
 		}
 		if m.Timestamp.After(now) {
@@ -191,6 +198,15 @@ func (f *fakeMovementRepo) ListPendingSync(_ context.Context, now time.Time, ret
 		out = append(out, &cp)
 	}
 	return out, nil
+}
+
+func (f *fakeMovementRepo) MarkLocalPending(_ context.Context, userID string) error {
+	for _, m := range f.byID {
+		if m.UserID == userID && m.SyncStatus == string(entities.SyncStatusLocal) {
+			m.SyncStatus = string(entities.SyncStatusPending)
+		}
+	}
+	return nil
 }
 
 func (f *fakeMovementRepo) MarkSynced(_ context.Context, id, ledgerTransactionID string, at time.Time) error {
@@ -506,4 +522,59 @@ func (f *fakeLocalArchiveSettingsRepo) IsEnabled(_ context.Context, userID strin
 func (f *fakeLocalArchiveSettingsRepo) SetEnabled(_ context.Context, userID string, enabled bool) error {
 	f.enabled[userID] = enabled
 	return nil
+}
+
+// fakeUserSettingsRepo is an in-memory UserSettingsRepository. Absence of
+// a row means "everything true", mirroring the real implementations'
+// contract — Get never creates a row, only UpdateEnabled does.
+type fakeUserSettingsRepo struct {
+	byUserID map[string]*dto.UserSettingsDTO
+}
+
+func newFakeUserSettingsRepo() *fakeUserSettingsRepo {
+	return &fakeUserSettingsRepo{byUserID: map[string]*dto.UserSettingsDTO{}}
+}
+
+func (f *fakeUserSettingsRepo) Get(_ context.Context, userID string) (*dto.UserSettingsDTO, error) {
+	if s, ok := f.byUserID[userID]; ok {
+		cp := *s
+		return &cp, nil
+	}
+	return dto.DefaultUserSettings(userID, time.Now().UTC()), nil
+}
+
+func (f *fakeUserSettingsRepo) UpdateEnabled(_ context.Context, userID string, ledgerSyncEnabled bool) (*dto.UserSettingsDTO, error) {
+	s, ok := f.byUserID[userID]
+	if !ok {
+		now := time.Now().UTC()
+		s = dto.DefaultUserSettings(userID, now)
+	}
+	s.LedgerSyncEnabled = ledgerSyncEnabled
+	s.UpdatedAt = time.Now().UTC()
+	f.byUserID[userID] = s
+	cp := *s
+	return &cp, nil
+}
+
+func (f *fakeUserSettingsRepo) ListSyncDisabledUserIDs(_ context.Context) ([]string, error) {
+	var out []string
+	for uid, s := range f.byUserID {
+		if !s.EffectiveLedgerSync() {
+			out = append(out, uid)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// setEntitled is a test-only helper simulating the operator flipping an
+// entitlement flag directly (v1 has no API for this — see README).
+func (f *fakeUserSettingsRepo) setEntitled(userID string, ledgerSyncEntitled bool) {
+	s, ok := f.byUserID[userID]
+	if !ok {
+		now := time.Now().UTC()
+		s = dto.DefaultUserSettings(userID, now)
+		f.byUserID[userID] = s
+	}
+	s.LedgerSyncEntitled = ledgerSyncEntitled
 }
