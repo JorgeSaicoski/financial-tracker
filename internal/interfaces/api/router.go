@@ -33,6 +33,7 @@ func NewRouter(
 
 	protected.HandleFunc("GET /import/movements/spec", importHandler.GetImportSpec)
 	protected.HandleFunc("POST /import/movements", importHandler.ImportMovements)
+	protected.HandleFunc("GET /export/movements", importHandler.ExportMovements)
 
 	protected.HandleFunc("GET /settings", settingsHandler.GetSettings)
 	protected.HandleFunc("PATCH /settings", settingsHandler.PatchSettings)

@@ -1,7 +1,7 @@
 package handlers
 
 import (
-	"encoding/csv"
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -10,14 +10,11 @@ import (
 
 	"github.com/JorgeSaicoski/financial-tracker/internal/application/usecases"
 	"github.com/JorgeSaicoski/financial-tracker/internal/domain/entities"
+	csvformat "github.com/JorgeSaicoski/financial-tracker/internal/infrastructure/csv"
 	"github.com/JorgeSaicoski/financial-tracker/internal/interfaces/api/reqctx"
 	interfacedto "github.com/JorgeSaicoski/financial-tracker/internal/interfaces/dto"
 	"github.com/JorgeSaicoski/financial-tracker/internal/pkg/logger"
 )
-
-// importCSVHeader is BACK-03's fixed CSV model — column names, in this
-// exact order. GetImportSpec advertises it; ImportMovements enforces it.
-var importCSVHeader = []string{"date", "amount", "currency", "description", "category", "payment_method", "account"}
 
 const (
 	// maxImportFileBytes bounds the request body BACK-03 asks for
@@ -29,6 +26,7 @@ const (
 
 type importHandler struct {
 	importMovements usecases.ImportMovementsUseCase
+	listMovements   usecases.ListMovementsUseCase
 	listAccounts    usecases.ListAccountsUseCase
 	listCurrencies  usecases.ListCurrenciesUseCase
 
@@ -38,12 +36,14 @@ type importHandler struct {
 // NewImportHandler returns interface type for dependency injection.
 func NewImportHandler(
 	importMovements usecases.ImportMovementsUseCase,
+	listMovements usecases.ListMovementsUseCase,
 	listAccounts usecases.ListAccountsUseCase,
 	listCurrencies usecases.ListCurrenciesUseCase,
 	log logger.Logger,
 ) ImportHandler {
 	return &importHandler{
 		importMovements: importMovements,
+		listMovements:   listMovements,
 		listAccounts:    listAccounts,
 		listCurrencies:  listCurrencies,
 		log:             log,
@@ -101,18 +101,8 @@ func (h *importHandler) GetImportSpec(w http.ResponseWriter, r *http.Request) {
 			{Name: "payment_method", Type: "string", Required: false, AllowedValues: paymentMethods},
 			{Name: "account", Type: "string (account name, case-insensitive)", Required: false, AllowedValues: accountNames},
 		},
-		Template: buildImportTemplate(exampleCurrency),
+		Template: csvformat.BuildTemplate(exampleCurrency),
 	})
-}
-
-func buildImportTemplate(currency string) string {
-	var b strings.Builder
-	w := csv.NewWriter(&b)
-	_ = w.Write(importCSVHeader)
-	_ = w.Write([]string{"2025-11-03", "-4590", currency, "Groceries", "food", "debit_card", ""})
-	_ = w.Write([]string{"2025-11-05", "250000", currency, "Salary", "income", "bank_transfer", ""})
-	w.Flush()
-	return b.String()
 }
 
 // ImportMovements handles POST /import/movements: multipart file (field
@@ -153,7 +143,7 @@ func (h *importHandler) ImportMovements(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	rows, err := parseImportCSV(reader)
+	csvRows, err := csvformat.ParseRows(reader)
 	if err != nil {
 		var maxBytesErr *http.MaxBytesError
 		if errors.As(err, &maxBytesErr) {
@@ -163,9 +153,13 @@ func (h *importHandler) ImportMovements(w http.ResponseWriter, r *http.Request) 
 		h.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if len(rows) > maxImportRows {
+	if len(csvRows) > maxImportRows {
 		h.writeError(w, http.StatusBadRequest, fmt.Sprintf("too many rows (max %d)", maxImportRows))
 		return
+	}
+	rows := make([]usecases.ImportRowInput, len(csvRows))
+	for i, cr := range csvRows {
+		rows[i] = usecases.ImportRowInput(cr)
 	}
 
 	result, err := h.importMovements.Execute(r.Context(), usecases.ImportMovementsInput{
@@ -185,7 +179,10 @@ func (h *importHandler) ImportMovements(w http.ResponseWriter, r *http.Request) 
 
 // csvReaderFromRequest returns the uploaded CSV's bytes as a reader,
 // whichever of the two accepted shapes the request used: a multipart
-// file upload (field "file") or a raw text/csv body.
+// file upload (field "file") or a raw text/csv body. The multipart file
+// handle is read fully and closed here rather than handed back open —
+// callers only need an io.Reader, and leaving a multipart.File open for
+// the rest of the request risks leaking file descriptors/temp files.
 func csvReaderFromRequest(r *http.Request) (io.Reader, error) {
 	contentType := r.Header.Get("Content-Type")
 	if strings.HasPrefix(contentType, "multipart/") {
@@ -193,64 +190,66 @@ func csvReaderFromRequest(r *http.Request) (io.Reader, error) {
 		if err != nil {
 			return nil, fmt.Errorf("missing multipart \"file\" field: %w", err)
 		}
-		return file, nil
+		defer file.Close()
+		data, err := io.ReadAll(file) // bounded by the MaxBytesReader already wrapping r.Body
+		if err != nil {
+			return nil, err
+		}
+		return bytes.NewReader(data), nil
 	}
 	return r.Body, nil
 }
 
-// parseImportCSV validates the fixed header (see importCSVHeader) and
-// maps each remaining row into an ImportRowInput, positionally — it does
-// not validate field *values* (that's the usecase's job, row by row).
-func parseImportCSV(r io.Reader) ([]usecases.ImportRowInput, error) {
-	csvReader := csv.NewReader(r)
-	csvReader.TrimLeadingSpace = true
-
-	header, err := csvReader.Read()
-	if err == io.EOF {
-		return nil, errors.New("empty file: expected a header row")
+// ExportMovements handles GET /export/movements: the revert direction of
+// ImportMovements — every active movement of the caller's, rendered back
+// into BACK-03's fixed CSV model (see internal/infrastructure/csv), so a
+// file round-tripped through import then export reproduces the same
+// rows. Query params: currency, from, to (same as GET /movements).
+func (h *importHandler) ExportMovements(w http.ResponseWriter, r *http.Request) {
+	userID, ok := reqctx.UserID(r.Context())
+	if !ok {
+		h.writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
 	}
+
+	var currency *string
+	if c := r.URL.Query().Get("currency"); c != "" {
+		currency = &c
+	}
+	from, err := parseTimeParam(r, "from", false)
 	if err != nil {
-		return nil, fmt.Errorf("invalid CSV: %w", err)
+		h.writeError(w, http.StatusBadRequest, "invalid from (want YYYY-MM-DD or RFC 3339)")
+		return
 	}
-	if !headerMatches(header) {
-		return nil, fmt.Errorf("invalid header: want %q, got %q", strings.Join(importCSVHeader, ","), strings.Join(header, ","))
+	to, err := parseTimeParam(r, "to", true)
+	if err != nil {
+		h.writeError(w, http.StatusBadRequest, "invalid to (want YYYY-MM-DD or RFC 3339)")
+		return
 	}
 
-	var rows []usecases.ImportRowInput
-	for {
-		record, err := csvReader.Read()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return nil, fmt.Errorf("invalid CSV: %w", err)
-		}
-		if len(record) != len(importCSVHeader) {
-			return nil, fmt.Errorf("row %d: want %d columns, got %d", len(rows)+1, len(importCSVHeader), len(record))
-		}
-		rows = append(rows, usecases.ImportRowInput{
-			Date:          record[0],
-			Amount:        record[1],
-			Currency:      record[2],
-			Description:   record[3],
-			Category:      record[4],
-			PaymentMethod: record[5],
-			Account:       record[6],
-		})
+	result, err := h.listMovements.Execute(r.Context(), userID, currency, from, to, 0, 0)
+	if err != nil {
+		h.writeUsecaseError(w, "export movements", err)
+		return
 	}
-	return rows, nil
-}
 
-func headerMatches(header []string) bool {
-	if len(header) != len(importCSVHeader) {
-		return false
+	accountViews, err := h.listAccounts.Execute(r.Context(), userID)
+	if err != nil {
+		h.log.Error("export movements: list accounts failed: %v", err)
+		writeError(h.log, w, http.StatusInternalServerError, "internal error")
+		return
 	}
-	for i, col := range header {
-		if strings.ToLower(strings.TrimSpace(col)) != importCSVHeader[i] {
-			return false
-		}
+	accountNames := make(map[string]string, len(accountViews))
+	for _, a := range accountViews {
+		accountNames[a.Account.ID] = a.Account.Name
 	}
-	return true
+
+	w.Header().Set("Content-Type", "text/csv")
+	w.Header().Set("Content-Disposition", `attachment; filename="movements.csv"`)
+	w.WriteHeader(http.StatusOK)
+	if err := csvformat.WriteMovements(w, result.Movements, accountNames); err != nil {
+		h.log.Error("export movements: write CSV failed: %v", err)
+	}
 }
 
 func toImportResponse(result usecases.ImportMovementsResult) interfacedto.ImportMovementsResponse {
