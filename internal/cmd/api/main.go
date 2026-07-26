@@ -71,6 +71,7 @@ func main() {
 		currencyRepo     repositories.CurrencyRepository
 		exchangeRateRepo repositories.ExchangeRateRepository
 		userRepo         repositories.UserRepository
+		settingsRepo     repositories.UserSettingsRepository
 	)
 
 	switch dbDriver {
@@ -101,6 +102,7 @@ func main() {
 		currencyRepo = postgresql.NewCurrencyRepository(db)
 		exchangeRateRepo = postgresql.NewExchangeRateRepository(db)
 		userRepo = postgresql.NewUserRepository(db)
+		settingsRepo = postgresql.NewUserSettingsRepository(db)
 	case "sqlite":
 		db, err = sqlite.Open(dbPath)
 		if err != nil {
@@ -117,6 +119,7 @@ func main() {
 		currencyRepo = sqlite.NewCurrencyRepository(db)
 		exchangeRateRepo = sqlite.NewExchangeRateRepository(db)
 		userRepo = sqlite.NewUserRepository(db)
+		settingsRepo = sqlite.NewUserSettingsRepository(db)
 	default:
 		log.Error("unknown DB_DRIVER %q (want sqlite or postgres)", dbDriver)
 		os.Exit(1)
@@ -125,10 +128,10 @@ func main() {
 
 	ledgerClient := ledgerservice.NewClient(ledgerServiceURL)
 	ledgerGateway := ledgerservice.NewLedgerGateway(ledgerClient)
-	syncService := syncapp.NewService(movementRepo, ledgerGateway, log, retryCooldown)
+	syncService := syncapp.NewService(movementRepo, settingsRepo, ledgerGateway, log, retryCooldown)
 
-	createMovement := usecases.NewCreateMovement(movementRepo, accountRepo)
-	createPurchase := usecases.NewCreateCreditCardPurchase(purchaseRepo)
+	createMovement := usecases.NewCreateMovement(movementRepo, accountRepo, settingsRepo)
+	createPurchase := usecases.NewCreateCreditCardPurchase(purchaseRepo, settingsRepo)
 	getMovement := usecases.NewGetMovement(movementRepo)
 	listMovements := usecases.NewListMovements(movementRepo)
 	updateMovement := usecases.NewUpdateMovement(movementRepo, accountRepo, syncService)
@@ -140,13 +143,15 @@ func main() {
 	reportBalance := usecases.NewReportAccountBalance(accountRepo, movementRepo)
 	listCurrencies := usecases.NewListCurrencies(currencyRepo)
 	addCurrency := usecases.NewAddCurrency(currencyRepo)
-	transferBetweenAccounts := usecases.NewTransferBetweenAccounts(movementRepo, accountRepo)
+	transferBetweenAccounts := usecases.NewTransferBetweenAccounts(movementRepo, accountRepo, settingsRepo)
 	cancelTransfer := usecases.NewCancelTransfer(movementRepo, syncService)
 	setExchangeRate := usecases.NewSetExchangeRate(exchangeRateRepo, currencyRepo)
 	listExchangeRates := usecases.NewListExchangeRates(exchangeRateRepo)
 	deleteExchangeRate := usecases.NewDeleteExchangeRate(exchangeRateRepo)
 	ensureUser := usecases.NewEnsureUser(userRepo)
 	getUser := usecases.NewGetUser(userRepo)
+	getSettings := usecases.NewGetUserSettings(settingsRepo)
+	updateSettings := usecases.NewUpdateUserSettings(settingsRepo, movementRepo)
 
 	movementHandler := handlers.NewMovementHandler(
 		createMovement,
@@ -165,6 +170,7 @@ func main() {
 	currencyHandler := handlers.NewCurrencyHandler(listCurrencies, addCurrency, log)
 	transferHandler := handlers.NewTransferHandler(transferBetweenAccounts, cancelTransfer, log)
 	exchangeRateHandler := handlers.NewExchangeRateHandler(setExchangeRate, listExchangeRates, deleteExchangeRate, log)
+	settingsHandler := handlers.NewSettingsHandler(getSettings, updateSettings, log)
 	userHandler := handlers.NewUserHandler(getUser, log)
 
 	// Auth: AUTH_DISABLED is a dev-only escape hatch, off by default. A
@@ -189,7 +195,7 @@ func main() {
 		log.Info("auth: validating Authorization bearer tokens against OIDC issuer %s (audience %q)", oidcIssuerURL, oidcAudience)
 	}
 
-	router := api.NewRouter(movementHandler, accountHandler, currencyHandler, transferHandler, exchangeRateHandler, userHandler, authMiddleware, corsAllowedOrigin)
+	router := api.NewRouter(movementHandler, accountHandler, currencyHandler, transferHandler, exchangeRateHandler, settingsHandler, userHandler, authMiddleware, corsAllowedOrigin)
 
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
@@ -201,7 +207,7 @@ func main() {
 	}
 	addr := ":" + port
 	log.Info("financial-tracker API listening on %s (db driver %s at %s, syncing to ledger-service at %s every %s)", addr, dbDriver, dbDescription, ledgerServiceURL, syncInterval)
-	log.Info("endpoints: POST /movements | GET /movements | PATCH /movements/{id} | POST /movements/{id}/cancel | POST /credit-card-purchases/{id}/cancel | POST /sync | GET /categories | GET /cashflow | GET|POST /accounts | POST /accounts/{id}/balance | GET|POST /currencies | POST /transfers | POST /transfers/{id}/cancel | GET|POST /exchange-rates | DELETE /exchange-rates/{id} | GET /me")
+	log.Info("endpoints: GET|PATCH /settings | POST /movements | GET /movements | PATCH /movements/{id} | POST /movements/{id}/cancel | POST /credit-card-purchases/{id}/cancel | POST /sync | GET /categories | GET /cashflow | GET|POST /accounts | POST /accounts/{id}/balance | GET|POST /currencies | POST /transfers | POST /transfers/{id}/cancel | GET|POST /exchange-rates | DELETE /exchange-rates/{id} | GET /me")
 
 	if err := http.ListenAndServe(addr, router); err != nil {
 		log.Error("server failed: %v", err)

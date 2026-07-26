@@ -39,10 +39,20 @@ type MovementRepository interface {
 	// ListPendingSync returns active movements not yet synced to
 	// ledger-service that are due (timestamp <= now) and were not
 	// attempted within retryCooldown, oldest first. A zero cooldown
-	// returns every due pending/failed row.
-	ListPendingSync(ctx context.Context, now time.Time, retryCooldown time.Duration) ([]*dto.MovementDTO, error)
+	// returns every due pending/failed row. excludedUserIDs (BACK-13)
+	// skips movements belonging to users whose effective ledger sync is
+	// currently off, even ones already sitting as "pending" from before
+	// they turned it off — nil/empty applies no exclusion.
+	ListPendingSync(ctx context.Context, now time.Time, retryCooldown time.Duration, excludedUserIDs []string) ([]*dto.MovementDTO, error)
 	MarkSynced(ctx context.Context, id, ledgerTransactionID string, at time.Time) error
 	MarkSyncFailed(ctx context.Context, id, syncErr string, at time.Time) error
+
+	// MarkLocalPending flips every "local" movement (BACK-13:
+	// entities.SyncStatusLocal — created while sync was off) belonging
+	// to userID back to "pending". Called when the user re-enables
+	// ledger sync, so the backlog accumulated while it was off gets
+	// queued instead of staying stuck forever.
+	MarkLocalPending(ctx context.Context, userID string) error
 
 	// UpdateMetadata overwrites the local-only fields — description,
 	// category, payment method, account — regardless of sync status,

@@ -14,11 +14,12 @@ import (
 type transferBetweenAccountsUseCase struct {
 	movements repositories.MovementRepository
 	accounts  repositories.AccountRepository
+	settings  repositories.UserSettingsRepository
 }
 
 // NewTransferBetweenAccounts returns interface type for dependency injection.
-func NewTransferBetweenAccounts(movements repositories.MovementRepository, accounts repositories.AccountRepository) TransferBetweenAccountsUseCase {
-	return &transferBetweenAccountsUseCase{movements: movements, accounts: accounts}
+func NewTransferBetweenAccounts(movements repositories.MovementRepository, accounts repositories.AccountRepository, settings repositories.UserSettingsRepository) TransferBetweenAccountsUseCase {
+	return &transferBetweenAccountsUseCase{movements: movements, accounts: accounts, settings: settings}
 }
 
 func (uc *transferBetweenAccountsUseCase) Execute(ctx context.Context, input TransferBetweenAccountsInput) (TransferResult, error) {
@@ -61,6 +62,15 @@ func (uc *transferBetweenAccountsUseCase) Execute(ctx context.Context, input Tra
 	// not either account's.
 	transferID := id.NewUUID()
 	debit.TransferID, credit.TransferID = &transferID, &transferID
+
+	// Both legs are brand-new movements (BACK-13): if the user's
+	// effective ledger sync is off, they start "local" instead of the
+	// entity methods' default "pending" — see effectiveSyncStatus.
+	syncStatus, err := effectiveSyncStatus(ctx, uc.settings, input.UserID)
+	if err != nil {
+		return TransferResult{}, err
+	}
+	debit.SyncStatus, credit.SyncStatus = syncStatus, syncStatus
 
 	// Both legs land in one transaction: a transfer with only one leg
 	// would silently create or destroy money.

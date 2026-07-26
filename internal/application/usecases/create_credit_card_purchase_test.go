@@ -11,7 +11,7 @@ import (
 
 func newPurchaseUseCase() (CreateCreditCardPurchaseUseCase, *fakeMovementRepo) {
 	movements := newFakeMovementRepo()
-	return NewCreateCreditCardPurchase(newFakePurchaseRepo(movements)), movements
+	return NewCreateCreditCardPurchase(newFakePurchaseRepo(movements), newFakeUserSettingsRepo()), movements
 }
 
 func TestCreatePurchaseValidation(t *testing.T) {

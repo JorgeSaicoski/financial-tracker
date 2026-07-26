@@ -38,10 +38,9 @@ func (h *userHandler) Me(w http.ResponseWriter, r *http.Request) {
 
 func toUserResponse(u *dto.UserDTO) interfacedto.UserResponse {
 	return interfacedto.UserResponse{
-		ID:               u.ID,
-		Email:            u.Email,
-		DisplayName:      u.DisplayName,
-		CloudSyncEnabled: u.CloudSyncEnabled,
-		CreatedAt:        u.CreatedAt,
+		ID:          u.ID,
+		Email:       u.Email,
+		DisplayName: u.DisplayName,
+		CreatedAt:   u.CreatedAt,
 	}
 }

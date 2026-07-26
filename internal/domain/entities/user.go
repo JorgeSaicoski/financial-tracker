@@ -10,18 +10,17 @@ import "time"
 // assertion came from, so a future second identity provider (a local
 // authenticator, Google, ...) doesn't collide with or overwrite an
 // Authentik-provisioned row for a different external subject.
+//
+// Whether this user's movements sync to ledger-service lives on
+// UserSettings (BACK-13), not here — that's a separate entity precisely
+// because it distinguishes entitlement (operator-controlled) from
+// preference (user-controlled), which a plain bool on User can't express.
 type User struct {
 	ID          string
 	Provider    string
 	ExternalID  string
 	Email       string
 	DisplayName string
-
-	// CloudSyncEnabled gates whether this user's movements sync to
-	// ledger-service. Not wired to any use case yet — a future ticket
-	// decides how a user turns cloud sync on/off; the field exists now so
-	// the column and domain concept are in place ahead of that.
-	CloudSyncEnabled bool
 
 	CreatedAt time.Time
 	UpdatedAt time.Time
