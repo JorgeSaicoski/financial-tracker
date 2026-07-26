@@ -175,6 +175,28 @@ func (f *fakeMovementRepo) ListByCreditCardPurchase(_ context.Context, purchaseI
 	return out, nil
 }
 
+func (f *fakeMovementRepo) ListByCard(_ context.Context, cardID string) ([]*dto.MovementDTO, error) {
+	var out []*dto.MovementDTO
+	for _, m := range f.byID {
+		if m.CardID != nil && *m.CardID == cardID {
+			cp := *m
+			out = append(out, &cp)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeMovementRepo) ListCardPayments(_ context.Context, cardID string) ([]*dto.MovementDTO, error) {
+	var out []*dto.MovementDTO
+	for _, m := range f.byID {
+		if m.CardPaymentForCardID != nil && *m.CardPaymentForCardID == cardID {
+			cp := *m
+			out = append(out, &cp)
+		}
+	}
+	return out, nil
+}
+
 func (f *fakeMovementRepo) ListPendingSync(_ context.Context, now time.Time, retryCooldown time.Duration, excludedUserIDs []string) ([]*dto.MovementDTO, error) {
 	excluded := make(map[string]bool, len(excludedUserIDs))
 	for _, uid := range excludedUserIDs {
@@ -544,4 +566,73 @@ func (f *fakeUserSettingsRepo) setEntitled(userID string, ledgerSyncEntitled boo
 		f.byUserID[userID] = s
 	}
 	s.LedgerSyncEntitled = ledgerSyncEntitled
+}
+
+// fakeCardRepo is an in-memory CardRepository (BACK-08).
+type fakeCardRepo struct {
+	byID       map[string]*dto.CardDTO
+	referenced map[string]bool
+	nextID     int
+}
+
+func newFakeCardRepo() *fakeCardRepo {
+	return &fakeCardRepo{byID: map[string]*dto.CardDTO{}, referenced: map[string]bool{}}
+}
+
+func (f *fakeCardRepo) Create(_ context.Context, c *dto.CardDTO) (*dto.CardDTO, error) {
+	if c.ID == "" {
+		f.nextID++
+		c.ID = fmt.Sprintf("card-%d", f.nextID)
+	}
+	cp := *c
+	f.byID[c.ID] = &cp
+	return c, nil
+}
+
+func (f *fakeCardRepo) GetByID(_ context.Context, userID, id string) (*dto.CardDTO, error) {
+	c, ok := f.byID[id]
+	if !ok || c.UserID != userID {
+		return nil, apperrors.ErrNotFound
+	}
+	cp := *c
+	return &cp, nil
+}
+
+func (f *fakeCardRepo) ListByUser(_ context.Context, userID string) ([]*dto.CardDTO, error) {
+	var out []*dto.CardDTO
+	for _, c := range f.byID {
+		if c.UserID == userID {
+			cp := *c
+			out = append(out, &cp)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+func (f *fakeCardRepo) Update(_ context.Context, userID, id string, c *dto.CardDTO) error {
+	existing, ok := f.byID[id]
+	if !ok || existing.UserID != userID {
+		return apperrors.ErrNotFound
+	}
+	existing.Name = c.Name
+	existing.LastFour = c.LastFour
+	existing.ClosingDay = c.ClosingDay
+	existing.DueDay = c.DueDay
+	existing.CreditLimit = c.CreditLimit
+	existing.MonthlyBudget = c.MonthlyBudget
+	return nil
+}
+
+func (f *fakeCardRepo) Delete(_ context.Context, userID, id string) error {
+	existing, ok := f.byID[id]
+	if !ok || existing.UserID != userID {
+		return apperrors.ErrNotFound
+	}
+	delete(f.byID, id)
+	return nil
+}
+
+func (f *fakeCardRepo) IsReferenced(_ context.Context, id string) (bool, error) {
+	return f.referenced[id], nil
 }

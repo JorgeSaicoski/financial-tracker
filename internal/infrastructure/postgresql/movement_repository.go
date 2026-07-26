@@ -47,7 +47,7 @@ func NewMovementRepository(db *sql.DB) repositories.MovementRepository {
 const movementColumns = `id, user_id, amount, currency, description, category, payment_method,
 	credit_card_purchase_id, installment_number, status, cancels_movement_id, reversed_by_movement_id,
 	timestamp, sync_status, ledger_transaction_id, sync_attempts, last_sync_error, last_sync_attempt_at,
-	synced_at, created_at, account_id, transfer_id`
+	synced_at, created_at, account_id, transfer_id, card_id, card_payment_for_card_id`
 
 func (r *movementRepository) Create(ctx context.Context, movement *dto.MovementDTO) (*dto.MovementDTO, error) {
 	if movement.ID == "" {
@@ -122,6 +122,18 @@ func (r *movementRepository) ListByCreditCardPurchase(ctx context.Context, purch
 	return r.queryMovements(ctx,
 		`SELECT `+movementColumns+` FROM movements WHERE credit_card_purchase_id = $1 ORDER BY installment_number ASC`,
 		purchaseID)
+}
+
+func (r *movementRepository) ListByCard(ctx context.Context, cardID string) ([]*dto.MovementDTO, error) {
+	return r.queryMovements(ctx,
+		`SELECT `+movementColumns+` FROM movements WHERE card_id = $1 ORDER BY timestamp ASC`,
+		cardID)
+}
+
+func (r *movementRepository) ListCardPayments(ctx context.Context, cardID string) ([]*dto.MovementDTO, error) {
+	return r.queryMovements(ctx,
+		`SELECT `+movementColumns+` FROM movements WHERE card_payment_for_card_id = $1 ORDER BY timestamp ASC`,
+		cardID)
 }
 
 func (r *movementRepository) ListByTransferID(ctx context.Context, transferID string) ([]*dto.MovementDTO, error) {
@@ -380,6 +392,18 @@ func (r *movementRepositoryTx) ListByCreditCardPurchase(ctx context.Context, pur
 		purchaseID)
 }
 
+func (r *movementRepositoryTx) ListByCard(ctx context.Context, cardID string) ([]*dto.MovementDTO, error) {
+	return queryMovements(ctx, r.tx,
+		`SELECT `+movementColumns+` FROM movements WHERE card_id = $1 ORDER BY timestamp ASC`,
+		cardID)
+}
+
+func (r *movementRepositoryTx) ListCardPayments(ctx context.Context, cardID string) ([]*dto.MovementDTO, error) {
+	return queryMovements(ctx, r.tx,
+		`SELECT `+movementColumns+` FROM movements WHERE card_payment_for_card_id = $1 ORDER BY timestamp ASC`,
+		cardID)
+}
+
 func (r *movementRepositoryTx) ListByTransferID(ctx context.Context, transferID string) ([]*dto.MovementDTO, error) {
 	return queryMovements(ctx, r.tx,
 		`SELECT `+movementColumns+` FROM movements WHERE transfer_id = $1 ORDER BY amount ASC`,
@@ -526,14 +550,15 @@ func queryMovements(ctx context.Context, q queryer, query string, args ...any) (
 func insertMovement(ctx context.Context, ex execer, m *dto.MovementDTO) error {
 	_, err := ex.ExecContext(ctx,
 		`INSERT INTO movements (`+movementColumns+`)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)`,
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)`,
 		m.ID, m.UserID, m.Amount, m.Currency,
 		nullString(m.Description), m.Category, m.PaymentMethod,
 		strOrNil(m.CreditCardPurchaseID), intOrNil(m.InstallmentNumber),
 		m.Status, strOrNil(m.CancelsMovementID), strOrNil(m.ReversedByMovementID),
 		m.Timestamp, m.SyncStatus, strOrNil(m.LedgerTransactionID),
 		m.SyncAttempts, strOrNil(m.LastSyncError), timeOrNil(m.LastSyncAttemptAt),
-		timeOrNil(m.SyncedAt), m.CreatedAt, strOrNil(m.AccountID), strOrNil(m.TransferID))
+		timeOrNil(m.SyncedAt), m.CreatedAt, strOrNil(m.AccountID), strOrNil(m.TransferID),
+		strOrNil(m.CardID), strOrNil(m.CardPaymentForCardID))
 	if err != nil {
 		return fmt.Errorf("postgresql: insert movement: %w", err)
 	}
@@ -554,6 +579,7 @@ func scanMovement(row scannable) (*dto.MovementDTO, error) {
 		description, lastSyncError          sql.NullString
 		purchaseID, cancelsID, reversedByID sql.NullString
 		ledgerTxID, accountID, transferID   sql.NullString
+		cardID, cardPaymentForCardID        sql.NullString
 		installmentNumber                   sql.NullInt64
 		syncAttempts                        int64
 		lastAttemptAt, syncedAt             sql.NullTime
@@ -566,7 +592,8 @@ func scanMovement(row scannable) (*dto.MovementDTO, error) {
 		&m.Status, &cancelsID, &reversedByID,
 		&m.Timestamp, &m.SyncStatus, &ledgerTxID,
 		&syncAttempts, &lastSyncError, &lastAttemptAt,
-		&syncedAt, &m.CreatedAt, &accountID, &transferID)
+		&syncedAt, &m.CreatedAt, &accountID, &transferID,
+		&cardID, &cardPaymentForCardID)
 	if err != nil {
 		return nil, err
 	}
@@ -580,6 +607,8 @@ func scanMovement(row scannable) (*dto.MovementDTO, error) {
 	m.ReversedByMovementID = stringPtr(reversedByID)
 	m.LedgerTransactionID = stringPtr(ledgerTxID)
 	m.LastSyncError = stringPtr(lastSyncError)
+	m.CardID = stringPtr(cardID)
+	m.CardPaymentForCardID = stringPtr(cardPaymentForCardID)
 	if installmentNumber.Valid {
 		n := int(installmentNumber.Int64)
 		m.InstallmentNumber = &n

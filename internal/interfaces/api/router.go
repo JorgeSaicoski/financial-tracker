@@ -16,6 +16,7 @@ type AuthMiddleware func(http.Handler) http.Handler
 func NewRouter(
 	movementHandler handlers.MovementHandler,
 	accountHandler handlers.AccountHandler,
+	cardHandler handlers.CardHandler,
 	currencyHandler handlers.CurrencyHandler,
 	transferHandler handlers.TransferHandler,
 	exchangeRateHandler handlers.ExchangeRateHandler,
@@ -51,6 +52,12 @@ func NewRouter(
 	protected.HandleFunc("GET /accounts", accountHandler.ListAccounts)
 	protected.HandleFunc("POST /accounts", accountHandler.CreateAccount)
 	protected.HandleFunc("POST /accounts/{id}/balance", accountHandler.ReportBalance)
+
+	protected.HandleFunc("GET /cards", cardHandler.ListCards)
+	protected.HandleFunc("POST /cards", cardHandler.CreateCard)
+	protected.HandleFunc("GET /cards/{id}", cardHandler.GetCard)
+	protected.HandleFunc("PATCH /cards/{id}", cardHandler.UpdateCard)
+	protected.HandleFunc("DELETE /cards/{id}", cardHandler.DeleteCard)
 
 	protected.HandleFunc("GET /currencies", currencyHandler.ListCurrencies)
 	protected.HandleFunc("POST /currencies", currencyHandler.AddCurrency)

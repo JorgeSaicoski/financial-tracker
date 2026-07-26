@@ -19,6 +19,12 @@ type CreateMovementRequest struct {
 	PaymentMethod string `json:"payment_method,omitempty"`
 	Installments  int    `json:"installments,omitempty"`
 	AccountID     string `json:"account_id,omitempty"`
+	// CardID (BACK-08): only valid with payment_method="credit_card".
+	CardID string `json:"card_id,omitempty"`
+	// CardPaymentForCardID (BACK-08) marks this movement as a payment
+	// settling the named card's statement (paired with account_id, a
+	// negative amount, and category="transfer" by convention).
+	CardPaymentForCardID string `json:"card_payment_for_card_id,omitempty"`
 }
 
 type MovementResponse struct {
@@ -40,6 +46,8 @@ type MovementResponse struct {
 	CancelsMovementID    string `json:"cancels_movement_id,omitempty"`
 	ReversedByMovementID string `json:"reversed_by_movement_id,omitempty"`
 	TransferID           string `json:"transfer_id,omitempty"`
+	CardID               string `json:"card_id,omitempty"`
+	CardPaymentForCardID string `json:"card_payment_for_card_id,omitempty"`
 }
 
 // UpdateMovementRequest is the API request body for PATCH /movements/{id}.
@@ -85,6 +93,7 @@ type CreditCardPurchaseResponse struct {
 	InstallmentCount int                `json:"installment_count"`
 	PurchaseDate     time.Time          `json:"purchase_date"`
 	Status           string             `json:"status"`
+	CardID           string             `json:"card_id,omitempty"`
 	Movements        []MovementResponse `json:"movements,omitempty"`
 }
 

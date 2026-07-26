@@ -16,6 +16,12 @@ type CreditCardPurchase struct {
 	PurchaseDate     time.Time
 	Status           CreditCardPurchaseStatus
 	CreatedAt        time.Time
+
+	// CardID (BACK-08) links this purchase to the card it was made on —
+	// nil keeps today's flat-offset installment date behavior unchanged.
+	// Propagated onto each installment Movement's own CardID too, so
+	// per-card aggregates only need to query movements.
+	CardID *string
 }
 
 type CreditCardPurchaseStatus string

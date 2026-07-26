@@ -69,7 +69,8 @@ application/dto              MovementDTO, AccountDTO, CreditCardPurchaseDTO, Exc
                              other, converted from domain entities at the infrastructure
                              boundary
 application/repositories     MovementRepository, CreditCardPurchaseRepository,
-                             AccountRepository, CurrencyRepository, ExchangeRateRepository
+                             AccountRepository, CardRepository, CurrencyRepository,
+                             ExchangeRateRepository
                              interfaces, expressed in application/dto types — the swap points
 application/services         LedgerGateway, SyncTrigger, SyncRunner — service contracts the
                              application defines; sync/infrastructure implement them
@@ -82,7 +83,8 @@ application/usecases         every use-case interface + Input/Result/View type c
                              balances/returns), ReportAccountBalance, GetCashflow,
                              ListCurrencies, AddCurrency, TransferBetweenAccounts,
                              CancelTransfer, SetExchangeRate, ListExchangeRates,
-                             DeleteExchangeRate, ToUSD
+                             DeleteExchangeRate, ToUSD, CreateCard, ListCards, GetCard,
+                             UpdateCard, DeleteCard
 application/sync             SyncService: pushes pending movements to ledger-service via the
                              LedgerGateway port (background ticker + manual trigger)
 infrastructure/sqlite        implements the repositories on the local SQLite DB (source of truth,
@@ -139,8 +141,10 @@ implements.
   the response is lost, the retry duplicates the transaction there. The
   real fix is idempotency-key support in ledger-service's API (follow-up
   in that repo).
-- **Installment dates are simplified**: one per month from the purchase
-  date; no awareness of a card's real closing/due day.
+- **Installment dates are simplified when no card is linked**: one per
+  month from the purchase date. Linking a `card_id` (`POST /movements`,
+  `POST /cards`) dates each installment on that card's real closing/due
+  day instead — see "Cards" below.
 - **Ledger-service only stores money facts** (`user_id, amount, currency`):
   description/category/payment method live only in financial-tracker's DB.
 
@@ -177,6 +181,45 @@ tier to sell).
   ```
   A real admin surface is icebox (see `financial-tracker-plan.md`).
 
+## Cards (`cards` table)
+
+A card profile (`GET/POST/PATCH/DELETE /cards`) records a credit card's
+**closing day** (statement cut) and **due day** (when an installment
+actually hits your money) — `"1"`-`"28"` or `"last"`, same convention as
+recurring rules. Linking a purchase to a card (`card_id` on `POST
+/movements` or a credit-card `POST /movements` with `installments`)
+dates each installment on the card's real due days instead of a flat
+monthly offset from the purchase date.
+
+Each card's `GET`/`GET /cards/{id}` response carries a computed picture:
+
+- **`next_due_total` / `next_due_date`** — the statement that has
+  already closed and is waiting to be paid, net of payments already
+  recorded against the card (see below). This is "how much to pay right
+  now."
+- **`open_cycle_total`** — purchases made after the last closing day,
+  still accumulating toward the *next* statement — not due yet.
+- **`available_credit`** (only when `credit_limit` is set) —
+  `credit_limit` minus everything outstanding (`next_due_total +
+  open_cycle_total`).
+- **`budget_remaining` / `over_budget`** (only when `monthly_budget` is
+  set) — `monthly_budget` minus `open_cycle_total`, the user's own
+  spending goal for the cycle, independent of `credit_limit`.
+
+**Paying the card bill is not a second expense.** Recording a payment is
+an ordinary `POST /movements` on the paying account (`category:
+"transfer"`, a negative `amount`) with `card_payment_for_card_id` set —
+it reduces `next_due_total` and affects the paying account's balance
+like any movement, but (like every `transfer`) never shows up as a
+second expense in `GET /cashflow`'s category totals; the original
+purchases already counted once, at purchase time.
+
+A known v1 simplification: payments aren't tied to a specific statement
+(there's no separate invoice/statement entity) — every payment ever
+recorded against a card nets against whichever `next_due_total` is
+current, rather than being scoped to the exact statement it was
+intended for. Revisit only if it turns out to matter in practice.
+
 ## API
 
 | Method | Path | Purpose |
@@ -184,7 +227,7 @@ tier to sell).
 | `GET` | `/config` | Unauthenticated. `{standalone, auth_enabled}` — what the frontend reads before deciding whether to show the login guard. |
 | `GET` | `/settings?user_id=` | The caller's own settings — entitlement (operator-controlled, read-only here) and preference. Defaults to all-`true` if the user has never touched them (no row needed). |
 | `PATCH` | `/settings?user_id=` | Body: `{ledger_sync_enabled}` — the only field a user may change. Any attempt to set `ledger_sync_entitled`/`cloud_storage_entitled` (or any other key) is rejected with 400. Re-enabling reclassifies movements created while sync was off (`sync_status: "local"`) back to `"pending"`, so the next `/sync` pass pushes exactly that backlog. |
-| `POST` | `/movements` | Create a movement. Body: `{amount, currency?, user_id?, description?, category?, payment_method?, installments?, account_id?}`. With `payment_method="credit_card"` and `installments > 1`, splits into monthly installments and returns the purchase + its movements (no `account_id` allowed in that case). An `account_id`'s currency must match the movement's. |
+| `POST` | `/movements` | Create a movement. Body: `{amount, currency?, user_id?, description?, category?, payment_method?, installments?, account_id?, card_id?, card_payment_for_card_id?}`. With `payment_method="credit_card"` and `installments > 1`, splits into monthly installments and returns the purchase + its movements (no `account_id` allowed in that case); pass `card_id` there too to date them on the card's real due days. `card_id` (single-movement charges) requires `payment_method="credit_card"` and dates the movement on the card's due day instead of "now". `card_payment_for_card_id` marks a payment settling that card's statement — see "Cards" above. An `account_id`'s currency (and a `card_id`/`card_payment_for_card_id`'s) must match the movement's. |
 | `GET` | `/movements?id={uuid}` | Fetch one movement. |
 | `GET` | `/movements?user_id={uuid}&currency=&from=&to=&limit=&offset=` | List movements + computed `balance` (voided rows excluded from the balance). `from`/`to` take `YYYY-MM-DD` or RFC 3339 (`to` is inclusive when date-only). Each row carries `status` and `sync_status`. |
 | `PATCH` | `/movements/{id}` | Edit one movement. Body: any subset of `{description, category, payment_method, account_id, amount, currency, timestamp}`. `description`/`category`/`payment_method`/`account_id` are local-only metadata and always editable (`account_id: ""` clears it). `amount`/`currency`/`timestamp` edit in place if the movement hasn't synced yet; on an already-synced movement they instead produce a reversal + a replacement (both returned, original left untouched). Rejects voided/reversed movements, reversals themselves, and financial edits on a single credit-card installment or transfer leg (409 in all cases). |
@@ -196,6 +239,11 @@ tier to sell).
 | `GET` | `/accounts` | All accounts with `estimated_balance`, latest `reported_balance`/`reported_at`, `movements_since_report` and `last_return` (+ the valid `account_types`). |
 | `POST` | `/accounts` | Create an account. Body: `{name, type?, currency?, user_id?}`. Currency must be registered; duplicate names (case-insensitive) are rejected. |
 | `POST` | `/accounts/{id}/balance` | Report the account's real current balance: `{balance}` (smallest unit). Returns the updated account view, including the newly computed `last_return` when a previous report exists. |
+| `GET` | `/cards` | All cards with their computed `next_due_total`/`next_due_date`/`open_cycle_total`/`available_credit`/`budget_remaining`/`over_budget` — see "Cards" above. |
+| `POST` | `/cards` | Create a card. Body: `{name, last_four?, closing_day, due_day, credit_limit?, monthly_budget?, currency}`. `closing_day`/`due_day` are `"1"`-`"28"` or `"last"`. |
+| `GET` | `/cards/{id}` | Fetch one card, same computed shape as `GET /cards`. |
+| `PATCH` | `/cards/{id}` | Edit a card. Any subset of `{name, last_four, closing_day, due_day, credit_limit, monthly_budget}`. No way to clear an already-set `credit_limit`/`monthly_budget` back to "not tracked" through this endpoint. |
+| `DELETE` | `/cards/{id}` | Remove a card. Rejected (409) if any movement or credit-card purchase still references it. |
 | `GET` | `/currencies` | Registered currency codes. |
 | `POST` | `/currencies` | Register a code: `{code}` (2–10 lowercase alphanumerics). Idempotent; returns the updated list. |
 | `POST` | `/transfers` | Move money between two of the user's own accounts. Body: `{from_account_id, to_account_id, amount, description?, user_id?, timestamp?}` (`amount` positive). v1 requires both accounts to hold the same currency. Creates a linked debit (`-amount` on `from_account_id`) and credit (`+amount` on `to_account_id`) atomically, category `transfer`, sharing a `transfer_id`. Returns `{transfer_id, debit, credit}`. |
@@ -322,5 +370,4 @@ balance netting to zero after a full purchase cancel.
 - Server-side JWT verification (the frontend's OIDC login flow already
   exists; the API doesn't check tokens yet — see the MVP limitations note
   above) instead of `DEFAULT_USER_ID`.
-- Installment dates aligned to a card's real statement/closing day.
 - Backfill script importing pre-SQLite history from ledger-service.

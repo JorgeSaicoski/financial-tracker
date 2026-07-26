@@ -33,6 +33,17 @@ type Movement struct {
 	CreditCardPurchaseID *string
 	InstallmentNumber    *int // 1-based
 
+	// CardID (BACK-08) links a credit-card charge to the card it was
+	// made on — set on a single (non-installment) credit-card movement
+	// directly; an installment purchase's movements inherit it from the
+	// purchase. Nil keeps today's flat-offset date behavior unchanged.
+	CardID *string
+	// CardPaymentForCardID (BACK-08) is set only on a payment movement
+	// (an ordinary expense on the paying account, category=transfer)
+	// that settles this card's statement — distinct from CardID, which
+	// marks a charge, not a payment.
+	CardPaymentForCardID *string
+
 	// Status is "voided" only for movements cancelled before they ever
 	// reached ledger-service. A synced movement stays "active" forever
 	// (ledger-service never deletes); its cancellation is expressed by a
