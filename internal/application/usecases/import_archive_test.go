@@ -2,10 +2,12 @@ package usecases
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/JorgeSaicoski/financial-tracker/internal/application/dto"
 	"github.com/JorgeSaicoski/financial-tracker/internal/domain/entities"
+	apperrors "github.com/JorgeSaicoski/financial-tracker/internal/pkg/errors"
 )
 
 func TestImportArchiveRestoresEverything(t *testing.T) {
@@ -126,6 +128,88 @@ func TestImportArchiveDropsReversalLinks(t *testing.T) {
 	}
 	if gotOriginal.Amount != -100 || gotReversal.Amount != 100 {
 		t.Error("amounts should still restore correctly despite dropped links")
+	}
+}
+
+// TestImportArchiveRejectsMovementReferencingUnownedAccount guards the
+// same ownership boundary create_movement.go enforces on the normal write
+// path (BACK-02): a hand-crafted archive body naming another user's real
+// account id must not be able to attach a movement to it.
+func TestImportArchiveRejectsMovementReferencingUnownedAccount(t *testing.T) {
+	ctx := context.Background()
+	accounts := newFakeAccountRepo()
+	movements := newFakeMovementRepo()
+	purchases := newFakePurchaseRepo(movements)
+	uc := NewImportArchive(accounts, movements, purchases)
+
+	other, err := accounts.Create(ctx, &dto.AccountDTO{UserID: "user-2", Name: "Victim's account", Type: "bank", Currency: "usd"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m := activeMovement("mov-1", -100, entities.SyncStatusPending)
+	m.AccountID = &other.ID
+	bundle := ArchiveBundle{Movements: []*dto.MovementDTO{m}}
+
+	if _, err := uc.Execute(ctx, "user-1", bundle); !errors.Is(err, apperrors.ErrInvalidInput) {
+		t.Errorf("want ErrInvalidInput for a movement referencing another user's account, got %v", err)
+	}
+	if _, err := movements.GetByID(ctx, "mov-1"); !errors.Is(err, apperrors.ErrNotFound) {
+		t.Error("movement should not have been restored")
+	}
+}
+
+// TestImportArchiveRejectsMovementReferencingUnownedPurchase mirrors the
+// account case above for CreditCardPurchaseID.
+func TestImportArchiveRejectsMovementReferencingUnownedPurchase(t *testing.T) {
+	ctx := context.Background()
+	accounts := newFakeAccountRepo()
+	movements := newFakeMovementRepo()
+	purchases := newFakePurchaseRepo(movements)
+	uc := NewImportArchive(accounts, movements, purchases)
+
+	other, _, err := purchases.CreateWithInstallments(ctx, &dto.CreditCardPurchaseDTO{
+		UserID: "user-2", Category: string(entities.CategoryShopping), TotalAmount: -900,
+		Currency: "usd", InstallmentCount: 1, Status: string(entities.CreditCardPurchaseStatusActive),
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m := activeMovement("mov-1", -100, entities.SyncStatusPending)
+	m.CreditCardPurchaseID = &other.ID
+	bundle := ArchiveBundle{Movements: []*dto.MovementDTO{m}}
+
+	if _, err := uc.Execute(ctx, "user-1", bundle); !errors.Is(err, apperrors.ErrInvalidInput) {
+		t.Errorf("want ErrInvalidInput for a movement referencing another user's credit card purchase, got %v", err)
+	}
+}
+
+// TestImportArchiveAllowsMovementReferencingAccountRestoredInSameBundle
+// makes sure the ownership check doesn't reject the normal case: a
+// movement referencing an account that's part of the same archive (not
+// pre-existing) must still restore successfully.
+func TestImportArchiveAllowsMovementReferencingAccountRestoredInSameBundle(t *testing.T) {
+	ctx := context.Background()
+	accounts := newFakeAccountRepo()
+	movements := newFakeMovementRepo()
+	purchases := newFakePurchaseRepo(movements)
+	uc := NewImportArchive(accounts, movements, purchases)
+
+	accountID := "acc-1"
+	m := activeMovement("mov-1", -100, entities.SyncStatusPending)
+	m.AccountID = &accountID
+	bundle := ArchiveBundle{
+		Accounts:  []*dto.AccountDTO{{ID: accountID, UserID: "user-1", Name: "Checking", Type: "bank", Currency: "usd"}},
+		Movements: []*dto.MovementDTO{m},
+	}
+
+	result, err := uc.Execute(ctx, "user-1", bundle)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.MovementsRestored != 1 {
+		t.Errorf("result = %+v, want the movement restored", result)
 	}
 }
 

@@ -58,11 +58,28 @@ func (uc *importArchiveUseCase) Execute(ctx context.Context, userID string, bund
 
 	var result ImportArchiveResult
 
+	// allowedAccountIDs/allowedPurchaseIDs start as *copies* of the
+	// existing-ID sets (maps alias their backing storage, and existingXIDs
+	// is still used below to decide restored-vs-skipped) and grow as the
+	// bundle's own accounts/purchases are validated — by the time
+	// movements are restored, both sets cover every account/purchase
+	// userID will own by the end of this call, whether pre-existing or
+	// newly created here.
+	allowedAccountIDs := make(map[string]bool, len(existingAccountIDs))
+	for id := range existingAccountIDs {
+		allowedAccountIDs[id] = true
+	}
+	allowedPurchaseIDs := make(map[string]bool, len(existingPurchaseIDs))
+	for id := range existingPurchaseIDs {
+		allowedPurchaseIDs[id] = true
+	}
+
 	for _, a := range bundle.Accounts {
 		if a == nil || a.ID == "" {
 			return ImportArchiveResult{}, fmt.Errorf("%w: account missing id", apperrors.ErrInvalidInput)
 		}
 		a.UserID = userID
+		allowedAccountIDs[a.ID] = true
 		if existingAccountIDs[a.ID] {
 			result.AccountsSkipped++
 			continue
@@ -78,6 +95,7 @@ func (uc *importArchiveUseCase) Execute(ctx context.Context, userID string, bund
 			return ImportArchiveResult{}, fmt.Errorf("%w: credit card purchase missing id", apperrors.ErrInvalidInput)
 		}
 		p.UserID = userID
+		allowedPurchaseIDs[p.ID] = true
 		if existingPurchaseIDs[p.ID] {
 			result.CreditCardPurchasesSkipped++
 			continue
@@ -100,6 +118,18 @@ func (uc *importArchiveUseCase) Execute(ctx context.Context, userID string, bund
 		if existingMovementIDs[m.ID] {
 			result.MovementsSkipped++
 			continue
+		}
+		// A movement's AccountID/CreditCardPurchaseID must resolve to an
+		// account/purchase userID actually owns (pre-existing or restored
+		// earlier in this same call) — otherwise a hand-crafted archive
+		// body could attach a movement to another user's account by
+		// naming its id, the exact gap create_movement.go's ownership
+		// check (BACK-02) exists to close for the normal write path.
+		if m.AccountID != nil && !allowedAccountIDs[*m.AccountID] {
+			return ImportArchiveResult{}, fmt.Errorf("%w: movement references an account not owned by this user", apperrors.ErrInvalidInput)
+		}
+		if m.CreditCardPurchaseID != nil && !allowedPurchaseIDs[*m.CreditCardPurchaseID] {
+			return ImportArchiveResult{}, fmt.Errorf("%w: movement references a credit card purchase not owned by this user", apperrors.ErrInvalidInput)
 		}
 		// CancelsMovementID/ReversedByMovementID are dropped on restore:
 		// both are self-referencing foreign keys on movements, checked
