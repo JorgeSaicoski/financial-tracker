@@ -17,7 +17,8 @@ type recurringRuleHandler struct {
 	listRules  usecases.ListRecurringRulesUseCase
 	updateRule usecases.UpdateRecurringRuleUseCase
 
-	log logger.Logger
+	defaultCurrency string
+	log             logger.Logger
 }
 
 // NewRecurringRuleHandler returns interface type for dependency injection.
@@ -25,13 +26,15 @@ func NewRecurringRuleHandler(
 	createRule usecases.CreateRecurringRuleUseCase,
 	listRules usecases.ListRecurringRulesUseCase,
 	updateRule usecases.UpdateRecurringRuleUseCase,
+	defaultCurrency string,
 	log logger.Logger,
 ) RecurringRuleHandler {
 	return &recurringRuleHandler{
-		createRule: createRule,
-		listRules:  listRules,
-		updateRule: updateRule,
-		log:        log,
+		createRule:      createRule,
+		listRules:       listRules,
+		updateRule:      updateRule,
+		defaultCurrency: defaultCurrency,
+		log:             log,
 	}
 }
 
@@ -54,10 +57,15 @@ func (h *recurringRuleHandler) CreateRecurringRule(w http.ResponseWriter, r *htt
 		accountID = &req.AccountID
 	}
 
+	currency := req.Currency
+	if currency == "" {
+		currency = h.defaultCurrency
+	}
+
 	input := usecases.CreateRecurringRuleInput{
 		UserID:        userID,
 		Amount:        req.Amount,
-		Currency:      req.Currency,
+		Currency:      currency,
 		Description:   req.Description,
 		Category:      req.Category,
 		PaymentMethod: req.PaymentMethod,

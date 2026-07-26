@@ -70,6 +70,48 @@ func TestUpdateRecurringRuleRejectsInvalidDayOfMonth(t *testing.T) {
 	}
 }
 
+func TestUpdateRecurringRuleAcceptsEndsAtEqualToStartsAt(t *testing.T) {
+	repo := newFakeRecurringRuleRepo()
+	rule := seedRule(t, repo) // starts_at 2026-01-01
+	uc := NewUpdateRecurringRule(repo)
+
+	sameDay := rule.StartsAt
+	updated, err := uc.Execute(context.Background(), "u1", rule.ID, UpdateRecurringRuleInput{EndsAt: &sameDay})
+	if err != nil {
+		t.Fatalf("ends_at == starts_at should be a valid one-day rule, got error: %v", err)
+	}
+	if updated.EndsAt == nil || !updated.EndsAt.Equal(sameDay) {
+		t.Errorf("want EndsAt %v, got %v", sameDay, updated.EndsAt)
+	}
+}
+
+// TestUpdateRecurringRuleRejectsWithoutPartialWrite guards against a PATCH
+// that fails validation on a later field (ends_at) after already writing
+// an earlier one (amount/currency) — the whole request must apply or fail
+// atomically from the caller's perspective, not leave the rule half-updated.
+func TestUpdateRecurringRuleRejectsWithoutPartialWrite(t *testing.T) {
+	repo := newFakeRecurringRuleRepo()
+	rule := seedRule(t, repo) // starts_at 2026-01-01, amount -1000
+	uc := NewUpdateRecurringRule(repo)
+
+	newAmount := int64(-9999)
+	badEndsAt := rule.StartsAt.AddDate(0, 0, -1) // before starts_at: invalid
+	_, err := uc.Execute(context.Background(), "u1", rule.ID, UpdateRecurringRuleInput{
+		Amount: &newAmount, EndsAt: &badEndsAt,
+	})
+	if !errors.Is(err, apperrors.ErrInvalidInput) {
+		t.Fatalf("want ErrInvalidInput, got %v", err)
+	}
+
+	unchanged, err := repo.GetByID(context.Background(), rule.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unchanged.Amount != -1000 {
+		t.Errorf("amount should be unchanged after a rejected PATCH, got %d", unchanged.Amount)
+	}
+}
+
 func TestUpdateRecurringRuleClearsAccount(t *testing.T) {
 	repo := newFakeRecurringRuleRepo()
 	accountID := "acc-1"

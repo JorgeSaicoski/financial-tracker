@@ -69,6 +69,36 @@ func TestCreateRecurringRuleRejectsEndsAtBeforeStartsAt(t *testing.T) {
 	}
 }
 
+func TestCreateRecurringRuleAcceptsEndsAtEqualToStartsAt(t *testing.T) {
+	uc := NewCreateRecurringRule(newFakeRecurringRuleRepo(), newFakeAccountRepo())
+	starts := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	ends := starts
+
+	rule, err := uc.Execute(context.Background(), CreateRecurringRuleInput{
+		UserID: "u1", Amount: -100, Currency: "usd", DayOfMonth: "1", StartsAt: starts, EndsAt: &ends,
+	})
+	if err != nil {
+		t.Fatalf("ends_at == starts_at should be a valid one-day rule, got error: %v", err)
+	}
+	if rule.EndsAt == nil || !rule.EndsAt.Equal(starts) {
+		t.Errorf("want EndsAt %v, got %v", starts, rule.EndsAt)
+	}
+}
+
+func TestCreateRecurringRuleValidatesEndsAtAgainstDefaultedStartsAt(t *testing.T) {
+	uc := NewCreateRecurringRule(newFakeRecurringRuleRepo(), newFakeAccountRepo())
+	// starts_at omitted (defaults to today) — ends_at in the past must
+	// still be rejected against the *defaulted* value, not the zero time.
+	yesterday := time.Now().UTC().AddDate(0, 0, -1)
+
+	_, err := uc.Execute(context.Background(), CreateRecurringRuleInput{
+		UserID: "u1", Amount: -100, Currency: "usd", DayOfMonth: "1", EndsAt: &yesterday,
+	})
+	if !errors.Is(err, apperrors.ErrInvalidInput) {
+		t.Errorf("want ErrInvalidInput for ends_at before defaulted starts_at, got %v", err)
+	}
+}
+
 func TestCreateRecurringRuleDefaultsStartsAtToNow(t *testing.T) {
 	uc := NewCreateRecurringRule(newFakeRecurringRuleRepo(), newFakeAccountRepo())
 

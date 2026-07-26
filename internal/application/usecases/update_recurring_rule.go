@@ -30,6 +30,9 @@ func (uc *updateRecurringRuleUseCase) Execute(ctx context.Context, userID, id st
 		return nil, apperrors.ErrNotFound
 	}
 
+	// Every field is validated up front, before any repository write, so a
+	// single PATCH either fully applies or fails clean — no partial update
+	// left behind by a validation error discovered midway through.
 	description := existing.Description
 	if input.Description != nil {
 		description = *input.Description
@@ -56,9 +59,6 @@ func (uc *updateRecurringRuleUseCase) Execute(ctx context.Context, userID, id st
 			accountID = input.AccountID
 		}
 	}
-	if err := uc.rules.UpdateMetadata(ctx, id, description, category, paymentMethod, accountID); err != nil {
-		return nil, err
-	}
 
 	amount := existing.Amount
 	if input.Amount != nil {
@@ -71,9 +71,6 @@ func (uc *updateRecurringRuleUseCase) Execute(ctx context.Context, userID, id st
 	if amount == 0 || currency == "" {
 		return nil, apperrors.ErrInvalidInput
 	}
-	if err := uc.rules.UpdateFinancial(ctx, id, amount, currency); err != nil {
-		return nil, err
-	}
 
 	dayOfMonth := existing.DayOfMonth
 	if input.DayOfMonth != nil {
@@ -84,18 +81,27 @@ func (uc *updateRecurringRuleUseCase) Execute(ctx context.Context, userID, id st
 	}
 	endsAt := existing.EndsAt
 	if input.EndsAt != nil {
-		if !input.EndsAt.After(existing.StartsAt) {
-			return nil, fmt.Errorf("%w: ends_at must be after starts_at", apperrors.ErrInvalidInput)
+		// Inclusive cutoff, same as CreateRecurringRule: only a value
+		// strictly before starts_at is rejected.
+		if input.EndsAt.Before(existing.StartsAt) {
+			return nil, fmt.Errorf("%w: ends_at must not be before starts_at", apperrors.ErrInvalidInput)
 		}
 		endsAt = input.EndsAt
-	}
-	if err := uc.rules.UpdateSchedule(ctx, id, dayOfMonth, endsAt); err != nil {
-		return nil, err
 	}
 
 	active := existing.Active
 	if input.Active != nil {
 		active = *input.Active
+	}
+
+	if err := uc.rules.UpdateMetadata(ctx, id, description, category, paymentMethod, accountID); err != nil {
+		return nil, err
+	}
+	if err := uc.rules.UpdateFinancial(ctx, id, amount, currency); err != nil {
+		return nil, err
+	}
+	if err := uc.rules.UpdateSchedule(ctx, id, dayOfMonth, endsAt); err != nil {
+		return nil, err
 	}
 	if err := uc.rules.SetActive(ctx, id, active); err != nil {
 		return nil, err

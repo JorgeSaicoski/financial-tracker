@@ -48,10 +48,6 @@ func (uc *createRecurringRuleUseCase) Execute(ctx context.Context, input CreateR
 		}
 	}
 
-	if input.EndsAt != nil && !input.EndsAt.After(input.StartsAt) {
-		return nil, fmt.Errorf("%w: ends_at must be after starts_at", apperrors.ErrInvalidInput)
-	}
-
 	startsAt := input.StartsAt
 	if startsAt.IsZero() {
 		startsAt = time.Now().UTC()
@@ -64,6 +60,16 @@ func (uc *createRecurringRuleUseCase) Execute(ctx context.Context, input CreateR
 	if input.EndsAt != nil {
 		e := time.Date(input.EndsAt.Year(), input.EndsAt.Month(), input.EndsAt.Day(), 0, 0, 0, 0, time.UTC)
 		endsAt = &e
+	}
+
+	// ends_at is an inclusive cutoff (the scheduler stops once an
+	// occurrence is after ends_at), so a same-day rule (ends_at ==
+	// starts_at) is valid — only a cutoff strictly before the start is
+	// rejected. Validated after normalization so an omitted starts_at
+	// (defaulted to today above) is checked against the real value, not
+	// the zero time.
+	if endsAt != nil && endsAt.Before(startsAt) {
+		return nil, fmt.Errorf("%w: ends_at must not be before starts_at", apperrors.ErrInvalidInput)
 	}
 
 	rule := &entities.RecurringRule{
