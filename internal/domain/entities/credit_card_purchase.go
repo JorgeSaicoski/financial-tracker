@@ -9,7 +9,7 @@ type CreditCardPurchase struct {
 	ID               string
 	UserID           string
 	Description      string
-	Category         Category
+	Category         string
 	TotalAmount      int64 // signed, smallest currency unit
 	Currency         string
 	InstallmentCount int

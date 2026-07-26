@@ -1,44 +1,14 @@
 package entities
 
-// Category is the fixed, predefined category list for movements. The
-// frontend fetches it from GET /categories rather than hardcoding it.
-type Category string
-
+// CategoryTransfer and CategoryIncome are the two category names code
+// branches on directly (Account.Send/Receive set CategoryTransfer;
+// getCashflowUseCase excludes it from income/expense totals) — kept as
+// plain string constants so those comparisons still compile, even though
+// categories themselves are no longer a fixed enum (BACK-14 turned them
+// into a per-user registry, see application/repositories/category_repository.go).
+// Both are "system" categories: not spend, so they carry no avoidability
+// and can't be created/renamed/deleted through the category API.
 const (
-	CategoryFood          Category = "food"
-	CategoryTransport     Category = "transport"
-	CategoryHousing       Category = "housing"
-	CategoryUtilities     Category = "utilities"
-	CategoryHealth        Category = "health"
-	CategoryEntertainment Category = "entertainment"
-	CategoryShopping      Category = "shopping"
-	CategoryEducation     Category = "education"
-	CategoryIncome        Category = "income"
-	CategoryTransfer      Category = "transfer"
-	CategoryOther         Category = "other"
+	CategoryTransfer = "transfer"
+	CategoryIncome   = "income"
 )
-
-func Categories() []Category {
-	return []Category{
-		CategoryFood,
-		CategoryTransport,
-		CategoryHousing,
-		CategoryUtilities,
-		CategoryHealth,
-		CategoryEntertainment,
-		CategoryShopping,
-		CategoryEducation,
-		CategoryIncome,
-		CategoryTransfer,
-		CategoryOther,
-	}
-}
-
-func (c Category) IsValid() bool {
-	for _, cat := range Categories() {
-		if c == cat {
-			return true
-		}
-	}
-	return false
-}

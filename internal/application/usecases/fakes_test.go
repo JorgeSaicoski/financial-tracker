@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/JorgeSaicoski/financial-tracker/internal/application/dto"
@@ -247,6 +248,15 @@ func (f *fakeMovementRepo) UpdateMetadata(_ context.Context, id, description, ca
 	m.Category = category
 	m.PaymentMethod = paymentMethod
 	m.AccountID = accountID
+	return nil
+}
+
+func (f *fakeMovementRepo) UpdateAvoidabilityOverride(_ context.Context, id string, avoidabilityOverridePercent *int) error {
+	m, ok := f.byID[id]
+	if !ok {
+		return apperrors.ErrNotFound
+	}
+	m.AvoidabilityOverridePercent = avoidabilityOverridePercent
 	return nil
 }
 
@@ -544,4 +554,84 @@ func (f *fakeUserSettingsRepo) setEntitled(userID string, ledgerSyncEntitled boo
 		f.byUserID[userID] = s
 	}
 	s.LedgerSyncEntitled = ledgerSyncEntitled
+}
+
+// fakeCategoryRepo is an in-memory CategoryRepository, mirroring the
+// semantics the SQLite implementation guarantees: EnsureByName is a
+// case-insensitive check-then-insert, Update/Delete/GetByID are scoped
+// to (userID, id) and return apperrors.ErrNotFound otherwise.
+type fakeCategoryRepo struct {
+	byID   map[string]*dto.CategoryDTO
+	nextID int
+}
+
+func newFakeCategoryRepo() *fakeCategoryRepo {
+	return &fakeCategoryRepo{byID: map[string]*dto.CategoryDTO{}}
+}
+
+func (f *fakeCategoryRepo) EnsureByName(_ context.Context, userID, name string, avoidabilityPercent *int) (*dto.CategoryDTO, error) {
+	for _, c := range f.byID {
+		if c.UserID == userID && strings.EqualFold(c.Name, name) {
+			cp := *c
+			return &cp, nil
+		}
+	}
+	return f.Create(context.Background(), &dto.CategoryDTO{
+		UserID:              userID,
+		Name:                name,
+		AvoidabilityPercent: avoidabilityPercent,
+	})
+}
+
+func (f *fakeCategoryRepo) GetByID(_ context.Context, userID, id string) (*dto.CategoryDTO, error) {
+	c, ok := f.byID[id]
+	if !ok || c.UserID != userID {
+		return nil, apperrors.ErrNotFound
+	}
+	cp := *c
+	return &cp, nil
+}
+
+func (f *fakeCategoryRepo) ListByUser(_ context.Context, userID string) ([]*dto.CategoryDTO, error) {
+	var out []*dto.CategoryDTO
+	for _, c := range f.byID {
+		if c.UserID == userID {
+			cp := *c
+			out = append(out, &cp)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+func (f *fakeCategoryRepo) Create(_ context.Context, c *dto.CategoryDTO) (*dto.CategoryDTO, error) {
+	if c.ID == "" {
+		f.nextID++
+		c.ID = fmt.Sprintf("cat-%d", f.nextID)
+	}
+	if c.CreatedAt.IsZero() {
+		c.CreatedAt = time.Now().UTC()
+	}
+	cp := *c
+	f.byID[c.ID] = &cp
+	return c, nil
+}
+
+func (f *fakeCategoryRepo) Update(_ context.Context, userID, id, name string, avoidabilityPercent *int) error {
+	c, ok := f.byID[id]
+	if !ok || c.UserID != userID {
+		return apperrors.ErrNotFound
+	}
+	c.Name = name
+	c.AvoidabilityPercent = avoidabilityPercent
+	return nil
+}
+
+func (f *fakeCategoryRepo) Delete(_ context.Context, userID, id string) error {
+	c, ok := f.byID[id]
+	if !ok || c.UserID != userID {
+		return apperrors.ErrNotFound
+	}
+	delete(f.byID, id)
+	return nil
 }

@@ -24,6 +24,7 @@ type movementHandler struct {
 	cancelMovement usecases.CancelMovementUseCase
 	cancelPurchase usecases.CancelCreditCardPurchaseUseCase
 	getCashflow    usecases.GetCashflowUseCase
+	listCategories usecases.ListCategoriesUseCase
 	syncRunner     services.SyncRunner
 
 	defaultCurrency string
@@ -40,6 +41,7 @@ func NewMovementHandler(
 	cancelMovement usecases.CancelMovementUseCase,
 	cancelPurchase usecases.CancelCreditCardPurchaseUseCase,
 	getCashflow usecases.GetCashflowUseCase,
+	listCategories usecases.ListCategoriesUseCase,
 	syncRunner services.SyncRunner,
 	defaultCurrency string,
 	log logger.Logger,
@@ -53,6 +55,7 @@ func NewMovementHandler(
 		cancelMovement:  cancelMovement,
 		cancelPurchase:  cancelPurchase,
 		getCashflow:     getCashflow,
+		listCategories:  listCategories,
 		syncRunner:      syncRunner,
 		defaultCurrency: defaultCurrency,
 		log:             log,
@@ -114,13 +117,14 @@ func (h *movementHandler) CreateMovement(w http.ResponseWriter, r *http.Request)
 	}
 
 	movement, err := h.createMovement.Execute(r.Context(), usecases.CreateMovementInput{
-		UserID:        userID,
-		Amount:        req.Amount,
-		Currency:      currency,
-		Description:   req.Description,
-		Category:      req.Category,
-		PaymentMethod: req.PaymentMethod,
-		AccountID:     accountID,
+		UserID:                      userID,
+		Amount:                      req.Amount,
+		Currency:                    currency,
+		Description:                 req.Description,
+		Category:                    req.Category,
+		PaymentMethod:               req.PaymentMethod,
+		AccountID:                   accountID,
+		AvoidabilityOverridePercent: req.AvoidabilityOverridePercent,
 	})
 	if err != nil {
 		h.writeUsecaseError(w, "create movement", err)
@@ -224,13 +228,14 @@ func (h *movementHandler) UpdateMovement(w http.ResponseWriter, r *http.Request)
 	}
 
 	input := usecases.UpdateMovementInput{
-		Description:   req.Description,
-		Category:      req.Category,
-		PaymentMethod: req.PaymentMethod,
-		AccountID:     req.AccountID,
-		Amount:        req.Amount,
-		Currency:      req.Currency,
-		Timestamp:     req.Timestamp,
+		Description:                 req.Description,
+		Category:                    req.Category,
+		PaymentMethod:               req.PaymentMethod,
+		AccountID:                   req.AccountID,
+		Amount:                      req.Amount,
+		Currency:                    req.Currency,
+		Timestamp:                   req.Timestamp,
+		AvoidabilityOverridePercent: req.AvoidabilityOverridePercent,
 	}
 
 	result, err := h.updateMovement.Execute(r.Context(), userID, r.PathValue("id"), input)
@@ -354,13 +359,27 @@ func (h *movementHandler) Cashflow(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusOK, resp)
 }
 
-// ListCategories handles GET /categories so the frontend never hardcodes
-// the fixed category/payment-method lists.
-func (h *movementHandler) ListCategories(w http.ResponseWriter, _ *http.Request) {
-	categories := make([]string, 0)
-	for _, c := range entities.Categories() {
-		categories = append(categories, string(c))
+// ListCategories handles GET /categories: the caller's own category
+// registry (BACK-14 — id, name, avoidability_percent; system rows
+// "transfer"/"income" lazily ensured first) plus the still-fixed
+// payment-method list (BACK-17's job to turn into its own registry).
+func (h *movementHandler) ListCategories(w http.ResponseWriter, r *http.Request) {
+	userID, ok := reqctx.UserID(r.Context())
+	if !ok {
+		h.writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
 	}
+
+	categoryRows, err := h.listCategories.Execute(r.Context(), userID)
+	if err != nil {
+		h.writeUsecaseError(w, "list categories", err)
+		return
+	}
+	categories := make([]interfacedto.CategoryResponse, 0, len(categoryRows))
+	for _, c := range categoryRows {
+		categories = append(categories, toCategoryResponse(c))
+	}
+
 	methods := make([]string, 0)
 	for _, m := range entities.PaymentMethods() {
 		methods = append(methods, string(m))
@@ -387,16 +406,17 @@ var errInvalidParam = errors.New("invalid parameter")
 
 func toMovementResponse(m *dto.MovementDTO) interfacedto.MovementResponse {
 	resp := interfacedto.MovementResponse{
-		ID:            m.ID,
-		UserID:        m.UserID,
-		Amount:        m.Amount,
-		Currency:      m.Currency,
-		Description:   m.Description,
-		Category:      m.Category,
-		PaymentMethod: m.PaymentMethod,
-		Status:        m.Status,
-		SyncStatus:    m.SyncStatus,
-		Timestamp:     m.Timestamp,
+		ID:                          m.ID,
+		UserID:                      m.UserID,
+		Amount:                      m.Amount,
+		Currency:                    m.Currency,
+		Description:                 m.Description,
+		Category:                    m.Category,
+		PaymentMethod:               m.PaymentMethod,
+		AvoidabilityOverridePercent: m.AvoidabilityOverridePercent,
+		Status:                      m.Status,
+		SyncStatus:                  m.SyncStatus,
+		Timestamp:                   m.Timestamp,
 	}
 	if m.AccountID != nil {
 		resp.AccountID = *m.AccountID

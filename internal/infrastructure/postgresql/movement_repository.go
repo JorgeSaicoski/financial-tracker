@@ -47,7 +47,7 @@ func NewMovementRepository(db *sql.DB) repositories.MovementRepository {
 const movementColumns = `id, user_id, amount, currency, description, category, payment_method,
 	credit_card_purchase_id, installment_number, status, cancels_movement_id, reversed_by_movement_id,
 	timestamp, sync_status, ledger_transaction_id, sync_attempts, last_sync_error, last_sync_attempt_at,
-	synced_at, created_at, account_id, transfer_id`
+	synced_at, created_at, account_id, transfer_id, avoidability_override_percent`
 
 func (r *movementRepository) Create(ctx context.Context, movement *dto.MovementDTO) (*dto.MovementDTO, error) {
 	if movement.ID == "" {
@@ -197,6 +197,12 @@ func (r *movementRepository) UpdateMetadata(ctx context.Context, movementID, des
 	return execOnRow(ctx, r.db,
 		`UPDATE movements SET description = $1, category = $2, payment_method = $3, account_id = $4 WHERE id = $5`,
 		nullString(description), category, paymentMethod, strOrNil(accountID), movementID)
+}
+
+func (r *movementRepository) UpdateAvoidabilityOverride(ctx context.Context, movementID string, avoidabilityOverridePercent *int) error {
+	return execOnRow(ctx, r.db,
+		`UPDATE movements SET avoidability_override_percent = $1 WHERE id = $2`,
+		intOrNil(avoidabilityOverridePercent), movementID)
 }
 
 func (r *movementRepository) UpdateFinancial(ctx context.Context, movementID string, amount int64, currency string, timestamp time.Time) error {
@@ -450,6 +456,12 @@ func (r *movementRepositoryTx) UpdateMetadata(ctx context.Context, movementID, d
 		nullString(description), category, paymentMethod, strOrNil(accountID), movementID)
 }
 
+func (r *movementRepositoryTx) UpdateAvoidabilityOverride(ctx context.Context, movementID string, avoidabilityOverridePercent *int) error {
+	return execOnRow(ctx, r.tx,
+		`UPDATE movements SET avoidability_override_percent = $1 WHERE id = $2`,
+		intOrNil(avoidabilityOverridePercent), movementID)
+}
+
 func (r *movementRepositoryTx) UpdateFinancial(ctx context.Context, movementID string, amount int64, currency string, timestamp time.Time) error {
 	return execOnRow(ctx, r.tx,
 		`UPDATE movements SET amount = $1, currency = $2, timestamp = $3 WHERE id = $4`,
@@ -526,14 +538,15 @@ func queryMovements(ctx context.Context, q queryer, query string, args ...any) (
 func insertMovement(ctx context.Context, ex execer, m *dto.MovementDTO) error {
 	_, err := ex.ExecContext(ctx,
 		`INSERT INTO movements (`+movementColumns+`)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)`,
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)`,
 		m.ID, m.UserID, m.Amount, m.Currency,
 		nullString(m.Description), m.Category, m.PaymentMethod,
 		strOrNil(m.CreditCardPurchaseID), intOrNil(m.InstallmentNumber),
 		m.Status, strOrNil(m.CancelsMovementID), strOrNil(m.ReversedByMovementID),
 		m.Timestamp, m.SyncStatus, strOrNil(m.LedgerTransactionID),
 		m.SyncAttempts, strOrNil(m.LastSyncError), timeOrNil(m.LastSyncAttemptAt),
-		timeOrNil(m.SyncedAt), m.CreatedAt, strOrNil(m.AccountID), strOrNil(m.TransferID))
+		timeOrNil(m.SyncedAt), m.CreatedAt, strOrNil(m.AccountID), strOrNil(m.TransferID),
+		intOrNil(m.AvoidabilityOverridePercent))
 	if err != nil {
 		return fmt.Errorf("postgresql: insert movement: %w", err)
 	}
@@ -557,6 +570,7 @@ func scanMovement(row scannable) (*dto.MovementDTO, error) {
 		installmentNumber                   sql.NullInt64
 		syncAttempts                        int64
 		lastAttemptAt, syncedAt             sql.NullTime
+		avoidabilityOverride                sql.NullInt64
 	)
 
 	err := row.Scan(
@@ -566,7 +580,8 @@ func scanMovement(row scannable) (*dto.MovementDTO, error) {
 		&m.Status, &cancelsID, &reversedByID,
 		&m.Timestamp, &m.SyncStatus, &ledgerTxID,
 		&syncAttempts, &lastSyncError, &lastAttemptAt,
-		&syncedAt, &m.CreatedAt, &accountID, &transferID)
+		&syncedAt, &m.CreatedAt, &accountID, &transferID,
+		&avoidabilityOverride)
 	if err != nil {
 		return nil, err
 	}
@@ -583,6 +598,10 @@ func scanMovement(row scannable) (*dto.MovementDTO, error) {
 	if installmentNumber.Valid {
 		n := int(installmentNumber.Int64)
 		m.InstallmentNumber = &n
+	}
+	if avoidabilityOverride.Valid {
+		n := int(avoidabilityOverride.Int64)
+		m.AvoidabilityOverridePercent = &n
 	}
 	if lastAttemptAt.Valid {
 		t := lastAttemptAt.Time

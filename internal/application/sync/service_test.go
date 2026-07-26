@@ -45,6 +45,9 @@ func (f *fakeRepo) Void(context.Context, string) error { panic("not used") }
 func (f *fakeRepo) UpdateMetadata(context.Context, string, string, string, string, *string) error {
 	panic("not used")
 }
+func (f *fakeRepo) UpdateAvoidabilityOverride(context.Context, string, *int) error {
+	panic("not used")
+}
 func (f *fakeRepo) UpdateFinancial(context.Context, string, int64, string, time.Time) error {
 	panic("not used")
 }

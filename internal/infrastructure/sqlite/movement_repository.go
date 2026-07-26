@@ -45,7 +45,7 @@ func NewMovementRepository(db *sql.DB) repositories.MovementRepository {
 const movementColumns = `id, user_id, amount, currency, description, category, payment_method,
 	credit_card_purchase_id, installment_number, status, cancels_movement_id, reversed_by_movement_id,
 	timestamp, sync_status, ledger_transaction_id, sync_attempts, last_sync_error, last_sync_attempt_at,
-	synced_at, created_at, account_id, transfer_id`
+	synced_at, created_at, account_id, transfer_id, avoidability_override_percent`
 
 func (r *movementRepository) Create(ctx context.Context, movement *dto.MovementDTO) (*dto.MovementDTO, error) {
 	if movement.ID == "" {
@@ -191,6 +191,12 @@ func (r *movementRepository) UpdateMetadata(ctx context.Context, movementID, des
 	return r.execOnRow(ctx,
 		`UPDATE movements SET description = ?, category = ?, payment_method = ?, account_id = ? WHERE id = ?`,
 		nullString(description), category, paymentMethod, accountID, movementID)
+}
+
+func (r *movementRepository) UpdateAvoidabilityOverride(ctx context.Context, movementID string, avoidabilityOverridePercent *int) error {
+	return r.execOnRow(ctx,
+		`UPDATE movements SET avoidability_override_percent = ? WHERE id = ?`,
+		avoidabilityOverridePercent, movementID)
 }
 
 func (r *movementRepository) UpdateFinancial(ctx context.Context, movementID string, amount int64, currency string, timestamp time.Time) error {
@@ -446,6 +452,12 @@ func (r *movementRepositoryTx) UpdateMetadata(ctx context.Context, movementID, d
 		nullString(description), category, paymentMethod, accountID, movementID)
 }
 
+func (r *movementRepositoryTx) UpdateAvoidabilityOverride(ctx context.Context, movementID string, avoidabilityOverridePercent *int) error {
+	return r.execOnRow(ctx,
+		`UPDATE movements SET avoidability_override_percent = ? WHERE id = ?`,
+		avoidabilityOverridePercent, movementID)
+}
+
 func (r *movementRepositoryTx) UpdateFinancial(ctx context.Context, movementID string, amount int64, currency string, timestamp time.Time) error {
 	return r.execOnRow(ctx,
 		`UPDATE movements SET amount = ?, currency = ?, timestamp = ? WHERE id = ?`,
@@ -545,14 +557,15 @@ type execer interface {
 func insertMovement(ctx context.Context, ex execer, m *dto.MovementDTO) error {
 	_, err := ex.ExecContext(ctx,
 		`INSERT INTO movements (`+movementColumns+`)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		m.ID, m.UserID, m.Amount, m.Currency,
 		nullString(m.Description), m.Category, m.PaymentMethod,
 		m.CreditCardPurchaseID, m.InstallmentNumber,
 		m.Status, m.CancelsMovementID, m.ReversedByMovementID,
 		formatTime(m.Timestamp), m.SyncStatus, m.LedgerTransactionID,
 		m.SyncAttempts, m.LastSyncError, nullTime(m.LastSyncAttemptAt),
-		nullTime(m.SyncedAt), formatTime(m.CreatedAt), m.AccountID, m.TransferID)
+		nullTime(m.SyncedAt), formatTime(m.CreatedAt), m.AccountID, m.TransferID,
+		m.AvoidabilityOverridePercent)
 	if err != nil {
 		return fmt.Errorf("sqlite: insert movement: %w", err)
 	}
@@ -576,6 +589,7 @@ func scanMovement(row scannable) (*dto.MovementDTO, error) {
 		installmentNumber                   sql.NullInt64
 		timestamp, createdAt                string
 		lastAttemptAt, syncedAt             sql.NullString
+		avoidabilityOverride                sql.NullInt64
 	)
 
 	err := row.Scan(
@@ -585,7 +599,8 @@ func scanMovement(row scannable) (*dto.MovementDTO, error) {
 		&m.Status, &cancelsID, &reversedByID,
 		&timestamp, &m.SyncStatus, &ledgerTxID,
 		&m.SyncAttempts, &lastSyncError, &lastAttemptAt,
-		&syncedAt, &createdAt, &accountID, &transferID)
+		&syncedAt, &createdAt, &accountID, &transferID,
+		&avoidabilityOverride)
 	if err != nil {
 		return nil, err
 	}
@@ -601,6 +616,10 @@ func scanMovement(row scannable) (*dto.MovementDTO, error) {
 	if installmentNumber.Valid {
 		n := int(installmentNumber.Int64)
 		m.InstallmentNumber = &n
+	}
+	if avoidabilityOverride.Valid {
+		n := int(avoidabilityOverride.Int64)
+		m.AvoidabilityOverridePercent = &n
 	}
 
 	if m.Timestamp, err = parseTime(timestamp); err != nil {

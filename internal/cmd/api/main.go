@@ -80,6 +80,7 @@ func main() {
 		purchaseRepo     repositories.CreditCardPurchaseRepository
 		accountRepo      repositories.AccountRepository
 		currencyRepo     repositories.CurrencyRepository
+		categoryRepo     repositories.CategoryRepository
 		exchangeRateRepo repositories.ExchangeRateRepository
 		userRepo         repositories.UserRepository
 		settingsRepo     repositories.UserSettingsRepository
@@ -111,6 +112,7 @@ func main() {
 		purchaseRepo = postgresql.NewCreditCardPurchaseRepository(db)
 		accountRepo = postgresql.NewAccountRepository(db)
 		currencyRepo = postgresql.NewCurrencyRepository(db)
+		categoryRepo = postgresql.NewCategoryRepository(db)
 		exchangeRateRepo = postgresql.NewExchangeRateRepository(db)
 		userRepo = postgresql.NewUserRepository(db)
 		settingsRepo = postgresql.NewUserSettingsRepository(db)
@@ -128,6 +130,7 @@ func main() {
 		purchaseRepo = sqlite.NewCreditCardPurchaseRepository(db)
 		accountRepo = sqlite.NewAccountRepository(db)
 		currencyRepo = sqlite.NewCurrencyRepository(db)
+		categoryRepo = sqlite.NewCategoryRepository(db)
 		exchangeRateRepo = sqlite.NewExchangeRateRepository(db)
 		userRepo = sqlite.NewUserRepository(db)
 		settingsRepo = sqlite.NewUserSettingsRepository(db)
@@ -141,11 +144,11 @@ func main() {
 	ledgerGateway := ledgerservice.NewLedgerGateway(ledgerClient)
 	syncService := syncapp.NewService(movementRepo, settingsRepo, ledgerGateway, log, retryCooldown)
 
-	createMovement := usecases.NewCreateMovement(movementRepo, accountRepo, settingsRepo)
-	createPurchase := usecases.NewCreateCreditCardPurchase(purchaseRepo, settingsRepo)
+	createMovement := usecases.NewCreateMovement(movementRepo, accountRepo, categoryRepo, settingsRepo)
+	createPurchase := usecases.NewCreateCreditCardPurchase(purchaseRepo, categoryRepo, settingsRepo)
 	getMovement := usecases.NewGetMovement(movementRepo)
 	listMovements := usecases.NewListMovements(movementRepo)
-	updateMovement := usecases.NewUpdateMovement(movementRepo, accountRepo, syncService)
+	updateMovement := usecases.NewUpdateMovement(movementRepo, accountRepo, categoryRepo, syncService)
 	cancelMovement := usecases.NewCancelMovement(movementRepo, syncService)
 	cancelPurchase := usecases.NewCancelCreditCardPurchase(purchaseRepo, movementRepo, syncService)
 	getCashflow := usecases.NewGetCashflow(movementRepo, accountRepo)
@@ -163,6 +166,10 @@ func main() {
 	getUser := usecases.NewGetUser(userRepo)
 	getSettings := usecases.NewGetUserSettings(settingsRepo)
 	updateSettings := usecases.NewUpdateUserSettings(settingsRepo, movementRepo)
+	createCategory := usecases.NewCreateCategory(categoryRepo)
+	listCategories := usecases.NewListCategories(categoryRepo)
+	updateCategory := usecases.NewUpdateCategory(categoryRepo)
+	deleteCategory := usecases.NewDeleteCategory(categoryRepo)
 
 	movementHandler := handlers.NewMovementHandler(
 		createMovement,
@@ -173,12 +180,14 @@ func main() {
 		cancelMovement,
 		cancelPurchase,
 		getCashflow,
+		listCategories,
 		syncService,
 		defaultCurrency,
 		log,
 	)
 	accountHandler := handlers.NewAccountHandler(createAccount, listAccounts, reportBalance, log)
 	currencyHandler := handlers.NewCurrencyHandler(listCurrencies, addCurrency, log)
+	categoryHandler := handlers.NewCategoryHandler(createCategory, updateCategory, deleteCategory, log)
 	transferHandler := handlers.NewTransferHandler(transferBetweenAccounts, cancelTransfer, log)
 	exchangeRateHandler := handlers.NewExchangeRateHandler(setExchangeRate, listExchangeRates, deleteExchangeRate, log)
 	settingsHandler := handlers.NewSettingsHandler(getSettings, updateSettings, log)
@@ -207,7 +216,7 @@ func main() {
 		log.Info("auth: validating Authorization bearer tokens against OIDC issuer %s (audience %q)", oidcIssuerURL, oidcAudience)
 	}
 
-	router := api.NewRouter(movementHandler, accountHandler, currencyHandler, transferHandler, exchangeRateHandler, settingsHandler, userHandler, configHandler, authMiddleware, corsAllowedOrigin)
+	router := api.NewRouter(movementHandler, accountHandler, currencyHandler, categoryHandler, transferHandler, exchangeRateHandler, settingsHandler, userHandler, configHandler, authMiddleware, corsAllowedOrigin)
 
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
@@ -219,7 +228,7 @@ func main() {
 	}
 	addr := ":" + port
 	log.Info("financial-tracker API listening on %s (db driver %s at %s, syncing to ledger-service at %s every %s)", addr, dbDriver, dbDescription, ledgerServiceURL, syncInterval)
-	log.Info("endpoints: GET /config | GET|PATCH /settings | POST /movements | GET /movements | PATCH /movements/{id} | POST /movements/{id}/cancel | POST /credit-card-purchases/{id}/cancel | POST /sync | GET /categories | GET /cashflow | GET|POST /accounts | POST /accounts/{id}/balance | GET|POST /currencies | POST /transfers | POST /transfers/{id}/cancel | GET|POST /exchange-rates | DELETE /exchange-rates/{id} | GET /me")
+	log.Info("endpoints: GET /config | GET|PATCH /settings | POST /movements | GET /movements | PATCH /movements/{id} | POST /movements/{id}/cancel | POST /credit-card-purchases/{id}/cancel | POST /sync | GET /categories | POST /categories | PATCH /categories/{id} | DELETE /categories/{id} | GET /cashflow | GET|POST /accounts | POST /accounts/{id}/balance | GET|POST /currencies | POST /transfers | POST /transfers/{id}/cancel | GET|POST /exchange-rates | DELETE /exchange-rates/{id} | GET /me")
 
 	if err := http.ListenAndServe(addr, router); err != nil {
 		log.Error("server failed: %v", err)

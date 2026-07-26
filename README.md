@@ -19,8 +19,9 @@ reachable (every `SYNC_INTERVAL`, or on demand via `POST /sync`); each
 movement carries a `sync_status` so the UI can show what's still pending.
 
 Movements carry a payment method (cash, debit/credit card, pix, bank
-transfer, other), a free-text description, and a category from a fixed
-list (`GET /categories`). Credit-card purchases can be split into monthly
+transfer, other), a free-text description, and a category from the user's
+own extendable registry (`GET /categories`) — see "Categories &
+avoidability" below. Credit-card purchases can be split into monthly
 installments; installments only sync to ledger-service once their date
 arrives. Movements can be cancelled: one that never reached ledger-service
 is just voided locally, while one that already synced gets a compensating
@@ -69,7 +70,8 @@ application/dto              MovementDTO, AccountDTO, CreditCardPurchaseDTO, Exc
                              other, converted from domain entities at the infrastructure
                              boundary
 application/repositories     MovementRepository, CreditCardPurchaseRepository,
-                             AccountRepository, CurrencyRepository, ExchangeRateRepository
+                             AccountRepository, CurrencyRepository, ExchangeRateRepository,
+                             CategoryRepository
                              interfaces, expressed in application/dto types — the swap points
 application/services         LedgerGateway, SyncTrigger, SyncRunner — service contracts the
                              application defines; sync/infrastructure implement them
@@ -82,7 +84,8 @@ application/usecases         every use-case interface + Input/Result/View type c
                              balances/returns), ReportAccountBalance, GetCashflow,
                              ListCurrencies, AddCurrency, TransferBetweenAccounts,
                              CancelTransfer, SetExchangeRate, ListExchangeRates,
-                             DeleteExchangeRate, ToUSD
+                             DeleteExchangeRate, ToUSD, CreateCategory, ListCategories,
+                             UpdateCategory, DeleteCategory
 application/sync             SyncService: pushes pending movements to ledger-service via the
                              LedgerGateway port (background ticker + manual trigger)
 infrastructure/sqlite        implements the repositories on the local SQLite DB (source of truth,
@@ -177,6 +180,36 @@ tier to sell).
   ```
   A real admin surface is icebox (see `financial-tracker-plan.md`).
 
+## Categories & avoidability (`categories` table)
+
+Categories are a per-user, extendable registry (`GET/POST/PATCH/DELETE
+/categories`), not a fixed enum — same shape as the `currencies` registry
+but scoped per user. Each category carries an `avoidability_percent`
+(0-100): how easy that kind of spend is to skip (a restaurant category
+might be 80% avoidable; groceries might be 20%). Posting a movement with a
+brand-new category name implicitly registers it at a neutral 50% default
+(same idempotent-`Add` shape as `POST /currencies`) — no separate
+"create category" round-trip required before first use.
+
+`transfer` and `income` are **system categories**: not spend, so
+`avoidability_percent` stays `NULL` and the API rejects any attempt to
+create, rename, delete, or set an avoidability on either name. They're
+lazily ensured per user on first `GET /categories`, same absence-safe
+pattern as `user_settings` above — no migration backfill needed for new
+users. Deleting a category still referenced by movements is allowed (it's
+a label, not a foreign key) — those movements just become "unrecognized"
+for avoidability purposes going forward.
+
+For a genuine one-off spend that doesn't deserve its own category (went
+karting once — 100% avoidable, never happening again), movements carry
+their own optional `avoidability_percent` override
+(`POST`/`PATCH /movements`), independent of `category`. A movement's
+**effective avoidability** — used by BACK-12's purchasing-power report —
+resolves in this order: the movement's own override if set; else its
+category's stored `avoidability_percent`; else no value (excluded from
+any avoidability-weighted aggregate, same exclusion `transfer` already
+gets from cashflow totals).
+
 ## API
 
 | Method | Path | Purpose |
@@ -184,14 +217,17 @@ tier to sell).
 | `GET` | `/config` | Unauthenticated. `{standalone, auth_enabled}` — what the frontend reads before deciding whether to show the login guard. |
 | `GET` | `/settings?user_id=` | The caller's own settings — entitlement (operator-controlled, read-only here) and preference. Defaults to all-`true` if the user has never touched them (no row needed). |
 | `PATCH` | `/settings?user_id=` | Body: `{ledger_sync_enabled}` — the only field a user may change. Any attempt to set `ledger_sync_entitled`/`cloud_storage_entitled` (or any other key) is rejected with 400. Re-enabling reclassifies movements created while sync was off (`sync_status: "local"`) back to `"pending"`, so the next `/sync` pass pushes exactly that backlog. |
-| `POST` | `/movements` | Create a movement. Body: `{amount, currency?, user_id?, description?, category?, payment_method?, installments?, account_id?}`. With `payment_method="credit_card"` and `installments > 1`, splits into monthly installments and returns the purchase + its movements (no `account_id` allowed in that case). An `account_id`'s currency must match the movement's. |
+| `POST` | `/movements` | Create a movement. Body: `{amount, currency?, user_id?, description?, category?, payment_method?, installments?, account_id?, avoidability_percent?}`. With `payment_method="credit_card"` and `installments > 1`, splits into monthly installments and returns the purchase + its movements (no `account_id` allowed in that case). An `account_id`'s currency must match the movement's. A new `category` name is implicitly registered at 50% avoidability; `avoidability_percent` (0-100) is this movement's own ad-hoc override, independent of `category` — see "Categories & avoidability" above. |
 | `GET` | `/movements?id={uuid}` | Fetch one movement. |
 | `GET` | `/movements?user_id={uuid}&currency=&from=&to=&limit=&offset=` | List movements + computed `balance` (voided rows excluded from the balance). `from`/`to` take `YYYY-MM-DD` or RFC 3339 (`to` is inclusive when date-only). Each row carries `status` and `sync_status`. |
-| `PATCH` | `/movements/{id}` | Edit one movement. Body: any subset of `{description, category, payment_method, account_id, amount, currency, timestamp}`. `description`/`category`/`payment_method`/`account_id` are local-only metadata and always editable (`account_id: ""` clears it). `amount`/`currency`/`timestamp` edit in place if the movement hasn't synced yet; on an already-synced movement they instead produce a reversal + a replacement (both returned, original left untouched). Rejects voided/reversed movements, reversals themselves, and financial edits on a single credit-card installment or transfer leg (409 in all cases). |
+| `PATCH` | `/movements/{id}` | Edit one movement. Body: any subset of `{description, category, payment_method, account_id, amount, currency, timestamp, avoidability_percent}`. `description`/`category`/`payment_method`/`account_id`/`avoidability_percent` are local-only metadata and always editable (`account_id: ""` clears it). `amount`/`currency`/`timestamp` edit in place if the movement hasn't synced yet; on an already-synced movement they instead produce a reversal + a replacement (both returned, original left untouched). Rejects voided/reversed movements, reversals themselves, and financial edits on a single credit-card installment or transfer leg (409 in all cases). |
 | `POST` | `/movements/{id}/cancel` | Cancel one movement (void or reversal — see semantics above). Returns the movement and, if created, the reversal. |
 | `POST` | `/credit-card-purchases/{id}/cancel` | Cancel a whole installment purchase. Returns which installments were voided vs reversed. |
 | `POST` | `/sync` | Run one sync pass against ledger-service now. Returns `{synced, failed}`. |
-| `GET` | `/categories` | The fixed category and payment-method lists. |
+| `GET` | `/categories` | The caller's own category registry (`{id, name, avoidability_percent}[]`) plus the fixed payment-method list; lazily seeds `transfer`/`income` first. |
+| `POST` | `/categories` | Create a category. Body: `{name, avoidability_percent?}` (0-100; omitted defaults to 50). 400 on reserved names (`transfer`/`income`); 409 on a duplicate name (case-insensitive) for this user. |
+| `PATCH` | `/categories/{id}` | Rename and/or change `avoidability_percent`. 400 outside 0-100 or on a system category. |
+| `DELETE` | `/categories/{id}` | Remove a category the user owns. 400 on a system category. Movements still referencing the deleted name are untouched — they just resolve to no avoidability going forward. |
 | `GET` | `/cashflow?from=&to=&user_id=` | Money in / out / net over the interval, per currency (`totals`) and per account (`by_account`, unassigned movements in their own bucket). `from`/`to` required. Transfers are excluded. |
 | `GET` | `/accounts` | All accounts with `estimated_balance`, latest `reported_balance`/`reported_at`, `movements_since_report` and `last_return` (+ the valid `account_types`). |
 | `POST` | `/accounts` | Create an account. Body: `{name, type?, currency?, user_id?}`. Currency must be registered; duplicate names (case-insensitive) are rejected. |

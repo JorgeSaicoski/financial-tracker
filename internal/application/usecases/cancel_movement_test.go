@@ -17,7 +17,7 @@ func activeMovement(id string, amount int64, syncStatus entities.SyncStatus) *dt
 		UserID:        "u1",
 		Amount:        amount,
 		Currency:      "usd",
-		Category:      string(entities.CategoryFood),
+		Category:      "food",
 		PaymentMethod: string(entities.PaymentMethodPix),
 		Status:        string(entities.MovementStatusActive),
 		SyncStatus:    string(syncStatus),
