@@ -79,6 +79,10 @@ type CreateMovementInput struct {
 	Category      string
 	PaymentMethod string
 	AccountID     *string
+	// AvoidabilityOverridePercent (0-100, BACK-14) is this movement's own
+	// ad-hoc avoidability, for a one-off spend that doesn't deserve its
+	// own category. Wins over the resolved category's avoidability_percent.
+	AvoidabilityOverridePercent *int
 }
 
 type CreateMovementUseCase interface {
@@ -118,6 +122,11 @@ type UpdateMovementInput struct {
 	Amount        *int64
 	Currency      *string
 	Timestamp     *time.Time
+	// AvoidabilityOverridePercent (0-100, BACK-14), like every other
+	// field here: nil means "leave unchanged". Local-only metadata (same
+	// group as Description/Category/PaymentMethod/AccountID) — editable
+	// regardless of sync status, no reversal/replacement produced.
+	AvoidabilityOverridePercent *int
 }
 
 // UpdateMovementResult reports how the edit was carried out. A
@@ -417,10 +426,57 @@ type ToUSDUseCase interface {
 	Execute(ctx context.Context, userID string, amount int64, currency string, at time.Time) (int64, error)
 }
 
+// CreateCategoryInput carries a POST /categories body. AvoidabilityPercent
+// nil defaults to a neutral 50 (same default the implicit-registration
+// path and the one-time migration backfill use) — the user edits it
+// afterward.
+type CreateCategoryInput struct {
+	UserID              string
+	Name                string
+	AvoidabilityPercent *int
+}
+
+// CreateCategoryUseCase rejects the two reserved system names
+// ("transfer", "income") and duplicate names (case-insensitive), per
+// BACK-14.
+type CreateCategoryUseCase interface {
+	Execute(ctx context.Context, input CreateCategoryInput) (*dto.CategoryDTO, error)
+}
+
+// ListCategoriesUseCase lazily ensures the two system categories exist
+// for userID first (absence-safe, same pattern as user_settings), then
+// returns every category row, name ascending.
+type ListCategoriesUseCase interface {
+	Execute(ctx context.Context, userID string) ([]*dto.CategoryDTO, error)
+}
+
+// UpdateCategoryInput carries a PATCH /categories/{id} body — nil means
+// "leave unchanged", same convention as UpdateMovementInput.
+type UpdateCategoryInput struct {
+	Name                *string
+	AvoidabilityPercent *int
+}
+
+// UpdateCategoryUseCase rejects edits to the two reserved system names,
+// renaming onto an existing name (case-insensitive), and an
+// AvoidabilityPercent outside 0-100.
+type UpdateCategoryUseCase interface {
+	Execute(ctx context.Context, userID, id string, input UpdateCategoryInput) (*dto.CategoryDTO, error)
+}
+
+// DeleteCategoryUseCase rejects deleting a reserved system category.
+// Deleting one still referenced by movements is allowed — it's a label,
+// not an FK.
+type DeleteCategoryUseCase interface {
+	Execute(ctx context.Context, userID, id string) error
+}
+
 // CreateRecurringRuleInput carries the caller-supplied fields for a new
-// recurring rule (BACK-07). Category/PaymentMethod default to "other"
-// like CreateMovementInput; DayOfMonth must be "1".."28" or "last".
-// StartsAt zero means "now".
+// recurring rule (BACK-07). PaymentMethod defaults to "other" when empty;
+// Category is resolved against the caller's category registry the same
+// way CreateMovementInput's is (BACK-14) — empty stays uncategorized, a
+// new name implicitly registers at a neutral default. DayOfMonth must be
+// "1".."28" or "last". StartsAt zero means "now".
 type CreateRecurringRuleInput struct {
 	UserID        string
 	Amount        int64

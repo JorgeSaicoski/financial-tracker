@@ -19,6 +19,10 @@ type CreateMovementRequest struct {
 	PaymentMethod string `json:"payment_method,omitempty"`
 	Installments  int    `json:"installments,omitempty"`
 	AccountID     string `json:"account_id,omitempty"`
+	// AvoidabilityOverridePercent (0-100, BACK-14) is this movement's own
+	// ad-hoc avoidability, for a one-off spend that doesn't deserve its
+	// own category — wins over the resolved category's own value.
+	AvoidabilityOverridePercent *int `json:"avoidability_percent,omitempty"`
 }
 
 type MovementResponse struct {
@@ -33,14 +37,15 @@ type MovementResponse struct {
 	SyncStatus    string    `json:"sync_status"`
 	Timestamp     time.Time `json:"timestamp"`
 
-	AccountID            string `json:"account_id,omitempty"`
-	LedgerTransactionID  string `json:"ledger_transaction_id,omitempty"`
-	CreditCardPurchaseID string `json:"credit_card_purchase_id,omitempty"`
-	InstallmentNumber    int    `json:"installment_number,omitempty"`
-	CancelsMovementID    string `json:"cancels_movement_id,omitempty"`
-	ReversedByMovementID string `json:"reversed_by_movement_id,omitempty"`
-	TransferID           string `json:"transfer_id,omitempty"`
-	RecurringRuleID      string `json:"recurring_rule_id,omitempty"`
+	AccountID                   string `json:"account_id,omitempty"`
+	LedgerTransactionID         string `json:"ledger_transaction_id,omitempty"`
+	CreditCardPurchaseID        string `json:"credit_card_purchase_id,omitempty"`
+	InstallmentNumber           int    `json:"installment_number,omitempty"`
+	CancelsMovementID           string `json:"cancels_movement_id,omitempty"`
+	ReversedByMovementID        string `json:"reversed_by_movement_id,omitempty"`
+	TransferID                  string `json:"transfer_id,omitempty"`
+	RecurringRuleID             string `json:"recurring_rule_id,omitempty"`
+	AvoidabilityOverridePercent *int   `json:"avoidability_percent,omitempty"`
 }
 
 // UpdateMovementRequest is the API request body for PATCH /movements/{id}.
@@ -57,6 +62,9 @@ type UpdateMovementRequest struct {
 	Amount        *int64     `json:"amount,omitempty"`
 	Currency      *string    `json:"currency,omitempty"`
 	Timestamp     *time.Time `json:"timestamp,omitempty"`
+	// AvoidabilityOverridePercent (0-100, BACK-14): absent leaves it
+	// unchanged, like every other field here.
+	AvoidabilityOverridePercent *int `json:"avoidability_percent,omitempty"`
 }
 
 // UpdateMovementResponse: Reversal/Replacement are present only when the
@@ -108,9 +116,20 @@ type SyncSummaryResponse struct {
 	Failed int `json:"failed"`
 }
 
+// CategoryResponse is one row of the caller's category registry (BACK-14).
+// AvoidabilityPercent is nil only for the two system categories
+// ("transfer", "income") — no omitempty, so that comes across as an
+// explicit JSON null a client can check for, not a missing key
+// indistinguishable from a client/server version mismatch.
+type CategoryResponse struct {
+	ID                  string `json:"id"`
+	Name                string `json:"name"`
+	AvoidabilityPercent *int   `json:"avoidability_percent"`
+}
+
 type CategoriesResponse struct {
-	Categories     []string `json:"categories"`
-	PaymentMethods []string `json:"payment_methods"`
+	Categories     []CategoryResponse `json:"categories"`
+	PaymentMethods []string           `json:"payment_methods"`
 }
 
 type ErrorResponse struct {

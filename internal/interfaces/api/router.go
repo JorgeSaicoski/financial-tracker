@@ -17,6 +17,7 @@ func NewRouter(
 	movementHandler handlers.MovementHandler,
 	accountHandler handlers.AccountHandler,
 	currencyHandler handlers.CurrencyHandler,
+	categoryHandler handlers.CategoryHandler,
 	transferHandler handlers.TransferHandler,
 	exchangeRateHandler handlers.ExchangeRateHandler,
 	recurringRuleHandler handlers.RecurringRuleHandler,
@@ -48,6 +49,9 @@ func NewRouter(
 	protected.HandleFunc("POST /credit-card-purchases/{id}/cancel", movementHandler.CancelCreditCardPurchase)
 	protected.HandleFunc("POST /sync", movementHandler.Sync)
 	protected.HandleFunc("GET /categories", movementHandler.ListCategories)
+	protected.HandleFunc("POST /categories", categoryHandler.CreateCategory)
+	protected.HandleFunc("PATCH /categories/{id}", categoryHandler.UpdateCategory)
+	protected.HandleFunc("DELETE /categories/{id}", categoryHandler.DeleteCategory)
 	protected.HandleFunc("GET /cashflow", movementHandler.Cashflow)
 
 	protected.HandleFunc("GET /accounts", accountHandler.ListAccounts)

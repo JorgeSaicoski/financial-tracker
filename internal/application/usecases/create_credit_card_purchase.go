@@ -11,13 +11,14 @@ import (
 )
 
 type createCreditCardPurchaseUseCase struct {
-	purchases repositories.CreditCardPurchaseRepository
-	settings  repositories.UserSettingsRepository
+	purchases  repositories.CreditCardPurchaseRepository
+	categories repositories.CategoryRepository
+	settings   repositories.UserSettingsRepository
 }
 
 // NewCreateCreditCardPurchase returns interface type for dependency injection.
-func NewCreateCreditCardPurchase(purchases repositories.CreditCardPurchaseRepository, settings repositories.UserSettingsRepository) CreateCreditCardPurchaseUseCase {
-	return &createCreditCardPurchaseUseCase{purchases: purchases, settings: settings}
+func NewCreateCreditCardPurchase(purchases repositories.CreditCardPurchaseRepository, categories repositories.CategoryRepository, settings repositories.UserSettingsRepository) CreateCreditCardPurchaseUseCase {
+	return &createCreditCardPurchaseUseCase{purchases: purchases, categories: categories, settings: settings}
 }
 
 func (uc *createCreditCardPurchaseUseCase) Execute(ctx context.Context, input CreateCreditCardPurchaseInput) (*dto.CreditCardPurchaseDTO, []*dto.MovementDTO, error) {
@@ -28,7 +29,7 @@ func (uc *createCreditCardPurchaseUseCase) Execute(ctx context.Context, input Cr
 		return nil, nil, apperrors.ErrInvalidInput
 	}
 
-	category, _, err := normalizeCategoryAndMethod(input.Category, string(entities.PaymentMethodCreditCard))
+	category, err := resolveCategory(ctx, uc.categories, input.UserID, input.Category)
 	if err != nil {
 		return nil, nil, err
 	}

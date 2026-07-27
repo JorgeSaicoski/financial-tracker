@@ -11,13 +11,14 @@ import (
 )
 
 type updateRecurringRuleUseCase struct {
-	rules    repositories.RecurringRuleRepository
-	accounts repositories.AccountRepository
+	rules      repositories.RecurringRuleRepository
+	accounts   repositories.AccountRepository
+	categories repositories.CategoryRepository
 }
 
 // NewUpdateRecurringRule returns interface type for dependency injection.
-func NewUpdateRecurringRule(rules repositories.RecurringRuleRepository, accounts repositories.AccountRepository) UpdateRecurringRuleUseCase {
-	return &updateRecurringRuleUseCase{rules: rules, accounts: accounts}
+func NewUpdateRecurringRule(rules repositories.RecurringRuleRepository, accounts repositories.AccountRepository, categories repositories.CategoryRepository) UpdateRecurringRuleUseCase {
+	return &updateRecurringRuleUseCase{rules: rules, accounts: accounts, categories: categories}
 }
 
 func (uc *updateRecurringRuleUseCase) Execute(ctx context.Context, userID, id string, input UpdateRecurringRuleInput) (*dto.RecurringRuleDTO, error) {
@@ -40,10 +41,11 @@ func (uc *updateRecurringRuleUseCase) Execute(ctx context.Context, userID, id st
 	}
 	category := existing.Category
 	if input.Category != nil {
-		if !entities.Category(*input.Category).IsValid() {
-			return nil, fmt.Errorf("%w: unknown category %q", apperrors.ErrInvalidInput, *input.Category)
+		resolved, err := resolveCategory(ctx, uc.categories, userID, *input.Category)
+		if err != nil {
+			return nil, err
 		}
-		category = *input.Category
+		category = resolved
 	}
 	paymentMethod := existing.PaymentMethod
 	if input.PaymentMethod != nil {

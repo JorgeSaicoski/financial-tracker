@@ -12,13 +12,14 @@ import (
 )
 
 type createRecurringRuleUseCase struct {
-	rules    repositories.RecurringRuleRepository
-	accounts repositories.AccountRepository
+	rules      repositories.RecurringRuleRepository
+	accounts   repositories.AccountRepository
+	categories repositories.CategoryRepository
 }
 
 // NewCreateRecurringRule returns interface type for dependency injection.
-func NewCreateRecurringRule(rules repositories.RecurringRuleRepository, accounts repositories.AccountRepository) CreateRecurringRuleUseCase {
-	return &createRecurringRuleUseCase{rules: rules, accounts: accounts}
+func NewCreateRecurringRule(rules repositories.RecurringRuleRepository, accounts repositories.AccountRepository, categories repositories.CategoryRepository) CreateRecurringRuleUseCase {
+	return &createRecurringRuleUseCase{rules: rules, accounts: accounts, categories: categories}
 }
 
 func (uc *createRecurringRuleUseCase) Execute(ctx context.Context, input CreateRecurringRuleInput) (*dto.RecurringRuleDTO, error) {
@@ -29,7 +30,11 @@ func (uc *createRecurringRuleUseCase) Execute(ctx context.Context, input CreateR
 		return nil, fmt.Errorf(`%w: day_of_month must be "1"-"28" or "last"`, apperrors.ErrInvalidInput)
 	}
 
-	category, paymentMethod, err := normalizeCategoryAndMethod(input.Category, input.PaymentMethod)
+	paymentMethod, err := normalizePaymentMethod(input.PaymentMethod)
+	if err != nil {
+		return nil, err
+	}
+	category, err := resolveCategory(ctx, uc.categories, input.UserID, input.Category)
 	if err != nil {
 		return nil, err
 	}

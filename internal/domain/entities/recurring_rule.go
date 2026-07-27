@@ -13,7 +13,7 @@ type RecurringRule struct {
 	Amount        int64
 	Currency      string
 	Description   string
-	Category      Category
+	Category      string
 	PaymentMethod PaymentMethod
 
 	// AccountID mirrors Movement's own field: which account the

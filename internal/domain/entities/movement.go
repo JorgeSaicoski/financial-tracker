@@ -14,8 +14,15 @@ type Movement struct {
 	Amount        int64
 	Currency      string
 	Description   string
-	Category      Category
+	Category      string
 	PaymentMethod PaymentMethod
+
+	// AvoidabilityOverridePercent (0-100, BACK-14) is this movement's own
+	// ad-hoc avoidability, for a genuine one-off spend that doesn't
+	// deserve its own category. Wins over the movement's category's
+	// avoidability_percent when set — see application/usecases' effective-
+	// avoidability resolution helper.
+	AvoidabilityOverridePercent *int
 
 	// AccountID links the movement to the account the money moved
 	// in/out of (nil when the user didn't say). Local-only: it is not

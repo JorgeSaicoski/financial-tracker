@@ -26,7 +26,7 @@ func seedRule(t *testing.T, repo *fakeRecurringRuleRepo) *dto.RecurringRuleDTO {
 func TestUpdateRecurringRuleDeactivatesWithoutTouchingOtherFields(t *testing.T) {
 	repo := newFakeRecurringRuleRepo()
 	rule := seedRule(t, repo)
-	uc := NewUpdateRecurringRule(repo, newFakeAccountRepo())
+	uc := NewUpdateRecurringRule(repo, newFakeAccountRepo(), newFakeCategoryRepo())
 
 	active := false
 	updated, err := uc.Execute(context.Background(), "u1", rule.ID, UpdateRecurringRuleInput{Active: &active})
@@ -44,7 +44,7 @@ func TestUpdateRecurringRuleDeactivatesWithoutTouchingOtherFields(t *testing.T) 
 func TestUpdateRecurringRuleEditsScheduleAndFinancialFields(t *testing.T) {
 	repo := newFakeRecurringRuleRepo()
 	rule := seedRule(t, repo)
-	uc := NewUpdateRecurringRule(repo, newFakeAccountRepo())
+	uc := NewUpdateRecurringRule(repo, newFakeAccountRepo(), newFakeCategoryRepo())
 
 	newAmount := int64(-2500)
 	newDay := "15"
@@ -62,7 +62,7 @@ func TestUpdateRecurringRuleEditsScheduleAndFinancialFields(t *testing.T) {
 func TestUpdateRecurringRuleRejectsInvalidDayOfMonth(t *testing.T) {
 	repo := newFakeRecurringRuleRepo()
 	rule := seedRule(t, repo)
-	uc := NewUpdateRecurringRule(repo, newFakeAccountRepo())
+	uc := NewUpdateRecurringRule(repo, newFakeAccountRepo(), newFakeCategoryRepo())
 
 	bad := "31"
 	if _, err := uc.Execute(context.Background(), "u1", rule.ID, UpdateRecurringRuleInput{DayOfMonth: &bad}); !errors.Is(err, apperrors.ErrInvalidInput) {
@@ -73,7 +73,7 @@ func TestUpdateRecurringRuleRejectsInvalidDayOfMonth(t *testing.T) {
 func TestUpdateRecurringRuleAcceptsEndsAtEqualToStartsAt(t *testing.T) {
 	repo := newFakeRecurringRuleRepo()
 	rule := seedRule(t, repo) // starts_at 2026-01-01
-	uc := NewUpdateRecurringRule(repo, newFakeAccountRepo())
+	uc := NewUpdateRecurringRule(repo, newFakeAccountRepo(), newFakeCategoryRepo())
 
 	sameDay := rule.StartsAt
 	updated, err := uc.Execute(context.Background(), "u1", rule.ID, UpdateRecurringRuleInput{EndsAt: &sameDay})
@@ -92,7 +92,7 @@ func TestUpdateRecurringRuleAcceptsEndsAtEqualToStartsAt(t *testing.T) {
 func TestUpdateRecurringRuleRejectsWithoutPartialWrite(t *testing.T) {
 	repo := newFakeRecurringRuleRepo()
 	rule := seedRule(t, repo) // starts_at 2026-01-01, amount -1000
-	uc := NewUpdateRecurringRule(repo, newFakeAccountRepo())
+	uc := NewUpdateRecurringRule(repo, newFakeAccountRepo(), newFakeCategoryRepo())
 
 	newAmount := int64(-9999)
 	badEndsAt := rule.StartsAt.AddDate(0, 0, -1) // before starts_at: invalid
@@ -119,7 +119,7 @@ func TestUpdateRecurringRuleClearsAccount(t *testing.T) {
 		UserID: "u1", Amount: -1000, Currency: "usd", Category: "other", PaymentMethod: "other",
 		AccountID: &accountID, DayOfMonth: "1", StartsAt: time.Now().UTC(), Active: true,
 	})
-	uc := NewUpdateRecurringRule(repo, newFakeAccountRepo())
+	uc := NewUpdateRecurringRule(repo, newFakeAccountRepo(), newFakeCategoryRepo())
 
 	empty := ""
 	updated, err := uc.Execute(context.Background(), "u1", rule.ID, UpdateRecurringRuleInput{AccountID: &empty})
@@ -141,7 +141,7 @@ func TestUpdateRecurringRuleRejectsAccountCurrencyMismatch(t *testing.T) {
 	rule := seedRule(t, repo) // currency "usd"
 	accounts := newFakeAccountRepo()
 	acc, _ := accounts.Create(context.Background(), &dto.AccountDTO{UserID: "u1", Name: "Checking", Currency: "brl"})
-	uc := NewUpdateRecurringRule(repo, accounts)
+	uc := NewUpdateRecurringRule(repo, accounts, newFakeCategoryRepo())
 
 	if _, err := uc.Execute(context.Background(), "u1", rule.ID, UpdateRecurringRuleInput{AccountID: &acc.ID}); !errors.Is(err, apperrors.ErrInvalidInput) {
 		t.Errorf("want ErrInvalidInput for currency mismatch, got %v", err)
@@ -153,7 +153,7 @@ func TestUpdateRecurringRuleAcceptsMatchingAccountCurrency(t *testing.T) {
 	rule := seedRule(t, repo) // currency "usd"
 	accounts := newFakeAccountRepo()
 	acc, _ := accounts.Create(context.Background(), &dto.AccountDTO{UserID: "u1", Name: "Checking", Currency: "usd"})
-	uc := NewUpdateRecurringRule(repo, accounts)
+	uc := NewUpdateRecurringRule(repo, accounts, newFakeCategoryRepo())
 
 	updated, err := uc.Execute(context.Background(), "u1", rule.ID, UpdateRecurringRuleInput{AccountID: &acc.ID})
 	if err != nil {
@@ -165,7 +165,7 @@ func TestUpdateRecurringRuleAcceptsMatchingAccountCurrency(t *testing.T) {
 }
 
 func TestUpdateRecurringRuleNotFound(t *testing.T) {
-	uc := NewUpdateRecurringRule(newFakeRecurringRuleRepo(), newFakeAccountRepo())
+	uc := NewUpdateRecurringRule(newFakeRecurringRuleRepo(), newFakeAccountRepo(), newFakeCategoryRepo())
 	if _, err := uc.Execute(context.Background(), "u1", "missing", UpdateRecurringRuleInput{}); !errors.Is(err, apperrors.ErrNotFound) {
 		t.Errorf("want ErrNotFound, got %v", err)
 	}
@@ -179,7 +179,7 @@ func TestUpdateRecurringRuleNotFound(t *testing.T) {
 func TestUpdateRecurringRuleRejectsOtherUsersRule(t *testing.T) {
 	repo := newFakeRecurringRuleRepo()
 	rule := seedRule(t, repo) // owned by "u1"
-	uc := NewUpdateRecurringRule(repo, newFakeAccountRepo())
+	uc := NewUpdateRecurringRule(repo, newFakeAccountRepo(), newFakeCategoryRepo())
 
 	active := false
 	if _, err := uc.Execute(context.Background(), "someone-else", rule.ID, UpdateRecurringRuleInput{Active: &active}); !errors.Is(err, apperrors.ErrNotFound) {
