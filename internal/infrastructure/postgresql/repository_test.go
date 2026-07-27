@@ -565,11 +565,11 @@ func TestPurchaseListByUser(t *testing.T) {
 	now := nowTruncated()
 
 	mine := &dto.CreditCardPurchaseDTO{
-		UserID: "00000000-0000-0000-0000-000000000001", Category: string(entities.CategoryShopping),
+		UserID: "00000000-0000-0000-0000-000000000001", Category: "shopping",
 		TotalAmount: -900, Currency: "usd", InstallmentCount: 1, PurchaseDate: now, Status: string(entities.CreditCardPurchaseStatusActive), CreatedAt: now,
 	}
 	someoneElses := &dto.CreditCardPurchaseDTO{
-		UserID: "00000000-0000-0000-0000-000000000002", Category: string(entities.CategoryShopping),
+		UserID: "00000000-0000-0000-0000-000000000002", Category: "shopping",
 		TotalAmount: -100, Currency: "usd", InstallmentCount: 1, PurchaseDate: now, Status: string(entities.CreditCardPurchaseStatusActive), CreatedAt: now,
 	}
 	if _, _, err := purchases.CreateWithInstallments(ctx, mine, nil); err != nil {

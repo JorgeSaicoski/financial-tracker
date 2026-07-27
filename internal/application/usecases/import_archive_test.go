@@ -22,7 +22,7 @@ func TestImportArchiveRestoresEverything(t *testing.T) {
 			{ID: "acc-1", UserID: "user-1", Name: "Checking", Type: "bank", Currency: "usd"},
 		},
 		CreditCardPurchases: []*dto.CreditCardPurchaseDTO{
-			{ID: "purchase-1", UserID: "user-1", Category: string(entities.CategoryShopping), TotalAmount: -900, Currency: "usd", InstallmentCount: 1, Status: string(entities.CreditCardPurchaseStatusActive)},
+			{ID: "purchase-1", UserID: "user-1", Category: "shopping", TotalAmount: -900, Currency: "usd", InstallmentCount: 1, Status: string(entities.CreditCardPurchaseStatusActive)},
 		},
 		Movements: []*dto.MovementDTO{
 			func() *dto.MovementDTO {
@@ -169,7 +169,7 @@ func TestImportArchiveRejectsMovementReferencingUnownedPurchase(t *testing.T) {
 	uc := NewImportArchive(accounts, movements, purchases)
 
 	other, _, err := purchases.CreateWithInstallments(ctx, &dto.CreditCardPurchaseDTO{
-		UserID: "user-2", Category: string(entities.CategoryShopping), TotalAmount: -900,
+		UserID: "user-2", Category: "shopping", TotalAmount: -900,
 		Currency: "usd", InstallmentCount: 1, Status: string(entities.CreditCardPurchaseStatusActive),
 	}, nil)
 	if err != nil {
