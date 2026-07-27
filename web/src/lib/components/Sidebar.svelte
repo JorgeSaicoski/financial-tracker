@@ -22,6 +22,7 @@
 		<ul class="nav-links">
 			<li><a href="/">Movements</a></li>
 			<li><a href="/import">Import CSV</a></li>
+			<li><a href="/getting-started">Getting started</a></li>
 		</ul>
 	</div>
 
