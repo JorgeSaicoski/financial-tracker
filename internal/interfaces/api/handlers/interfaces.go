@@ -62,6 +62,15 @@ type MovementHandler interface {
 	Cashflow(w http.ResponseWriter, r *http.Request)
 }
 
+// RecurringRuleHandler exposes recurring movement rules (BACK-07) — rent,
+// salary, subscriptions and the like, generated on schedule by
+// application/recurring rather than re-entered every month.
+type RecurringRuleHandler interface {
+	CreateRecurringRule(w http.ResponseWriter, r *http.Request)
+	ListRecurringRules(w http.ResponseWriter, r *http.Request)
+	UpdateRecurringRule(w http.ResponseWriter, r *http.Request)
+}
+
 // ArchiveHandler exposes BACK-15's "no cloud" local archive tier: the
 // per-user setting, the full-account export the frontend encrypts
 // client-side, and the import that restores a (already-decrypted) one.

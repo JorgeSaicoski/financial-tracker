@@ -33,6 +33,12 @@ type Movement struct {
 	CreditCardPurchaseID *string
 	InstallmentNumber    *int // 1-based
 
+	// RecurringRuleID links a movement the recurring generator created
+	// (BACK-07) back to its rule, purely for provenance/UI display —
+	// nothing about cancel/edit/sync treats it differently from a
+	// manually-entered movement.
+	RecurringRuleID *string
+
 	// Status is "voided" only for movements cancelled before they ever
 	// reached ledger-service. A synced movement stays "active" forever
 	// (ledger-service never deletes); its cancellation is expressed by a

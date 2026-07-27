@@ -19,6 +19,7 @@ func NewRouter(
 	currencyHandler handlers.CurrencyHandler,
 	transferHandler handlers.TransferHandler,
 	exchangeRateHandler handlers.ExchangeRateHandler,
+	recurringRuleHandler handlers.RecurringRuleHandler,
 	archiveHandler handlers.ArchiveHandler,
 	settingsHandler handlers.SettingsHandler,
 	userHandler handlers.UserHandler,
@@ -62,6 +63,10 @@ func NewRouter(
 	protected.HandleFunc("GET /exchange-rates", exchangeRateHandler.ListExchangeRates)
 	protected.HandleFunc("POST /exchange-rates", exchangeRateHandler.SetExchangeRate)
 	protected.HandleFunc("DELETE /exchange-rates/{id}", exchangeRateHandler.DeleteExchangeRate)
+
+	protected.HandleFunc("GET /recurring-rules", recurringRuleHandler.ListRecurringRules)
+	protected.HandleFunc("POST /recurring-rules", recurringRuleHandler.CreateRecurringRule)
+	protected.HandleFunc("PATCH /recurring-rules/{id}", recurringRuleHandler.UpdateRecurringRule)
 
 	protected.HandleFunc("GET /settings/local-archive", archiveHandler.GetLocalArchiveSetting)
 	protected.HandleFunc("PUT /settings/local-archive", archiveHandler.SetLocalArchiveSetting)

@@ -416,3 +416,55 @@ type SetLocalArchiveSettingUseCase interface {
 type ToUSDUseCase interface {
 	Execute(ctx context.Context, userID string, amount int64, currency string, at time.Time) (int64, error)
 }
+
+// CreateRecurringRuleInput carries the caller-supplied fields for a new
+// recurring rule (BACK-07). Category/PaymentMethod default to "other"
+// like CreateMovementInput; DayOfMonth must be "1".."28" or "last".
+// StartsAt zero means "now".
+type CreateRecurringRuleInput struct {
+	UserID        string
+	Amount        int64
+	Currency      string
+	Description   string
+	Category      string
+	PaymentMethod string
+	AccountID     *string
+	DayOfMonth    string
+	StartsAt      time.Time
+	EndsAt        *time.Time
+}
+
+type CreateRecurringRuleUseCase interface {
+	Execute(ctx context.Context, input CreateRecurringRuleInput) (*dto.RecurringRuleDTO, error)
+}
+
+type ListRecurringRulesUseCase interface {
+	Execute(ctx context.Context, userID string) ([]*dto.RecurringRuleDTO, error)
+}
+
+// UpdateRecurringRuleInput carries a PATCH /recurring-rules/{id} partial
+// body — a nil field means "leave unchanged", mirroring
+// UpdateMovementInput. Editing any field only affects future
+// generations; movements already generated are never retroactively
+// touched. EndsAt has no way to clear an existing end date back to "no
+// end" via this input (nil means "don't change it", not "clear it") — a
+// known, documented limitation rather than an oversight; the common case
+// (setting or changing an end date) works normally.
+type UpdateRecurringRuleInput struct {
+	Description   *string
+	Category      *string
+	PaymentMethod *string
+	AccountID     *string // a pointer to "" clears the account
+	Amount        *int64
+	Currency      *string
+	DayOfMonth    *string
+	EndsAt        *time.Time
+	Active        *bool
+}
+
+// UpdateRecurringRuleUseCase requires the caller's userID and returns
+// apperrors.ErrNotFound (not a distinguishable "forbidden") when the rule
+// exists but belongs to someone else — same contract as GetMovementUseCase.
+type UpdateRecurringRuleUseCase interface {
+	Execute(ctx context.Context, userID, id string, input UpdateRecurringRuleInput) (*dto.RecurringRuleDTO, error)
+}

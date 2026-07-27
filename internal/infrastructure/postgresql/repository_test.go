@@ -37,7 +37,7 @@ func openTestDB(t *testing.T) *sql.DB {
 	if err := Migrate(db); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	if _, err := db.Exec(`TRUNCATE TABLE account_snapshots, movements, credit_card_purchases, accounts, user_local_archive_settings, user_settings CASCADE`); err != nil {
+	if _, err := db.Exec(`TRUNCATE TABLE account_snapshots, movements, credit_card_purchases, accounts, recurring_rules, user_local_archive_settings, user_settings CASCADE`); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
 	return db
@@ -555,6 +555,166 @@ func TestPurchaseCreateWithInstallments(t *testing.T) {
 	}
 	if err := purchases.MarkCancelled(ctx, "missing"); !errors.Is(err, apperrors.ErrNotFound) {
 		t.Errorf("cancel missing purchase: want ErrNotFound, got %v", err)
+	}
+}
+
+func testRecurringRule(dayOfMonth string) *dto.RecurringRuleDTO {
+	now := nowTruncated()
+	return &dto.RecurringRuleDTO{
+		UserID:        "00000000-0000-0000-0000-000000000001",
+		Amount:        -5000,
+		Currency:      "usd",
+		Description:   "rent",
+		Category:      string(entities.CategoryHousing),
+		PaymentMethod: string(entities.PaymentMethodBankTransfer),
+		DayOfMonth:    dayOfMonth,
+		StartsAt:      now,
+		Active:        true,
+		CreatedAt:     now,
+	}
+}
+
+func TestRecurringRuleCreateGetRoundtrip(t *testing.T) {
+	repo := NewRecurringRuleRepository(openTestDB(t))
+	ctx := context.Background()
+
+	created, err := repo.Create(ctx, testRecurringRule("1"))
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if created.ID == "" {
+		t.Fatal("no id generated")
+	}
+
+	got, err := repo.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Amount != -5000 || got.Description != "rent" || got.DayOfMonth != "1" || !got.Active {
+		t.Errorf("roundtrip mismatch: %+v", got)
+	}
+	if got.LastGeneratedAt != nil || got.EndsAt != nil || got.AccountID != nil {
+		t.Error("nullable fields should be nil")
+	}
+
+	if _, err := repo.GetByID(ctx, "missing"); !errors.Is(err, apperrors.ErrNotFound) {
+		t.Errorf("missing id: want ErrNotFound, got %v", err)
+	}
+}
+
+func TestRecurringRuleListByUserAndActive(t *testing.T) {
+	repo := NewRecurringRuleRepository(openTestDB(t))
+	ctx := context.Background()
+
+	mine, _ := repo.Create(ctx, testRecurringRule("1"))
+	inactive := testRecurringRule("15")
+	inactive.Active = false
+	inactiveRule, _ := repo.Create(ctx, inactive)
+	someoneElses := testRecurringRule("1")
+	someoneElses.UserID = "00000000-0000-0000-0000-000000000002"
+	repo.Create(ctx, someoneElses)
+
+	byUser, err := repo.ListByUser(ctx, "00000000-0000-0000-0000-000000000001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(byUser) != 2 {
+		t.Fatalf("ListByUser = %d rows, want 2", len(byUser))
+	}
+
+	active, err := repo.ListActive(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range active {
+		if r.ID == inactiveRule.ID {
+			t.Error("ListActive returned a deactivated rule")
+		}
+	}
+	found := false
+	for _, r := range active {
+		if r.ID == mine.ID {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("ListActive did not return the active rule")
+	}
+}
+
+func TestRecurringRuleUpdatesAndSetActive(t *testing.T) {
+	repo := NewRecurringRuleRepository(openTestDB(t))
+	ctx := context.Background()
+
+	rule, _ := repo.Create(ctx, testRecurringRule("1"))
+
+	if err := repo.UpdateMetadata(ctx, rule.ID, "new desc", string(entities.CategoryFood), string(entities.PaymentMethodCash), nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.UpdateFinancial(ctx, rule.ID, -9999, "brl"); err != nil {
+		t.Fatal(err)
+	}
+	ends := nowTruncated().AddDate(1, 0, 0)
+	if err := repo.UpdateSchedule(ctx, rule.ID, "last", &ends); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SetActive(ctx, rule.ID, false); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := repo.GetByID(ctx, rule.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Description != "new desc" || got.Category != string(entities.CategoryFood) ||
+		got.Amount != -9999 || got.Currency != "brl" || got.DayOfMonth != "last" ||
+		got.EndsAt == nil || got.Active {
+		t.Errorf("updates did not apply: %+v", got)
+	}
+
+	if err := repo.SetActive(ctx, "missing", true); !errors.Is(err, apperrors.ErrNotFound) {
+		t.Errorf("update missing rule: want ErrNotFound, got %v", err)
+	}
+}
+
+func TestRecurringRuleGenerateAndAdvance(t *testing.T) {
+	db := openTestDB(t)
+	repo := NewRecurringRuleRepository(db)
+	movements := NewMovementRepository(db)
+	ctx := context.Background()
+
+	rule, _ := repo.Create(ctx, testRecurringRule("1"))
+
+	m := testMovement(-5000)
+	m.RecurringRuleID = &rule.ID
+	watermark := nowTruncated()
+
+	generated, err := repo.GenerateAndAdvance(ctx, rule.ID, []*dto.MovementDTO{m}, watermark)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	if len(generated) != 1 || generated[0].ID == "" {
+		t.Fatalf("generated = %+v, want one movement with an id", generated)
+	}
+
+	stored, err := movements.GetByID(ctx, generated[0].ID)
+	if err != nil {
+		t.Fatalf("movement not persisted: %v", err)
+	}
+	if stored.RecurringRuleID == nil || *stored.RecurringRuleID != rule.ID {
+		t.Errorf("movement missing recurring_rule_id link: %+v", stored)
+	}
+
+	got, err := repo.GetByID(ctx, rule.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LastGeneratedAt == nil || !got.LastGeneratedAt.Equal(watermark) {
+		t.Errorf("watermark not advanced: %+v", got.LastGeneratedAt)
+	}
+
+	if _, err := repo.GenerateAndAdvance(ctx, "missing", nil, watermark); !errors.Is(err, apperrors.ErrNotFound) {
+		t.Errorf("generate for missing rule: want ErrNotFound, got %v", err)
 	}
 }
 

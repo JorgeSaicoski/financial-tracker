@@ -504,6 +504,102 @@ func (f *fakeExchangeRateRepo) Delete(_ context.Context, userID, id string) erro
 	return nil
 }
 
+// fakeRecurringRuleRepo is an in-memory RecurringRuleRepository.
+type fakeRecurringRuleRepo struct {
+	byID   map[string]*dto.RecurringRuleDTO
+	nextID int
+}
+
+func newFakeRecurringRuleRepo() *fakeRecurringRuleRepo {
+	return &fakeRecurringRuleRepo{byID: map[string]*dto.RecurringRuleDTO{}}
+}
+
+func (f *fakeRecurringRuleRepo) Create(_ context.Context, r *dto.RecurringRuleDTO) (*dto.RecurringRuleDTO, error) {
+	if r.ID == "" {
+		f.nextID++
+		r.ID = fmt.Sprintf("rr-%d", f.nextID)
+	}
+	cp := *r
+	f.byID[r.ID] = &cp
+	return r, nil
+}
+
+func (f *fakeRecurringRuleRepo) GetByID(_ context.Context, id string) (*dto.RecurringRuleDTO, error) {
+	r, ok := f.byID[id]
+	if !ok {
+		return nil, apperrors.ErrNotFound
+	}
+	cp := *r
+	return &cp, nil
+}
+
+func (f *fakeRecurringRuleRepo) ListByUser(_ context.Context, userID string) ([]*dto.RecurringRuleDTO, error) {
+	var out []*dto.RecurringRuleDTO
+	for _, r := range f.byID {
+		if r.UserID == userID {
+			cp := *r
+			out = append(out, &cp)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeRecurringRuleRepo) ListActive(_ context.Context) ([]*dto.RecurringRuleDTO, error) {
+	var out []*dto.RecurringRuleDTO
+	for _, r := range f.byID {
+		if r.Active {
+			cp := *r
+			out = append(out, &cp)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeRecurringRuleRepo) UpdateMetadata(_ context.Context, id, description, category, paymentMethod string, accountID *string) error {
+	r, ok := f.byID[id]
+	if !ok {
+		return apperrors.ErrNotFound
+	}
+	r.Description, r.Category, r.PaymentMethod, r.AccountID = description, category, paymentMethod, accountID
+	return nil
+}
+
+func (f *fakeRecurringRuleRepo) UpdateFinancial(_ context.Context, id string, amount int64, currency string) error {
+	r, ok := f.byID[id]
+	if !ok {
+		return apperrors.ErrNotFound
+	}
+	r.Amount, r.Currency = amount, currency
+	return nil
+}
+
+func (f *fakeRecurringRuleRepo) UpdateSchedule(_ context.Context, id, dayOfMonth string, endsAt *time.Time) error {
+	r, ok := f.byID[id]
+	if !ok {
+		return apperrors.ErrNotFound
+	}
+	r.DayOfMonth, r.EndsAt = dayOfMonth, endsAt
+	return nil
+}
+
+func (f *fakeRecurringRuleRepo) SetActive(_ context.Context, id string, active bool) error {
+	r, ok := f.byID[id]
+	if !ok {
+		return apperrors.ErrNotFound
+	}
+	r.Active = active
+	return nil
+}
+
+func (f *fakeRecurringRuleRepo) GenerateAndAdvance(_ context.Context, ruleID string, movements []*dto.MovementDTO, newWatermark time.Time) ([]*dto.MovementDTO, error) {
+	r, ok := f.byID[ruleID]
+	if !ok {
+		return nil, apperrors.ErrNotFound
+	}
+	r.LastGeneratedAt = &newWatermark
+	return movements, nil
+}
+
 // fakeLocalArchiveSettingsRepo is an in-memory LocalArchiveSettingsRepository.
 // A user with no entry defaults to false, matching the real SQLite/Postgres
 // implementations' "no row yet" behavior.
