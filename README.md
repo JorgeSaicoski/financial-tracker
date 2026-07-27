@@ -185,6 +185,53 @@ tier to sell).
   ```
   A real admin surface is icebox (see `financial-tracker-plan.md`).
 
+## At-rest encryption & pseudonymous ledger sync (BACK-16)
+
+The `cloud_storage_enabled`/`ledger_sync_enabled` toggles above are backed
+by real cryptography, not just booleans:
+
+- **Field-level encryption** (Postgres backend only — `DB_DRIVER=postgres`):
+  `movements.description` and `accounts.name` are encrypted at rest with
+  AES-256-GCM under a per-user data key. Each user's data key is generated
+  once, then wrapped (also AES-256-GCM) under a single server-held master
+  key (`ENCRYPTION_MASTER_KEY`, env/secrets-manager only, never exposed
+  over the API). Amounts, currency, category, dates, and account/user ids
+  stay plaintext — every existing balance/cashflow/purchasing-power
+  calculation needs them server-side, and encrypting them away would
+  break those, not make them "more private." SQLite (standalone/dev)
+  never encrypts these fields; there's no stolen-disk threat model
+  distinct from the user's own machine to protect against there.
+- **Pseudonymous ledger sync** (both backends): when `ledger_sync_enabled`
+  is on, `infrastructure/ledgerservice.gateway.Publish` sends
+  ledger-service a random, non-reversible per-user pseudonym UUID instead
+  of the real user id, and a deterministic HMAC-SHA256 token
+  (`LEDGER_HMAC_KEY`) instead of the plain currency code — e.g.
+  "pseudonym `f47ac10b-...` received 10 of token `c_9b2f...`" instead of
+  "user `alice` received 10 USD." The same (user, currency) pair always
+  tokenizes identically, so ledger-service's own consistency checks still
+  work. Amounts are never hidden or tokenized — the ledger's validator
+  and auditability require real numeric values; only *who* and *what
+  currency* are pseudonymized. Movements already synced under the real
+  user id before this landed stay as-is in ledger-service's append-only
+  log — pseudonymization applies to sync going forward only.
+
+**What this tier does and doesn't protect against:**
+- **Protects against:** a stolen disk/backup, a leaked DB dump, a
+  compromised read-replica — anyone with raw bytes but not the running,
+  authenticated application.
+- **Does not protect against:** the operator of financial-tracker itself.
+  The server must decrypt free-text fields to serve them back to their
+  owner, and must have plaintext amounts/currency/category/dates to
+  compute anything server-side. True zero-knowledge cloud storage is a
+  contradiction — a server that computes your balance can read your
+  amounts. A user who wants that guarantee wants BACK-09 (standalone) or
+  BACK-15 (local archive), not this tier.
+
+Key rotation is out of scope for v1 — `ENCRYPTION_MASTER_KEY`/
+`LEDGER_HMAC_KEY` loss makes every already-encrypted field/pseudonym
+permanently unrecoverable, so back them up the same way you'd back up a
+database password (see `deploy/.env.example`).
+
 ## API
 
 | Method | Path | Purpose |
