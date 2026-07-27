@@ -7,11 +7,25 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
+
 	"github.com/JorgeSaicoski/financial-tracker/internal/application/dto"
 	"github.com/JorgeSaicoski/financial-tracker/internal/application/repositories"
 	apperrors "github.com/JorgeSaicoski/financial-tracker/internal/pkg/errors"
 	"github.com/JorgeSaicoski/financial-tracker/internal/pkg/id"
 )
+
+// pgUniqueViolation is Postgres's error code for a unique-index conflict
+// (class 23, "integrity constraint violation" — 23505 specifically).
+const pgUniqueViolation = "23505"
+
+// isUniqueViolation reports whether err came from the categories table's
+// (user_id, lower(name)) unique index rejecting an insert, as opposed to
+// some other failure — the two need different HTTP statuses (409 vs 500).
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation
+}
 
 type categoryRepository struct {
 	db *sql.DB
@@ -105,6 +119,9 @@ func (r *categoryRepository) Create(ctx context.Context, c *dto.CategoryDTO) (*d
 		`INSERT INTO categories (`+categoryColumns+`) VALUES ($1, $2, $3, $4, $5)`,
 		c.ID, c.UserID, c.Name, nullableInt(c.AvoidabilityPercent), c.CreatedAt)
 	if err != nil {
+		if isUniqueViolation(err) {
+			return nil, fmt.Errorf("%w: category %q already exists", apperrors.ErrConflict, c.Name)
+		}
 		return nil, fmt.Errorf("postgresql: insert category: %w", err)
 	}
 	return c, nil

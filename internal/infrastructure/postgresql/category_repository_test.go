@@ -74,8 +74,8 @@ func TestCategoryCreateRejectsDuplicateName(t *testing.T) {
 	if _, err := repo.Create(ctx, dtoCategory(userID, "food", nil)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.Create(ctx, dtoCategory(userID, "Food", nil)); err == nil {
-		t.Error("want an error inserting a case-variant duplicate name, got nil")
+	if _, err := repo.Create(ctx, dtoCategory(userID, "Food", nil)); !errors.Is(err, apperrors.ErrConflict) {
+		t.Errorf("want ErrConflict inserting a case-variant duplicate name, got %v", err)
 	}
 }
 
@@ -125,6 +125,50 @@ func TestCategoryEnsureByNameRecoversFromConcurrentInsert(t *testing.T) {
 	}
 	if len(all) != 1 {
 		t.Errorf("want exactly one category row after %d concurrent EnsureByName calls, got %d", n, len(all))
+	}
+}
+
+// TestCategoryCreateConcurrentDuplicatesAllConflict exercises the explicit
+// POST /categories path (unlike EnsureByName, a genuine duplicate here
+// should fail, not silently resolve to the winner): several goroutines all
+// call Create directly for the same new (user_id, lower(name)); the unique
+// index lets exactly one through, and every loser must get ErrConflict
+// (409-mappable), not an unclassified error that writeUsecaseError would
+// turn into a 500.
+func TestCategoryCreateConcurrentDuplicatesAllConflict(t *testing.T) {
+	repo := NewCategoryRepository(openTestDB(t))
+	ctx := context.Background()
+	userID := "u1"
+
+	const n = 8
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, err := repo.Create(ctx, dtoCategory(userID, "dining", nil))
+			errs[i] = err
+		}(i)
+	}
+	wg.Wait()
+
+	var successes, conflicts int
+	for i, err := range errs {
+		switch {
+		case err == nil:
+			successes++
+		case errors.Is(err, apperrors.ErrConflict):
+			conflicts++
+		default:
+			t.Errorf("goroutine %d: want nil or ErrConflict, got %v", i, err)
+		}
+	}
+	if successes != 1 {
+		t.Errorf("want exactly 1 successful create among %d concurrent calls, got %d", n, successes)
+	}
+	if conflicts != n-1 {
+		t.Errorf("want %d ErrConflict losers, got %d", n-1, conflicts)
 	}
 }
 

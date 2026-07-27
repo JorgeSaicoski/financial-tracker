@@ -7,11 +7,23 @@ import (
 	"fmt"
 	"time"
 
+	sqlite3 "modernc.org/sqlite"
+	sqlite3lib "modernc.org/sqlite/lib"
+
 	"github.com/JorgeSaicoski/financial-tracker/internal/application/dto"
 	"github.com/JorgeSaicoski/financial-tracker/internal/application/repositories"
 	apperrors "github.com/JorgeSaicoski/financial-tracker/internal/pkg/errors"
 	"github.com/JorgeSaicoski/financial-tracker/internal/pkg/id"
 )
+
+// isUniqueViolation reports whether err came from the categories table's
+// (user_id, lower(name)) unique index rejecting an insert, as opposed to
+// some other failure — the two need different HTTP statuses (409 vs 500).
+// modernc.org/sqlite surfaces the extended result code via Error.Code().
+func isUniqueViolation(err error) bool {
+	var sqliteErr *sqlite3.Error
+	return errors.As(err, &sqliteErr) && sqliteErr.Code() == sqlite3lib.SQLITE_CONSTRAINT_UNIQUE
+}
 
 type categoryRepository struct {
 	db *sql.DB
@@ -106,6 +118,9 @@ func (r *categoryRepository) Create(ctx context.Context, c *dto.CategoryDTO) (*d
 		`INSERT INTO categories (`+categoryColumns+`) VALUES (?, ?, ?, ?, ?)`,
 		c.ID, c.UserID, c.Name, nullableInt(c.AvoidabilityPercent), formatTime(c.CreatedAt))
 	if err != nil {
+		if isUniqueViolation(err) {
+			return nil, fmt.Errorf("%w: category %q already exists", apperrors.ErrConflict, c.Name)
+		}
 		return nil, fmt.Errorf("sqlite: insert category: %w", err)
 	}
 	return c, nil
