@@ -7,14 +7,18 @@ import (
 )
 
 // RecurringRuleDTO is the application layer's representation of a
-// recurring movement rule. Category and PaymentMethod are plain strings,
-// validated against the domain's fixed lists in usecases.
+// recurring movement rule. PaymentMethod is a plain string, validated
+// against the domain's fixed list in usecases. CategoryID is the actual
+// foreign key (BACK-14 follow-up) — Category is a read-only display
+// name resolved by the repository via a join on read, same convention
+// as MovementDTO.
 type RecurringRuleDTO struct {
 	ID            string
 	UserID        string
 	Amount        int64
 	Currency      string
 	Description   string
+	CategoryID    *string
 	Category      string
 	PaymentMethod string
 
@@ -42,7 +46,7 @@ func RecurringRuleFromEntity(r *entities.RecurringRule) *RecurringRuleDTO {
 		Amount:          r.Amount,
 		Currency:        r.Currency,
 		Description:     r.Description,
-		Category:        string(r.Category),
+		CategoryID:      r.CategoryID,
 		PaymentMethod:   string(r.PaymentMethod),
 		AccountID:       r.AccountID,
 		DayOfMonth:      r.DayOfMonth,
@@ -64,7 +68,7 @@ func (r *RecurringRuleDTO) ToEntity() *entities.RecurringRule {
 		Amount:          r.Amount,
 		Currency:        r.Currency,
 		Description:     r.Description,
-		Category:        r.Category,
+		CategoryID:      r.CategoryID,
 		PaymentMethod:   entities.PaymentMethod(r.PaymentMethod),
 		AccountID:       r.AccountID,
 		DayOfMonth:      r.DayOfMonth,

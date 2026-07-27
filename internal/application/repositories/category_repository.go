@@ -6,58 +6,66 @@ import (
 	"github.com/JorgeSaicoski/financial-tracker/internal/application/dto"
 )
 
-// CategoryRepository is the per-user, extendable registry of category
-// names (BACK-14) — same shape as CurrencyRepository, but scoped per
-// user and carrying an AvoidabilityPercent per row. "transfer" and
-// "income" are system categories: nil AvoidabilityPercent, and they
-// can't be renamed or deleted — enforced by the usecase layer, not here
-// (this contract has no notion of "system", same reasoning
-// MovementRepository has no notion of "reversal cannot be edited").
+// CategoryRepository is the extendable registry of categories (BACK-14),
+// shared across every user rather than scoped to one (BACK-14 follow-up,
+// part 2: "I will create restaurant category with 80% and offer it for
+// whoever wants to get it") — every category is globally visible and
+// usable by anyone, referenced by id (there is no name-based resolution
+// or lookup at all — category_id is required wherever a category is
+// set, on a movement, purchase, or recurring rule). A CategoryDTO's
+// ContributorIDs is who may edit it (rename, change
+// avoidability_percent); it carries no notion of a single "owner" or
+// "creator" — two different users independently creating "restaurant"
+// each just get their own row, sole contributor themselves. "transfer",
+// "income", and "other" are the three system-seeded categories (empty
+// ContributorIDs, so no one can edit them): nil AvoidabilityPercent for
+// transfer/income (not spend), and none of the three can be created,
+// renamed, or hidden — enforced by the usecase layer via
+// entities.Category, not here (this contract has no notion of
+// "system", same reasoning MovementRepository has no notion of
+// "reversal cannot be edited").
 type CategoryRepository interface {
-	// EnsureByName returns the user's existing category matching name
-	// (case-insensitive), or creates one at avoidabilityPercent if none
-	// exists yet — idempotent, same "adding an existing one is a no-op"
-	// shape as CurrencyRepository.Add, but returning the row since
-	// callers (implicit registration on movement creation) need its id.
-	EnsureByName(ctx context.Context, userID, name string, avoidabilityPercent *int) (*dto.CategoryDTO, error)
-	// GetByID returns a category owned by userID. apperrors.ErrNotFound
-	// if it doesn't exist or isn't owned by userID — same "don't
-	// distinguish doesn't-exist from isn't-yours" rule as GetMovementUseCase.
-	GetByID(ctx context.Context, userID, id string) (*dto.CategoryDTO, error)
-	// ListByUser returns every category row for the user, name ascending.
-	ListByUser(ctx context.Context, userID string) ([]*dto.CategoryDTO, error)
-	// Create inserts a brand-new category row, generating its ID. Callers
-	// (the usecase layer) reject duplicate names and reserved system
-	// names first — this method does not check either.
+	// GetByID returns any category by id, with its current
+	// ContributorIDs populated — categories are globally visible, there's
+	// no ownership check here. apperrors.ErrNotFound if it doesn't exist.
+	GetByID(ctx context.Context, id string) (*dto.CategoryDTO, error)
+	// ListAll returns every category in the system, name ascending, each
+	// with its ContributorIDs populated — backs GET /categories.
+	ListAll(ctx context.Context) ([]*dto.CategoryDTO, error)
+	// Create inserts a brand-new category row, generating its ID, and
+	// atomically adds every id in c.ContributorIDs to
+	// category_maintainers (in practice always exactly one — the
+	// creator — since there's no add-contributor flow yet). Callers (the
+	// usecase layer) reject reserved system names and check the
+	// per-user category-count limit first — this method does not check
+	// either.
 	Create(ctx context.Context, c *dto.CategoryDTO) (*dto.CategoryDTO, error)
-	// Update overwrites name and avoidability_percent for a category
-	// owned by userID with exactly the values given (nil means store
-	// NULL, a legitimate state for system categories) — same
-	// always-overwrite convention as MovementRepository.UpdateMetadata;
-	// the usecase layer resolves a partial PATCH into the full merged
-	// values before calling this. apperrors.ErrNotFound if it doesn't
-	// exist or isn't owned by userID. Never touches IsDefault — see
-	// SetDefault.
-	Update(ctx context.Context, userID, id, name string, avoidabilityPercent *int) error
-	// HasDefault reports whether userID already has a category flagged
-	// IsDefault — used by ensureDefaultCategory to seed one exactly once
-	// per user, the same lazy, absence-safe pattern EnsureByName gives
-	// the system categories.
-	HasDefault(ctx context.Context, userID string) (bool, error)
-	// SetDefault atomically clears IsDefault on whatever category
-	// currently carries it for userID (if any) and sets it on id — the
-	// partial unique index on (user_id) WHERE is_default backs this, so
-	// even a racing pair of calls can't leave two categories flagged
-	// default. apperrors.ErrNotFound if id doesn't exist or isn't owned
-	// by userID.
-	SetDefault(ctx context.Context, userID, id string) error
-	// DeleteAndReassign atomically reassigns every movement and
-	// credit-card purchase referencing categoryID to defaultCategoryID,
-	// then deletes categoryID — the id/deleteCategoryUseCase's answer to
-	// what "deleting one still referenced by movements" now means with a
-	// real category_id foreign key (BACK-14 follow-up); the caller
-	// (deleteCategoryUseCase) has already verified categoryID isn't
-	// itself the default. apperrors.ErrNotFound if categoryID doesn't
-	// exist or isn't owned by userID.
-	DeleteAndReassign(ctx context.Context, userID, categoryID, defaultCategoryID string) error
+	// Update overwrites name and avoidability_percent for category id
+	// with exactly the values given (nil means store NULL) — same
+	// always-overwrite convention as MovementRepository.UpdateMetadata.
+	// The usecase layer resolves a partial PATCH into the full merged
+	// values and checks entities.Category.CanBeEditedBy before calling
+	// this. apperrors.ErrNotFound if id doesn't exist.
+	Update(ctx context.Context, id, name string, avoidabilityPercent *int) error
+	// IsContributor reports whether userID may edit categoryID (rename,
+	// change avoidability_percent). False, not apperrors.ErrNotFound,
+	// when categoryID doesn't exist; callers that need existence
+	// separately already called GetByID.
+	IsContributor(ctx context.Context, userID, categoryID string) (bool, error)
+	// CountByContributor returns how many categories userID currently
+	// contributes to — backs createCategoryUseCase's per-user limit
+	// check (see LimitsRepository, "max_categories_per_user").
+	CountByContributor(ctx context.Context, userID string) (int, error)
+	// Hide marks categoryID as opted out of userID's own future use —
+	// idempotent, and never touches the category row itself or any
+	// other user's data. This is what DELETE /categories/{id} means now
+	// that a category may be shared: there is no real delete (see
+	// deleteCategoryUseCase).
+	Hide(ctx context.Context, userID, categoryID string) error
+	// HideAndReassign does what Hide does, and — in the same
+	// transaction — moves every movement and credit-card purchase userID
+	// owns from categoryID onto defaultCategoryID first. Still scoped
+	// strictly to userID's own rows, even though categoryID may be
+	// referenced by other users too; their data is never touched.
+	HideAndReassign(ctx context.Context, userID, categoryID, defaultCategoryID string) error
 }

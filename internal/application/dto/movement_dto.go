@@ -24,8 +24,18 @@ type MovementDTO struct {
 	Amount        int64
 	Currency      string
 	Description   string
-	Category      string
 	PaymentMethod string
+
+	// CategoryID is the actual foreign key (BACK-14 follow-up) — set
+	// this to create/update a movement's category. Category is a
+	// read-only display name resolved by the repository via a join on
+	// read (see infrastructure/{sqlite,postgresql}/movement_repository.go);
+	// it is never read on write and never round-trips through
+	// ToEntity/MovementFromEntity, since the domain entity carries only
+	// CategoryID (see entities.Movement's own comment on why no display
+	// name lives there either).
+	CategoryID *string
+	Category   string
 
 	// AvoidabilityOverridePercent (0-100, BACK-14) wins over the
 	// movement's category's avoidability_percent when set — see
@@ -68,7 +78,7 @@ func MovementFromEntity(m *entities.Movement) *MovementDTO {
 		Amount:                      m.Amount,
 		Currency:                    m.Currency,
 		Description:                 m.Description,
-		Category:                    m.Category,
+		CategoryID:                  m.CategoryID,
 		PaymentMethod:               string(m.PaymentMethod),
 		AvoidabilityOverridePercent: m.AvoidabilityOverridePercent,
 		AccountID:                   m.AccountID,
@@ -112,7 +122,7 @@ func (m *MovementDTO) ToEntity() *entities.Movement {
 		Amount:                      m.Amount,
 		Currency:                    m.Currency,
 		Description:                 m.Description,
-		Category:                    m.Category,
+		CategoryID:                  m.CategoryID,
 		PaymentMethod:               entities.PaymentMethod(m.PaymentMethod),
 		AvoidabilityOverridePercent: m.AvoidabilityOverridePercent,
 		AccountID:                   m.AccountID,

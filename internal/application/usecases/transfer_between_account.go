@@ -12,15 +12,14 @@ import (
 )
 
 type transferBetweenAccountsUseCase struct {
-	movements  repositories.MovementRepository
-	accounts   repositories.AccountRepository
-	settings   repositories.UserSettingsRepository
-	categories repositories.CategoryRepository
+	movements repositories.MovementRepository
+	accounts  repositories.AccountRepository
+	settings  repositories.UserSettingsRepository
 }
 
 // NewTransferBetweenAccounts returns interface type for dependency injection.
-func NewTransferBetweenAccounts(movements repositories.MovementRepository, accounts repositories.AccountRepository, settings repositories.UserSettingsRepository, categories repositories.CategoryRepository) TransferBetweenAccountsUseCase {
-	return &transferBetweenAccountsUseCase{movements: movements, accounts: accounts, settings: settings, categories: categories}
+func NewTransferBetweenAccounts(movements repositories.MovementRepository, accounts repositories.AccountRepository, settings repositories.UserSettingsRepository) TransferBetweenAccountsUseCase {
+	return &transferBetweenAccountsUseCase{movements: movements, accounts: accounts, settings: settings}
 }
 
 func (uc *transferBetweenAccountsUseCase) Execute(ctx context.Context, input TransferBetweenAccountsInput) (TransferResult, error) {
@@ -72,16 +71,6 @@ func (uc *transferBetweenAccountsUseCase) Execute(ctx context.Context, input Tra
 		return TransferResult{}, err
 	}
 	debit.SyncStatus, credit.SyncStatus = syncStatus, syncStatus
-
-	// Both legs carry entities.CategoryTransfer (Account.Send/Receive set
-	// it directly, not through resolveCategory) — the movement repository
-	// now resolves that name against the categories registry at insert
-	// time (BACK-14 follow-up: category_id is a real FK), so it must
-	// already exist. A brand-new user who transfers before ever calling
-	// GET /categories wouldn't have it yet without this.
-	if err := ensureSystemCategories(ctx, uc.categories, input.UserID); err != nil {
-		return TransferResult{}, err
-	}
 
 	// Both legs land in one transaction: a transfer with only one leg
 	// would silently create or destroy money.

@@ -14,8 +14,17 @@ type Movement struct {
 	Amount        int64
 	Currency      string
 	Description   string
-	Category      string
 	PaymentMethod PaymentMethod
+
+	// CategoryID references the shared categories registry (BACK-14
+	// follow-up) — nil means genuinely uncategorized. Unlike most other
+	// *ID fields here, there's no separately-carried display name on
+	// this entity: category is a shared, contributor-maintained thing,
+	// not something this movement owns a copy of. A human-readable name
+	// is resolved at the infrastructure boundary on read (see
+	// dto.MovementDTO.Category), never stored or passed through the
+	// domain layer.
+	CategoryID *string
 
 	// AvoidabilityOverridePercent (0-100, BACK-14) is this movement's own
 	// ad-hoc avoidability, for a genuine one-off spend that doesn't

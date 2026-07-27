@@ -52,7 +52,7 @@ func (uc *updateMovementUseCase) Execute(ctx context.Context, userID, id string,
 	}
 
 	editsFinancial := input.Amount != nil || input.Currency != nil || input.Timestamp != nil
-	editsMetadata := input.Description != nil || input.Category != nil || input.PaymentMethod != nil ||
+	editsMetadata := input.Description != nil || input.CategoryID != nil || input.PaymentMethod != nil ||
 		input.AccountID != nil || input.AvoidabilityOverridePercent != nil
 
 	if editsFinancial && movement.CreditCardPurchaseID != nil {
@@ -69,7 +69,6 @@ func (uc *updateMovementUseCase) Execute(ctx context.Context, userID, id string,
 	}
 
 	description := orDefault(input.Description, movement.Description)
-	categoryInput := orDefault(input.Category, movement.Category)
 	paymentMethodInput := orDefault(input.PaymentMethod, string(movement.PaymentMethod))
 	avoidabilityOverride := movement.AvoidabilityOverridePercent
 	if input.AvoidabilityOverridePercent != nil {
@@ -93,12 +92,20 @@ func (uc *updateMovementUseCase) Execute(ctx context.Context, userID, id string,
 			accountID = input.AccountID
 		}
 	}
+	categoryIDInput := movement.CategoryID
+	if input.CategoryID != nil {
+		if *input.CategoryID == "" {
+			categoryIDInput = nil
+		} else {
+			categoryIDInput = input.CategoryID
+		}
+	}
 
 	paymentMethod, err := normalizePaymentMethod(paymentMethodInput)
 	if err != nil {
 		return UpdateMovementResult{}, err
 	}
-	category, err := resolveCategory(ctx, uc.categories, movement.UserID, categoryInput)
+	categoryID, err := resolveCategoryID(ctx, uc.categories, categoryIDInput)
 	if err != nil {
 		return UpdateMovementResult{}, err
 	}
@@ -124,7 +131,7 @@ func (uc *updateMovementUseCase) Execute(ctx context.Context, userID, id string,
 
 	if !editsFinancial {
 		if editsMetadata {
-			if err := uc.repo.UpdateMetadata(ctx, movement.ID, description, category, string(paymentMethod), accountID); err != nil {
+			if err := uc.repo.UpdateMetadata(ctx, movement.ID, description, categoryID, string(paymentMethod), accountID); err != nil {
 				return UpdateMovementResult{}, err
 			}
 			if input.AvoidabilityOverridePercent != nil {
@@ -132,8 +139,8 @@ func (uc *updateMovementUseCase) Execute(ctx context.Context, userID, id string,
 					return UpdateMovementResult{}, err
 				}
 			}
-			movementDTO.Description, movementDTO.Category, movementDTO.PaymentMethod, movementDTO.AccountID =
-				description, category, string(paymentMethod), accountID
+			movementDTO.Description, movementDTO.CategoryID, movementDTO.PaymentMethod, movementDTO.AccountID =
+				description, categoryID, string(paymentMethod), accountID
 			movementDTO.AvoidabilityOverridePercent = avoidabilityOverride
 		}
 		return UpdateMovementResult{Movement: movementDTO}, nil
@@ -147,7 +154,7 @@ func (uc *updateMovementUseCase) Execute(ctx context.Context, userID, id string,
 			return UpdateMovementResult{}, err
 		}
 		if editsMetadata {
-			if err := uc.repo.UpdateMetadata(ctx, movement.ID, description, category, string(paymentMethod), accountID); err != nil {
+			if err := uc.repo.UpdateMetadata(ctx, movement.ID, description, categoryID, string(paymentMethod), accountID); err != nil {
 				if rollbackErr := uc.repo.UpdateFinancial(ctx, movement.ID, originalAmount, originalCurrency, originalTimestamp); rollbackErr != nil {
 					return UpdateMovementResult{}, fmt.Errorf(
 						"metadata update failed after financial update and rollback also failed: metadata: %w; rollback: %v",
@@ -160,8 +167,8 @@ func (uc *updateMovementUseCase) Execute(ctx context.Context, userID, id string,
 					return UpdateMovementResult{}, err
 				}
 			}
-			movementDTO.Description, movementDTO.Category, movementDTO.PaymentMethod, movementDTO.AccountID =
-				description, category, string(paymentMethod), accountID
+			movementDTO.Description, movementDTO.CategoryID, movementDTO.PaymentMethod, movementDTO.AccountID =
+				description, categoryID, string(paymentMethod), accountID
 			movementDTO.AvoidabilityOverridePercent = avoidabilityOverride
 		}
 		movementDTO.Amount, movementDTO.Currency, movementDTO.Timestamp = amount, currency, timestamp
@@ -191,7 +198,7 @@ func (uc *updateMovementUseCase) Execute(ctx context.Context, userID, id string,
 			Amount:                      amount,
 			Currency:                    currency,
 			Description:                 description,
-			Category:                    category,
+			CategoryID:                  categoryID,
 			PaymentMethod:               paymentMethod,
 			AvoidabilityOverridePercent: avoidabilityOverride,
 			AccountID:                   accountID,

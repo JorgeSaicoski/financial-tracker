@@ -57,31 +57,41 @@ func (uc *importArchiveUseCase) Execute(ctx context.Context, userID string, bund
 	}
 	existingMovementIDs := toIDSet(existingMovements, func(m *dto.MovementDTO) string { return m.ID })
 
-	// The movement/purchase repositories now resolve Category by name
-	// against the registry at insert time (BACK-14 follow-up: category_id
-	// is a real FK) — unlike the normal create paths, restore writes the
-	// archive's category names directly, so every distinct one must be
-	// registered here first or the batch insert below fails outright.
-	// EnsureByName's neutral 50% default matches what implicit
-	// registration on the normal write path already does.
-	categoryNames := make(map[string]bool)
+	// category_id is a real foreign key (BACK-14 follow-up), and
+	// categories are globally shared — a restore reuses an id that
+	// already exists in this environment (e.g. the fixed system category
+	// ids, or one this same account created before) as-is; an id this
+	// environment has never seen gets created fresh, preserving the
+	// original id, with the importing user as its sole contributor and
+	// the archive's own denormalized name (see ArchiveMovementDTO.Category)
+	// since the source category itself isn't part of the bundle.
+	categoryIDs := make(map[string]string) // id -> denormalized name from the archive
 	for _, m := range bundle.Movements {
-		if m != nil && m.Category != "" {
-			categoryNames[m.Category] = true
+		if m != nil && m.CategoryID != nil && *m.CategoryID != "" {
+			categoryIDs[*m.CategoryID] = m.Category
 		}
 	}
 	for _, p := range bundle.CreditCardPurchases {
-		if p != nil && p.Category != "" {
-			categoryNames[p.Category] = true
+		if p != nil && p.CategoryID != nil && *p.CategoryID != "" {
+			categoryIDs[*p.CategoryID] = p.Category
 		}
 	}
-	for name := range categoryNames {
-		var avoidabilityPercent *int
-		if !isSystemCategory(name) {
-			v := defaultCategoryAvoidability
-			avoidabilityPercent = &v
+	for id, name := range categoryIDs {
+		if _, err := uc.categories.GetByID(ctx, id); err == nil {
+			continue
+		} else if !apperrors.Is(err, apperrors.ErrNotFound) {
+			return ImportArchiveResult{}, err
 		}
-		if _, err := uc.categories.EnsureByName(ctx, userID, name, avoidabilityPercent); err != nil {
+		if name == "" {
+			name = "restored category"
+		}
+		avoidability := defaultCategoryAvoidability
+		if _, err := uc.categories.Create(ctx, &dto.CategoryDTO{
+			ID:                  id,
+			Name:                name,
+			AvoidabilityPercent: &avoidability,
+			ContributorIDs:      []string{userID},
+		}); err != nil {
 			return ImportArchiveResult{}, err
 		}
 	}

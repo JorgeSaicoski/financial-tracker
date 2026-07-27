@@ -11,8 +11,15 @@ type UserSettingsDTO struct {
 	LedgerSyncEntitled   bool
 	LedgerSyncEnabled    bool
 	CloudStorageEntitled bool
-	CreatedAt            time.Time
-	UpdatedAt            time.Time
+	// DefaultCategoryID (BACK-14 follow-up) is this user's own fallback
+	// category — where their movements/purchases land when they remove a
+	// shared category from their list with reassign_existing=true. nil
+	// means the user has never set one, which resolves to the global
+	// entities.CategoryOtherID (see the categories usecases' resolve
+	// helper) rather than being backfilled here.
+	DefaultCategoryID *string
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 }
 
 // EffectiveLedgerSync reports whether this user's movements should

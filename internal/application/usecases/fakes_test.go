@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/JorgeSaicoski/financial-tracker/internal/application/dto"
@@ -236,7 +235,7 @@ func (f *fakeMovementRepo) MarkSyncFailed(_ context.Context, id, syncErr string,
 	return nil
 }
 
-func (f *fakeMovementRepo) UpdateMetadata(_ context.Context, id, description, category, paymentMethod string, accountID *string) error {
+func (f *fakeMovementRepo) UpdateMetadata(_ context.Context, id, description string, categoryID *string, paymentMethod string, accountID *string) error {
 	if f.updateMetadataErr != nil {
 		return f.updateMetadataErr
 	}
@@ -245,7 +244,7 @@ func (f *fakeMovementRepo) UpdateMetadata(_ context.Context, id, description, ca
 		return apperrors.ErrNotFound
 	}
 	m.Description = description
-	m.Category = category
+	m.CategoryID = categoryID
 	m.PaymentMethod = paymentMethod
 	m.AccountID = accountID
 	return nil
@@ -565,12 +564,12 @@ func (f *fakeRecurringRuleRepo) ListActive(_ context.Context) ([]*dto.RecurringR
 	return out, nil
 }
 
-func (f *fakeRecurringRuleRepo) UpdateMetadata(_ context.Context, id, description, category, paymentMethod string, accountID *string) error {
+func (f *fakeRecurringRuleRepo) UpdateMetadata(_ context.Context, id, description string, categoryID *string, paymentMethod string, accountID *string) error {
 	r, ok := f.byID[id]
 	if !ok {
 		return apperrors.ErrNotFound
 	}
-	r.Description, r.Category, r.PaymentMethod, r.AccountID = description, category, paymentMethod, accountID
+	r.Description, r.CategoryID, r.PaymentMethod, r.AccountID = description, categoryID, paymentMethod, accountID
 	return nil
 }
 
@@ -662,6 +661,19 @@ func (f *fakeUserSettingsRepo) UpdateEnabled(_ context.Context, userID string, l
 	return &cp, nil
 }
 
+func (f *fakeUserSettingsRepo) SetDefaultCategory(_ context.Context, userID string, categoryID *string) (*dto.UserSettingsDTO, error) {
+	s, ok := f.byUserID[userID]
+	if !ok {
+		now := time.Now().UTC()
+		s = dto.DefaultUserSettings(userID, now)
+	}
+	s.DefaultCategoryID = categoryID
+	s.UpdatedAt = time.Now().UTC()
+	f.byUserID[userID] = s
+	cp := *s
+	return &cp, nil
+}
+
 func (f *fakeUserSettingsRepo) ListSyncDisabledUserIDs(_ context.Context) ([]string, error) {
 	var out []string
 	for uid, s := range f.byUserID {
@@ -686,48 +698,33 @@ func (f *fakeUserSettingsRepo) setEntitled(userID string, ledgerSyncEntitled boo
 }
 
 // fakeCategoryRepo is an in-memory CategoryRepository, mirroring the
-// semantics the SQLite implementation guarantees: EnsureByName is a
-// case-insensitive check-then-insert, Update/Delete/GetByID are scoped
-// to (userID, id) and return apperrors.ErrNotFound otherwise.
+// semantics the SQLite implementation guarantees: categories are global
+// (no user scoping on GetByID/ListAll/Update), ContributorIDs gates
+// edits, hidden tracks each user's own opt-outs.
 type fakeCategoryRepo struct {
 	byID   map[string]*dto.CategoryDTO
+	hidden map[string]map[string]bool // userID -> categoryID -> true
 	nextID int
 }
 
 func newFakeCategoryRepo() *fakeCategoryRepo {
-	return &fakeCategoryRepo{byID: map[string]*dto.CategoryDTO{}}
+	return &fakeCategoryRepo{byID: map[string]*dto.CategoryDTO{}, hidden: map[string]map[string]bool{}}
 }
 
-func (f *fakeCategoryRepo) EnsureByName(_ context.Context, userID, name string, avoidabilityPercent *int) (*dto.CategoryDTO, error) {
-	for _, c := range f.byID {
-		if c.UserID == userID && strings.EqualFold(c.Name, name) {
-			cp := *c
-			return &cp, nil
-		}
-	}
-	return f.Create(context.Background(), &dto.CategoryDTO{
-		UserID:              userID,
-		Name:                name,
-		AvoidabilityPercent: avoidabilityPercent,
-	})
-}
-
-func (f *fakeCategoryRepo) GetByID(_ context.Context, userID, id string) (*dto.CategoryDTO, error) {
+func (f *fakeCategoryRepo) GetByID(_ context.Context, id string) (*dto.CategoryDTO, error) {
 	c, ok := f.byID[id]
-	if !ok || c.UserID != userID {
+	if !ok {
 		return nil, apperrors.ErrNotFound
 	}
 	cp := *c
 	return &cp, nil
 }
 
-func (f *fakeCategoryRepo) ListByUser(_ context.Context, userID string) ([]*dto.CategoryDTO, error) {
+func (f *fakeCategoryRepo) ListAll(_ context.Context) ([]*dto.CategoryDTO, error) {
 	var out []*dto.CategoryDTO
 	for _, c := range f.byID {
-		if c.UserID == userID {
-			cp := *c
-			out = append(out, &cp)
-		}
+		cp := *c
+		out = append(out, &cp)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
@@ -746,9 +743,9 @@ func (f *fakeCategoryRepo) Create(_ context.Context, c *dto.CategoryDTO) (*dto.C
 	return c, nil
 }
 
-func (f *fakeCategoryRepo) Update(_ context.Context, userID, id, name string, avoidabilityPercent *int) error {
+func (f *fakeCategoryRepo) Update(_ context.Context, id, name string, avoidabilityPercent *int) error {
 	c, ok := f.byID[id]
-	if !ok || c.UserID != userID {
+	if !ok {
 		return apperrors.ErrNotFound
 	}
 	c.Name = name
@@ -756,40 +753,68 @@ func (f *fakeCategoryRepo) Update(_ context.Context, userID, id, name string, av
 	return nil
 }
 
-func (f *fakeCategoryRepo) HasDefault(_ context.Context, userID string) (bool, error) {
-	for _, c := range f.byID {
-		if c.UserID == userID && c.IsDefault {
+func (f *fakeCategoryRepo) IsContributor(_ context.Context, userID, categoryID string) (bool, error) {
+	c, ok := f.byID[categoryID]
+	if !ok {
+		return false, nil
+	}
+	for _, id := range c.ContributorIDs {
+		if id == userID {
 			return true, nil
 		}
 	}
 	return false, nil
 }
 
-func (f *fakeCategoryRepo) SetDefault(_ context.Context, userID, id string) error {
-	target, ok := f.byID[id]
-	if !ok || target.UserID != userID {
-		return apperrors.ErrNotFound
-	}
+func (f *fakeCategoryRepo) CountByContributor(_ context.Context, userID string) (int, error) {
+	n := 0
 	for _, c := range f.byID {
-		if c.UserID == userID {
-			c.IsDefault = false
+		for _, id := range c.ContributorIDs {
+			if id == userID {
+				n++
+				break
+			}
 		}
 	}
-	target.IsDefault = true
+	return n, nil
+}
+
+func (f *fakeCategoryRepo) Hide(_ context.Context, userID, categoryID string) error {
+	if _, ok := f.byID[categoryID]; !ok {
+		return apperrors.ErrNotFound
+	}
+	if f.hidden[userID] == nil {
+		f.hidden[userID] = map[string]bool{}
+	}
+	f.hidden[userID][categoryID] = true
 	return nil
 }
 
-// DeleteAndReassign doesn't actually move fakeMovementRepo/
-// fakeCreditCardPurchaseRepo rows onto defaultID — the fakes don't share
-// state across each other the way the real repositories share one
-// database, and no usecase-level test here asserts on post-delete
-// movement category names. That reassignment is exercised for real by
-// the live-DB repository tests instead.
-func (f *fakeCategoryRepo) DeleteAndReassign(_ context.Context, userID, id, defaultID string) error {
-	c, ok := f.byID[id]
-	if !ok || c.UserID != userID {
-		return apperrors.ErrNotFound
+// HideAndReassign doesn't actually move fakeMovementRepo/
+// fakeCreditCardPurchaseRepo rows onto defaultCategoryID — the fakes
+// don't share state across each other the way the real repositories
+// share one database, and no usecase-level test here asserts on
+// post-delete movement category ids. That reassignment is exercised for
+// real by the live-DB repository tests instead.
+func (f *fakeCategoryRepo) HideAndReassign(ctx context.Context, userID, categoryID, defaultCategoryID string) error {
+	return f.Hide(ctx, userID, categoryID)
+}
+
+// fakeLimitsRepo is an in-memory LimitsRepository — tests seed whatever
+// values they need via newFakeLimitsRepo, e.g.
+// newFakeLimitsRepo(map[string]int{"max_categories_per_user": 10}).
+type fakeLimitsRepo struct {
+	values map[string]int
+}
+
+func newFakeLimitsRepo(values map[string]int) *fakeLimitsRepo {
+	return &fakeLimitsRepo{values: values}
+}
+
+func (f *fakeLimitsRepo) GetValue(_ context.Context, name string) (int, error) {
+	v, ok := f.values[name]
+	if !ok {
+		return 0, apperrors.ErrNotFound
 	}
-	delete(f.byID, id)
-	return nil
+	return v, nil
 }

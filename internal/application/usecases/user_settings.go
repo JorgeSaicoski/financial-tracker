@@ -49,33 +49,48 @@ func (uc *getUserSettingsUseCase) Execute(ctx context.Context, userID string) (U
 }
 
 type updateUserSettingsUseCase struct {
-	settings  repositories.UserSettingsRepository
-	movements repositories.MovementRepository
+	settings   repositories.UserSettingsRepository
+	movements  repositories.MovementRepository
+	categories repositories.CategoryRepository
 }
 
 // NewUpdateUserSettings returns interface type for dependency injection.
-func NewUpdateUserSettings(settings repositories.UserSettingsRepository, movements repositories.MovementRepository) UpdateUserSettingsUseCase {
-	return &updateUserSettingsUseCase{settings: settings, movements: movements}
+func NewUpdateUserSettings(settings repositories.UserSettingsRepository, movements repositories.MovementRepository, categories repositories.CategoryRepository) UpdateUserSettingsUseCase {
+	return &updateUserSettingsUseCase{settings: settings, movements: movements, categories: categories}
 }
 
-func (uc *updateUserSettingsUseCase) Execute(ctx context.Context, userID string, ledgerSyncEnabled bool) (UserSettingsView, error) {
-	before, err := uc.settings.Get(ctx, userID)
-	if err != nil {
-		return UserSettingsView{}, err
-	}
-	wasEffectivelyOn := before.EffectiveLedgerSync()
-
-	after, err := uc.settings.UpdateEnabled(ctx, userID, ledgerSyncEnabled)
+func (uc *updateUserSettingsUseCase) Execute(ctx context.Context, userID string, input UpdateUserSettingsInput) (UserSettingsView, error) {
+	after, err := uc.settings.Get(ctx, userID)
 	if err != nil {
 		return UserSettingsView{}, err
 	}
 
-	// Off -> on: the backlog created while sync was off is sitting as
-	// "local" (see effectiveSyncStatus), never queried by the sync loop.
-	// Reclassify it now so the very next pass pushes exactly that
-	// backlog — BACK-13's acceptance criterion.
-	if !wasEffectivelyOn && after.EffectiveLedgerSync() {
-		if err := uc.movements.MarkLocalPending(ctx, userID); err != nil {
+	if input.LedgerSyncEnabled != nil {
+		wasEffectivelyOn := after.EffectiveLedgerSync()
+
+		after, err = uc.settings.UpdateEnabled(ctx, userID, *input.LedgerSyncEnabled)
+		if err != nil {
+			return UserSettingsView{}, err
+		}
+
+		// Off -> on: the backlog created while sync was off is sitting as
+		// "local" (see effectiveSyncStatus), never queried by the sync
+		// loop. Reclassify it now so the very next pass pushes exactly
+		// that backlog — BACK-13's acceptance criterion.
+		if !wasEffectivelyOn && after.EffectiveLedgerSync() {
+			if err := uc.movements.MarkLocalPending(ctx, userID); err != nil {
+				return UserSettingsView{}, err
+			}
+		}
+	}
+
+	if input.DefaultCategoryID != nil {
+		categoryID, err := resolveCategoryID(ctx, uc.categories, input.DefaultCategoryID)
+		if err != nil {
+			return UserSettingsView{}, err
+		}
+		after, err = uc.settings.SetDefaultCategory(ctx, userID, categoryID)
+		if err != nil {
 			return UserSettingsView{}, err
 		}
 	}
@@ -89,6 +104,7 @@ func settingsViewFromDTO(s *dto.UserSettingsDTO) UserSettingsView {
 		LedgerSyncEntitled:   s.LedgerSyncEntitled,
 		LedgerSyncEnabled:    s.LedgerSyncEnabled,
 		CloudStorageEntitled: s.CloudStorageEntitled,
+		DefaultCategoryID:    s.DefaultCategoryID,
 		CreatedAt:            s.CreatedAt,
 		UpdatedAt:            s.UpdatedAt,
 	}

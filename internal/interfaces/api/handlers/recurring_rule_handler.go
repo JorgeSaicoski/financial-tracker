@@ -67,7 +67,7 @@ func (h *recurringRuleHandler) CreateRecurringRule(w http.ResponseWriter, r *htt
 		Amount:        req.Amount,
 		Currency:      currency,
 		Description:   req.Description,
-		Category:      req.Category,
+		CategoryID:    req.CategoryID,
 		PaymentMethod: req.PaymentMethod,
 		AccountID:     accountID,
 		DayOfMonth:    req.DayOfMonth,
@@ -122,7 +122,7 @@ func (h *recurringRuleHandler) UpdateRecurringRule(w http.ResponseWriter, r *htt
 
 	rule, err := h.updateRule.Execute(r.Context(), userID, r.PathValue("id"), usecases.UpdateRecurringRuleInput{
 		Description:   req.Description,
-		Category:      req.Category,
+		CategoryID:    req.CategoryID,
 		PaymentMethod: req.PaymentMethod,
 		AccountID:     req.AccountID,
 		Amount:        req.Amount,
@@ -156,6 +156,9 @@ func toRecurringRuleResponse(r *dto.RecurringRuleDTO) interfacedto.RecurringRule
 	}
 	if r.AccountID != nil {
 		resp.AccountID = *r.AccountID
+	}
+	if r.CategoryID != nil {
+		resp.CategoryID = *r.CategoryID
 	}
 	return resp
 }

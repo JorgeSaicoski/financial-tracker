@@ -35,7 +35,7 @@ func (uc *createMovementUseCase) Execute(ctx context.Context, input CreateMoveme
 	if err != nil {
 		return nil, err
 	}
-	category, err := resolveCategory(ctx, uc.categories, input.UserID, input.Category)
+	categoryID, err := resolveCategoryID(ctx, uc.categories, input.CategoryID)
 	if err != nil {
 		return nil, err
 	}
@@ -73,7 +73,7 @@ func (uc *createMovementUseCase) Execute(ctx context.Context, input CreateMoveme
 		Amount:                      input.Amount,
 		Currency:                    input.Currency,
 		Description:                 input.Description,
-		Category:                    category,
+		CategoryID:                  categoryID,
 		PaymentMethod:               paymentMethod,
 		AvoidabilityOverridePercent: input.AvoidabilityOverridePercent,
 		AccountID:                   input.AccountID,
@@ -88,10 +88,8 @@ func (uc *createMovementUseCase) Execute(ctx context.Context, input CreateMoveme
 
 // normalizePaymentMethod applies the empty-means-other default and
 // rejects values outside the domain's fixed payment-method list. Category
-// no longer goes through here (BACK-14 turned it into a per-user
-// registry, resolved via resolveCategory in categories.go) — this
-// function keeps the payment-method half of the old
-// normalizeCategoryAndMethod helper.
+// doesn't go through here — it's a real foreign key now, validated via
+// resolveCategoryID in categories.go.
 func normalizePaymentMethod(method string) (entities.PaymentMethod, error) {
 	m := entities.PaymentMethod(method)
 	if m == "" {

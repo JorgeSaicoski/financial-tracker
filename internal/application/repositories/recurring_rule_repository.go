@@ -21,8 +21,9 @@ type RecurringRuleRepository interface {
 
 	// UpdateMetadata overwrites the local, non-financial fields —
 	// description, category, payment method, account — mirroring
-	// MovementRepository's own metadata/financial split.
-	UpdateMetadata(ctx context.Context, id, description, category, paymentMethod string, accountID *string) error
+	// MovementRepository's own metadata/financial split. nil categoryID
+	// clears it (genuinely uncategorized).
+	UpdateMetadata(ctx context.Context, id, description string, categoryID *string, paymentMethod string, accountID *string) error
 	// UpdateFinancial overwrites amount/currency in place. Only ever
 	// affects future generations — movements already generated are
 	// ordinary movements and are never retroactively edited by this.

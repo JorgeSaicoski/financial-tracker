@@ -10,169 +10,184 @@ import (
 	apperrors "github.com/JorgeSaicoski/financial-tracker/internal/pkg/errors"
 )
 
-func TestListCategoriesSeedsDefaultCategoryAlongsideSystemOnes(t *testing.T) {
+func defaultLimits() *fakeLimitsRepo {
+	return newFakeLimitsRepo(map[string]int{maxCategoriesPerUserLimit: 10})
+}
+
+func TestCreateCategoryRejectsReservedNames(t *testing.T) {
 	categories := newFakeCategoryRepo()
-	uc := NewListCategories(categories)
+	uc := NewCreateCategory(categories, defaultLimits())
 	ctx := context.Background()
 
-	got, err := uc.Execute(ctx, "u1")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var defaults int
-	var sawOther bool
-	for _, c := range got {
-		if c.IsDefault {
-			defaults++
+	for _, name := range []string{"transfer", "income", "other", "Transfer"} {
+		if _, err := uc.Execute(ctx, CreateCategoryInput{UserID: "u1", Name: name}); !errors.Is(err, apperrors.ErrInvalidInput) {
+			t.Errorf("name %q: want ErrInvalidInput, got %v", name, err)
 		}
-		if c.Name == defaultCategoryName {
-			sawOther = true
-			if c.IsDefault != true {
-				t.Errorf("%q should be flagged default, got %+v", defaultCategoryName, c)
-			}
-		}
-	}
-	if defaults != 1 {
-		t.Errorf("want exactly 1 default category, got %d: %+v", defaults, got)
-	}
-	if !sawOther {
-		t.Errorf("want %q seeded as the default, got %+v", defaultCategoryName, got)
-	}
-
-	// Calling Execute again must not seed a second default.
-	again, err := uc.Execute(ctx, "u1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(again) != len(got) {
-		t.Errorf("second Execute call changed the category count: %dvs%d", len(got), len(again))
 	}
 }
 
-func TestUpdateCategorySetsNewDefaultAndClearsOld(t *testing.T) {
+func TestCreateCategoryTwoUsersSameNameGetDifferentIDs(t *testing.T) {
 	categories := newFakeCategoryRepo()
+	uc := NewCreateCategory(categories, defaultLimits())
 	ctx := context.Background()
 
-	// Seed the default via ListCategories, same as a real request would.
-	if _, err := NewListCategories(categories).Execute(ctx, "u1"); err != nil {
-		t.Fatal(err)
-	}
-	created, err := NewCreateCategory(categories).Execute(ctx, CreateCategoryInput{UserID: "u1", Name: "groceries"})
+	a, err := uc.Execute(ctx, CreateCategoryInput{UserID: "u1", Name: "restaurant"})
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	isDefault := true
-	got, err := NewUpdateCategory(categories).Execute(ctx, "u1", created.ID, UpdateCategoryInput{IsDefault: &isDefault})
+	b, err := uc.Execute(ctx, CreateCategoryInput{UserID: "u2", Name: "restaurant"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !got.IsDefault {
-		t.Errorf("want %q to become the default, got %+v", created.Name, got)
+	if a.ID == b.ID {
+		t.Errorf("want two different users' same-named categories to get different ids, both got %q", a.ID)
 	}
-
-	all, err := categories.ListByUser(ctx, "u1")
-	if err != nil {
-		t.Fatal(err)
+	if len(a.ContributorIDs) != 1 || a.ContributorIDs[0] != "u1" {
+		t.Errorf("want u1 sole contributor of a, got %+v", a.ContributorIDs)
 	}
-	var defaults int
-	for _, c := range all {
-		if c.IsDefault {
-			defaults++
-		}
-	}
-	if defaults != 1 {
-		t.Errorf("want exactly 1 default after reassigning, got %d: %+v", defaults, all)
+	if len(b.ContributorIDs) != 1 || b.ContributorIDs[0] != "u2" {
+		t.Errorf("want u2 sole contributor of b, got %+v", b.ContributorIDs)
 	}
 }
 
-func TestUpdateCategoryRejectsIsDefaultFalse(t *testing.T) {
+func TestCreateCategoryEnforcesPerUserLimit(t *testing.T) {
 	categories := newFakeCategoryRepo()
+	limits := newFakeLimitsRepo(map[string]int{maxCategoriesPerUserLimit: 2})
+	uc := NewCreateCategory(categories, limits)
 	ctx := context.Background()
-	created, err := NewCreateCategory(categories).Execute(ctx, CreateCategoryInput{UserID: "u1", Name: "groceries"})
+
+	if _, err := uc.Execute(ctx, CreateCategoryInput{UserID: "u1", Name: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := uc.Execute(ctx, CreateCategoryInput{UserID: "u1", Name: "b"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := uc.Execute(ctx, CreateCategoryInput{UserID: "u1", Name: "c"}); !errors.Is(err, apperrors.ErrInvalidInput) {
+		t.Errorf("want ErrInvalidInput once the limit is reached, got %v", err)
+	}
+	// A different user is unaffected by u1's count.
+	if _, err := uc.Execute(ctx, CreateCategoryInput{UserID: "u2", Name: "a"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestListCategoriesReturnsEveryoneCategories(t *testing.T) {
+	categories := newFakeCategoryRepo()
+	create := NewCreateCategory(categories, defaultLimits())
+	ctx := context.Background()
+
+	if _, err := create.Execute(ctx, CreateCategoryInput{UserID: "u1", Name: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := create.Execute(ctx, CreateCategoryInput{UserID: "u2", Name: "b"}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := NewListCategories(categories).Execute(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("want both users' categories visible to everyone, got %+v", got)
+	}
+}
+
+func TestUpdateCategoryRejectsNonContributor(t *testing.T) {
+	categories := newFakeCategoryRepo()
+	create := NewCreateCategory(categories, defaultLimits())
+	ctx := context.Background()
+
+	created, err := create.Execute(ctx, CreateCategoryInput{UserID: "u1", Name: "groceries"})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	isDefault := false
-	_, err = NewUpdateCategory(categories).Execute(ctx, "u1", created.ID, UpdateCategoryInput{IsDefault: &isDefault})
+	newName := "renamed"
+	_, err = NewUpdateCategory(categories).Execute(ctx, "u2", created.ID, UpdateCategoryInput{Name: &newName})
 	if !errors.Is(err, apperrors.ErrInvalidInput) {
-		t.Errorf("want ErrInvalidInput for is_default:false, got %v", err)
+		t.Errorf("want ErrInvalidInput for a non-contributor's edit, got %v", err)
 	}
 }
 
-func TestDeleteCategoryRejectsCurrentDefault(t *testing.T) {
+func TestUpdateCategoryAllowsContributor(t *testing.T) {
 	categories := newFakeCategoryRepo()
+	create := NewCreateCategory(categories, defaultLimits())
 	ctx := context.Background()
 
-	// ensureDefaultCategory seeds and flags "other" as the default.
-	if _, err := NewListCategories(categories).Execute(ctx, "u1"); err != nil {
-		t.Fatal(err)
-	}
-	all, err := categories.ListByUser(ctx, "u1")
+	created, err := create.Execute(ctx, CreateCategoryInput{UserID: "u1", Name: "groceries"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	var defaultID string
-	for _, c := range all {
-		if c.IsDefault {
-			defaultID = c.ID
-		}
+
+	newName := "supermarket"
+	got, err := NewUpdateCategory(categories).Execute(ctx, "u1", created.ID, UpdateCategoryInput{Name: &newName})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if defaultID == "" {
-		t.Fatal("no default category seeded")
+	if got.Name != "supermarket" {
+		t.Errorf("want renamed category, got %+v", got)
+	}
+}
+
+func TestUpdateCategoryRejectsSystemCategoryEdit(t *testing.T) {
+	categories := newFakeCategoryRepo()
+	ctx := context.Background()
+	if _, err := categories.Create(ctx, &dto.CategoryDTO{ID: entities.CategoryOtherID, Name: entities.CategoryOther}); err != nil {
+		t.Fatal(err)
 	}
 
-	err = NewDeleteCategory(categories).Execute(ctx, "u1", defaultID)
+	newName := "renamed"
+	_, err := NewUpdateCategory(categories).Execute(ctx, "u1", entities.CategoryOtherID, UpdateCategoryInput{Name: &newName})
 	if !errors.Is(err, apperrors.ErrInvalidInput) {
-		t.Errorf("want ErrInvalidInput deleting the default category, got %v", err)
+		t.Errorf("want ErrInvalidInput editing a system category, got %v", err)
 	}
 }
 
-func TestDeleteCategoryOfNonDefaultSucceeds(t *testing.T) {
+func TestDeleteCategoryHidesWithoutTouchingTheRow(t *testing.T) {
 	categories := newFakeCategoryRepo()
+	create := NewCreateCategory(categories, defaultLimits())
 	ctx := context.Background()
 
-	created, err := NewCreateCategory(categories).Execute(ctx, CreateCategoryInput{UserID: "u1", Name: "groceries"})
+	created, err := create.Execute(ctx, CreateCategoryInput{UserID: "u1", Name: "groceries"})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if err := NewDeleteCategory(categories).Execute(ctx, "u1", created.ID); err != nil {
+	if err := NewDeleteCategory(categories, newFakeUserSettingsRepo()).Execute(ctx, "u1", created.ID, false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := categories.GetByID(ctx, "u1", created.ID); !errors.Is(err, apperrors.ErrNotFound) {
-		t.Errorf("want ErrNotFound after delete, got %v", err)
+	// The category row itself must still exist — hiding is per-user, not
+	// a real delete (see the usecase's doc comment).
+	if _, err := categories.GetByID(ctx, created.ID); err != nil {
+		t.Errorf("want category to still exist after hide, got %v", err)
 	}
-	// Deleting a non-default category with no prior GET /categories call
-	// must still lazily seed a default to reassign onto, rather than
-	// erroring because none exists yet.
-	all, err := categories.ListByUser(ctx, "u1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var sawDefault bool
-	for _, c := range all {
-		if c.IsDefault {
-			sawDefault = true
-		}
-	}
-	if !sawDefault {
-		t.Errorf("want a default category lazily seeded by delete, got %+v", all)
+	if !categories.hidden["u1"][created.ID] {
+		t.Errorf("want the category marked hidden for u1")
 	}
 }
 
-// TestTransferBetweenAccountsEnsuresTransferCategoryExists guards the
-// gap found while adding category_id as a real foreign key (BACK-14
-// follow-up): Account.Send/Receive build a transfer leg with
-// entities.CategoryTransfer directly, bypassing resolveCategory, so a
-// brand-new user who transfers before ever calling GET /categories
-// wouldn't have that category registered without this.
-func TestTransferBetweenAccountsEnsuresTransferCategoryExists(t *testing.T) {
+func TestDeleteCategoryRejectsSystemCategory(t *testing.T) {
+	categories := newFakeCategoryRepo()
+	ctx := context.Background()
+	if _, err := categories.Create(ctx, &dto.CategoryDTO{ID: entities.CategoryTransferID, Name: entities.CategoryTransfer}); err != nil {
+		t.Fatal(err)
+	}
+
+	err := NewDeleteCategory(categories, newFakeUserSettingsRepo()).Execute(ctx, "u1", entities.CategoryTransferID, false)
+	if !errors.Is(err, apperrors.ErrInvalidInput) {
+		t.Errorf("want ErrInvalidInput removing a system category, got %v", err)
+	}
+}
+
+// TestTransferBetweenAccountsUsesFixedTransferCategoryID guards against a
+// regression to the pre-BACK-14-follow-up behavior: Account.Send/Receive
+// set CategoryID directly to the fixed, always-existing
+// entities.CategoryTransferID — the usecase itself no longer touches the
+// category repository at all (see NewTransferBetweenAccounts's shorter
+// constructor).
+func TestTransferBetweenAccountsUsesFixedTransferCategoryID(t *testing.T) {
 	movements := newFakeMovementRepo()
 	accounts := newFakeAccountRepo()
-	categories := newFakeCategoryRepo()
 	ctx := context.Background()
 
 	from, err := accounts.Create(ctx, &dto.AccountDTO{UserID: "u1", Currency: "usd"})
@@ -184,48 +199,46 @@ func TestTransferBetweenAccountsEnsuresTransferCategoryExists(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	uc := NewTransferBetweenAccounts(movements, accounts, newFakeUserSettingsRepo(), categories)
-	if _, err := uc.Execute(ctx, TransferBetweenAccountsInput{
+	uc := NewTransferBetweenAccounts(movements, accounts, newFakeUserSettingsRepo())
+	result, err := uc.Execute(ctx, TransferBetweenAccountsInput{
 		UserID: "u1", FromAccountID: from.ID, ToAccountID: to.ID, Amount: 1000,
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	all, err := categories.ListByUser(ctx, "u1")
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	var sawTransfer bool
-	for _, c := range all {
-		if c.Name == entities.CategoryTransfer {
-			sawTransfer = true
+
+	for _, leg := range []*dto.MovementDTO{result.Debit, result.Credit} {
+		if leg.CategoryID == nil || *leg.CategoryID != entities.CategoryTransferID {
+			t.Errorf("want leg's category_id to be the fixed transfer category, got %+v", leg)
 		}
-	}
-	if !sawTransfer {
-		t.Errorf("want %q registered after a transfer, got %+v", entities.CategoryTransfer, all)
 	}
 }
 
-// TestImportArchiveRegistersCategoriesFromBundle guards the other gap
-// found alongside the transfer one: restore writes the archive's
-// category names directly via CreateBatch/CreateWithInstallments,
-// bypassing resolveCategory, so a category new to the target
-// environment wouldn't be registered without this.
-func TestImportArchiveRegistersCategoriesFromBundle(t *testing.T) {
+// TestImportArchiveReusesExistingCategoryIDAndCreatesMissingOnes guards
+// the category_id-based restore contract (BACK-14 follow-up): a
+// category_id already present in the target is reused untouched; one the
+// target has never seen is created fresh, with the importer as its sole
+// contributor and the archive's own denormalized name.
+func TestImportArchiveReusesExistingCategoryIDAndCreatesMissingOnes(t *testing.T) {
 	accounts := newFakeAccountRepo()
 	movements := newFakeMovementRepo()
 	purchases := newFakePurchaseRepo(movements)
 	categories := newFakeCategoryRepo()
 	ctx := context.Background()
 
+	existing, err := categories.Create(ctx, &dto.CategoryDTO{Name: "hobbies", ContributorIDs: []string{"someone-else"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	uc := NewImportArchive(accounts, movements, purchases, categories)
-	_, err := uc.Execute(ctx, "u1", ArchiveBundle{
+	_, err = uc.Execute(ctx, "u1", ArchiveBundle{
 		Movements: []*dto.MovementDTO{
-			{ID: "m1", Amount: -100, Currency: "usd", Category: "hobbies", PaymentMethod: "other",
+			{ID: "m1", Amount: -100, Currency: "usd", CategoryID: &existing.ID, Category: "hobbies", PaymentMethod: "other",
 				Status: "active", SyncStatus: "pending"},
 		},
 		CreditCardPurchases: []*dto.CreditCardPurchaseDTO{
-			{ID: "p1", Category: "electronics", TotalAmount: -500, Currency: "usd",
+			{ID: "p1", CategoryID: strPtrAv("new-electronics-id"), Category: "electronics", TotalAmount: -500, Currency: "usd",
 				InstallmentCount: 1, Status: "active"},
 		},
 	})
@@ -233,15 +246,24 @@ func TestImportArchiveRegistersCategoriesFromBundle(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	all, err := categories.ListByUser(ctx, "u1")
+	// Reused: still owned by someone-else, u1 wasn't added as a contributor.
+	reused, err := categories.GetByID(ctx, existing.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	names := map[string]bool{}
-	for _, c := range all {
-		names[c.Name] = true
+	if len(reused.ContributorIDs) != 1 || reused.ContributorIDs[0] != "someone-else" {
+		t.Errorf("want the pre-existing category's contributors untouched, got %+v", reused.ContributorIDs)
 	}
-	if !names["hobbies"] || !names["electronics"] {
-		t.Errorf("want both bundle categories registered, got %+v", all)
+
+	// Created fresh: preserves the archive's id, u1 is sole contributor.
+	created, err := categories.GetByID(ctx, "new-electronics-id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Name != "electronics" {
+		t.Errorf("want the archive's denormalized name, got %q", created.Name)
+	}
+	if len(created.ContributorIDs) != 1 || created.ContributorIDs[0] != "u1" {
+		t.Errorf("want the importer as sole contributor of a newly created category, got %+v", created.ContributorIDs)
 	}
 }

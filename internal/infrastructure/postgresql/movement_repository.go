@@ -62,7 +62,7 @@ const movementInsertColumns = `id, user_id, amount, currency, description, categ
 // "movements." since categories also has id/user_id/created_at and an
 // unqualified reference would be ambiguous once joined.
 const movementSelectColumns = `movements.id, movements.user_id, movements.amount, movements.currency, movements.description,
-	COALESCE(categories.name, '') AS category, movements.payment_method,
+	COALESCE(categories.name, '') AS category, movements.category_id, movements.payment_method,
 	movements.credit_card_purchase_id, movements.installment_number, movements.status,
 	movements.cancels_movement_id, movements.reversed_by_movement_id, movements.timestamp,
 	movements.sync_status, movements.ledger_transaction_id, movements.sync_attempts,
@@ -217,14 +217,10 @@ func (r *movementRepository) MarkSyncFailed(ctx context.Context, movementID, syn
 		syncErr, at, movementID)
 }
 
-func (r *movementRepository) UpdateMetadata(ctx context.Context, movementID, description, category, paymentMethod string, accountID *string) error {
-	categoryID, err := resolveCategoryIDByMovement(ctx, r.db, movementID, category)
-	if err != nil {
-		return err
-	}
+func (r *movementRepository) UpdateMetadata(ctx context.Context, movementID, description string, categoryID *string, paymentMethod string, accountID *string) error {
 	return execOnRow(ctx, r.db,
 		`UPDATE movements SET description = $1, category_id = $2, payment_method = $3, account_id = $4 WHERE id = $5`,
-		nullString(description), categoryID, paymentMethod, strOrNil(accountID), movementID)
+		nullString(description), strOrNil(categoryID), paymentMethod, strOrNil(accountID), movementID)
 }
 
 func (r *movementRepository) UpdateAvoidabilityOverride(ctx context.Context, movementID string, avoidabilityOverridePercent *int) error {
@@ -479,14 +475,10 @@ func (r *movementRepositoryTx) MarkSyncFailed(ctx context.Context, movementID, s
 		syncErr, at, movementID)
 }
 
-func (r *movementRepositoryTx) UpdateMetadata(ctx context.Context, movementID, description, category, paymentMethod string, accountID *string) error {
-	categoryID, err := resolveCategoryIDByMovement(ctx, r.tx, movementID, category)
-	if err != nil {
-		return err
-	}
+func (r *movementRepositoryTx) UpdateMetadata(ctx context.Context, movementID, description string, categoryID *string, paymentMethod string, accountID *string) error {
 	return execOnRow(ctx, r.tx,
 		`UPDATE movements SET description = $1, category_id = $2, payment_method = $3, account_id = $4 WHERE id = $5`,
-		nullString(description), categoryID, paymentMethod, strOrNil(accountID), movementID)
+		nullString(description), strOrNil(categoryID), paymentMethod, strOrNil(accountID), movementID)
 }
 
 func (r *movementRepositoryTx) UpdateAvoidabilityOverride(ctx context.Context, movementID string, avoidabilityOverridePercent *int) error {
@@ -535,12 +527,6 @@ type queryer interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 }
 
-// queryRower lets resolveCategoryID* run inside or outside a
-// transaction — both *sql.DB and *sql.Tx satisfy it, same as execer.
-type queryRower interface {
-	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
-}
-
 func execOnRow(ctx context.Context, ex execer, query string, args ...any) error {
 	res, err := ex.ExecContext(ctx, query, args...)
 	if err != nil {
@@ -574,59 +560,12 @@ func queryMovements(ctx context.Context, q queryer, query string, args ...any) (
 	return out, rows.Err()
 }
 
-// resolveCategoryID looks up categoryName's id for userID, returning nil
-// (SQL NULL) for an empty name — the "genuinely uncategorized" case
-// resolveCategory (usecases/categories.go) already passes through
-// unresolved. A non-empty name that doesn't resolve means some caller
-// wrote/updated a movement without first ensuring the category exists
-// (resolveCategory, ensureSystemCategories, or an import path doing the
-// same) — a real bug in that caller, not a normal "not found" this
-// repository should paper over.
-func resolveCategoryID(ctx context.Context, q queryRower, userID, categoryName string) (any, error) {
-	if categoryName == "" {
-		return nil, nil
-	}
-	var categoryID string
-	err := q.QueryRowContext(ctx,
-		`SELECT id FROM categories WHERE user_id = $1 AND lower(name) = lower($2)`, userID, categoryName,
-	).Scan(&categoryID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("postgresql: category %q not registered for user %s — caller must ensure it exists first", categoryName, userID)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("postgresql: resolve category id: %w", err)
-	}
-	return categoryID, nil
-}
-
-// resolveCategoryIDByMovement is resolveCategoryID for UpdateMetadata,
-// which is given a movement id rather than a user id directly — it looks
-// up the owning user_id first so the category lookup stays scoped to the
-// right registry.
-func resolveCategoryIDByMovement(ctx context.Context, q queryRower, movementID, categoryName string) (any, error) {
-	var userID string
-	if err := q.QueryRowContext(ctx, `SELECT user_id FROM movements WHERE id = $1`, movementID).Scan(&userID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, apperrors.ErrNotFound
-		}
-		return nil, fmt.Errorf("postgresql: load movement user for category resolution: %w", err)
-	}
-	return resolveCategoryID(ctx, q, userID, categoryName)
-}
-
-func insertMovement(ctx context.Context, ex interface {
-	execer
-	queryRower
-}, m *dto.MovementDTO) error {
-	categoryID, err := resolveCategoryID(ctx, ex, m.UserID, m.Category)
-	if err != nil {
-		return err
-	}
-	_, err = ex.ExecContext(ctx,
+func insertMovement(ctx context.Context, ex execer, m *dto.MovementDTO) error {
+	_, err := ex.ExecContext(ctx,
 		`INSERT INTO movements (`+movementInsertColumns+`)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)`,
 		m.ID, m.UserID, m.Amount, m.Currency,
-		nullString(m.Description), categoryID, m.PaymentMethod,
+		nullString(m.Description), strOrNil(m.CategoryID), m.PaymentMethod,
 		strOrNil(m.CreditCardPurchaseID), intOrNil(m.InstallmentNumber),
 		m.Status, strOrNil(m.CancelsMovementID), strOrNil(m.ReversedByMovementID),
 		m.Timestamp, m.SyncStatus, strOrNil(m.LedgerTransactionID),
@@ -651,6 +590,7 @@ func scanMovement(row scannable) (*dto.MovementDTO, error) {
 	var (
 		m                                   dto.MovementDTO
 		description, lastSyncError          sql.NullString
+		categoryID                          sql.NullString
 		purchaseID, cancelsID, reversedByID sql.NullString
 		ledgerTxID, accountID, transferID   sql.NullString
 		recurringRuleID                     sql.NullString
@@ -662,7 +602,7 @@ func scanMovement(row scannable) (*dto.MovementDTO, error) {
 
 	err := row.Scan(
 		&m.ID, &m.UserID, &m.Amount, &m.Currency,
-		&description, &m.Category, &m.PaymentMethod,
+		&description, &m.Category, &categoryID, &m.PaymentMethod,
 		&purchaseID, &installmentNumber,
 		&m.Status, &cancelsID, &reversedByID,
 		&m.Timestamp, &m.SyncStatus, &ledgerTxID,
@@ -674,6 +614,7 @@ func scanMovement(row scannable) (*dto.MovementDTO, error) {
 	}
 
 	m.Description = description.String
+	m.CategoryID = stringPtr(categoryID)
 	m.SyncAttempts = int(syncAttempts)
 	m.AccountID = stringPtr(accountID)
 	m.TransferID = stringPtr(transferID)

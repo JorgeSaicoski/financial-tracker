@@ -11,114 +11,46 @@ import (
 	apperrors "github.com/JorgeSaicoski/financial-tracker/internal/pkg/errors"
 )
 
-// defaultCategoryAvoidability is the neutral value a brand-new,
-// implicitly-registered category gets (the user edits it afterward) —
-// same default the one-time migration backfill uses.
+// defaultCategoryAvoidability is the neutral value a brand-new category
+// gets when the caller doesn't specify one — the user edits it afterward.
 const defaultCategoryAvoidability = 50
 
-// defaultCategoryName is the fallback category lazily seeded per user
-// (BACK-14 follow-up) and flagged IsDefault — the user is free to rename
-// it or flag a different category as the default instead; "other" is
-// just what a brand-new user starts with, not a reserved name like
-// entities.CategoryTransfer/CategoryIncome.
-const defaultCategoryName = "other"
+// maxCategoriesPerUserLimit is the name LimitsRepository looks this cap
+// up under (BACK-14 follow-up: "I will not let him have 1000 categories
+// and overload the CPU every single time I need to see his default" — an
+// operator-configurable row, not a hardcoded constant, so retuning it is
+// a database update, not a redeploy).
+const maxCategoriesPerUserLimit = "max_categories_per_user"
 
-// isSystemCategory reports whether name (case-insensitive) is one of the
-// two reserved category names code branches on directly (Account.Send/
-// Receive, getCashflowUseCase) — not spend, so they carry no
-// avoidability and can't be created/renamed/deleted through the API.
-func isSystemCategory(name string) bool {
-	lower := strings.ToLower(strings.TrimSpace(name))
-	return lower == entities.CategoryTransfer || lower == entities.CategoryIncome
+// resolveCategoryID validates a caller-supplied category_id: nil or ""
+// stays nil (genuinely uncategorized); anything else must reference an
+// existing category — categories are globally visible (BACK-14
+// follow-up), so no ownership check happens here, only existence.
+func resolveCategoryID(ctx context.Context, categories repositories.CategoryRepository, categoryID *string) (*string, error) {
+	if categoryID == nil || *categoryID == "" {
+		return nil, nil
+	}
+	if _, err := categories.GetByID(ctx, *categoryID); err != nil {
+		if apperrors.Is(err, apperrors.ErrNotFound) {
+			return nil, fmt.Errorf("%w: category not found", apperrors.ErrInvalidInput)
+		}
+		return nil, err
+	}
+	return categoryID, nil
 }
 
-// resolveCategory returns the effective category name to store on a
-// movement: empty input stays empty (genuinely uncategorized — pairs
-// with the movement's own avoidability override), otherwise the name is
-// resolved against the user's category registry, implicitly registering
-// it at a neutral 50% default on first use (same idempotent-Add shape as
-// AddCurrencyUseCase) if it doesn't already exist. The two system names
-// resolve to their (lazily-ensured) NULL-avoidability row instead of
-// creating a duplicate 50%-avoidability one.
-func resolveCategory(ctx context.Context, categories repositories.CategoryRepository, userID, name string) (string, error) {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return "", nil
-	}
-	var avoidabilityPercent *int
-	if !isSystemCategory(name) {
-		v := defaultCategoryAvoidability
-		avoidabilityPercent = &v
-	}
-	if _, err := categories.EnsureByName(ctx, userID, name, avoidabilityPercent); err != nil {
+// resolveEffectiveDefaultCategoryID returns userID's own default category
+// (user_settings.default_category_id), falling back to the global
+// "other" row when they've never set one.
+func resolveEffectiveDefaultCategoryID(ctx context.Context, settings repositories.UserSettingsRepository, userID string) (string, error) {
+	s, err := settings.Get(ctx, userID)
+	if err != nil {
 		return "", err
 	}
-	return name, nil
-}
-
-// ensureSystemCategories lazily creates "transfer" and "income" for
-// userID if they don't exist yet — absence-safe, same pattern as
-// user_settings. Idempotent: EnsureByName no-ops when the row already
-// exists.
-func ensureSystemCategories(ctx context.Context, categories repositories.CategoryRepository, userID string) error {
-	if _, err := categories.EnsureByName(ctx, userID, entities.CategoryTransfer, nil); err != nil {
-		return err
+	if s.DefaultCategoryID != nil && *s.DefaultCategoryID != "" {
+		return *s.DefaultCategoryID, nil
 	}
-	if _, err := categories.EnsureByName(ctx, userID, entities.CategoryIncome, nil); err != nil {
-		return err
-	}
-	return nil
-}
-
-// ensureDefaultCategory lazily seeds userID's fallback category
-// (BACK-14 follow-up) the first time it's needed — same absence-safe
-// pattern as ensureSystemCategories, but only acts once: if the user
-// already has a category flagged IsDefault (seeded here earlier, or set
-// explicitly since via updateCategoryUseCase), it's left alone. Returns
-// the user's current default row either way, since deleteCategoryUseCase
-// needs its id to reassign onto.
-func ensureDefaultCategory(ctx context.Context, categories repositories.CategoryRepository, userID string) (*dto.CategoryDTO, error) {
-	has, err := categories.HasDefault(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
-	if !has {
-		avoidability := defaultCategoryAvoidability
-		def, err := categories.EnsureByName(ctx, userID, defaultCategoryName, &avoidability)
-		if err != nil {
-			return nil, err
-		}
-		// A concurrent caller may have set a default between the
-		// HasDefault check above and here (e.g. an explicit PATCH
-		// is_default:true racing this lazy seed) — SetDefault would
-		// just move it back, so re-check rather than blindly setting.
-		has, err = categories.HasDefault(ctx, userID)
-		if err != nil {
-			return nil, err
-		}
-		if !has {
-			if err := categories.SetDefault(ctx, userID, def.ID); err != nil {
-				return nil, err
-			}
-		}
-	}
-	return getDefaultCategory(ctx, categories, userID)
-}
-
-// getDefaultCategory finds userID's current default row. Only called
-// after ensureDefaultCategory has guaranteed one exists, so ErrNotFound
-// here would mean that invariant broke rather than a normal "not found".
-func getDefaultCategory(ctx context.Context, categories repositories.CategoryRepository, userID string) (*dto.CategoryDTO, error) {
-	all, err := categories.ListByUser(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
-	for _, c := range all {
-		if c.IsDefault {
-			return c, nil
-		}
-	}
-	return nil, fmt.Errorf("%w: user has no default category", apperrors.ErrNotFound)
+	return entities.CategoryOtherID, nil
 }
 
 // validateAvoidabilityPercent rejects a value outside 0-100 — shared by
@@ -133,11 +65,12 @@ func validateAvoidabilityPercent(v *int) error {
 
 type createCategoryUseCase struct {
 	categories repositories.CategoryRepository
+	limits     repositories.LimitsRepository
 }
 
 // NewCreateCategory returns interface type for dependency injection.
-func NewCreateCategory(categories repositories.CategoryRepository) CreateCategoryUseCase {
-	return &createCategoryUseCase{categories: categories}
+func NewCreateCategory(categories repositories.CategoryRepository, limits repositories.LimitsRepository) CreateCategoryUseCase {
+	return &createCategoryUseCase{categories: categories, limits: limits}
 }
 
 func (uc *createCategoryUseCase) Execute(ctx context.Context, input CreateCategoryInput) (*dto.CategoryDTO, error) {
@@ -145,11 +78,24 @@ func (uc *createCategoryUseCase) Execute(ctx context.Context, input CreateCatego
 	if input.UserID == "" || name == "" {
 		return nil, fmt.Errorf("%w: category name is required", apperrors.ErrInvalidInput)
 	}
-	if isSystemCategory(name) {
+	if entities.IsSystemCategoryName(name) {
 		return nil, fmt.Errorf("%w: %q is a reserved category name", apperrors.ErrInvalidInput, name)
 	}
 	if err := validateAvoidabilityPercent(input.AvoidabilityPercent); err != nil {
 		return nil, err
+	}
+
+	limit, err := uc.limits.GetValue(ctx, maxCategoriesPerUserLimit)
+	if err != nil {
+		return nil, err
+	}
+	count, err := uc.categories.CountByContributor(ctx, input.UserID)
+	if err != nil {
+		return nil, err
+	}
+	if count >= limit {
+		return nil, fmt.Errorf("%w: you've reached the limit of %d categories — reuse an existing one instead of creating a new one",
+			apperrors.ErrInvalidInput, limit)
 	}
 
 	avoidability := defaultCategoryAvoidability
@@ -157,20 +103,10 @@ func (uc *createCategoryUseCase) Execute(ctx context.Context, input CreateCatego
 		avoidability = *input.AvoidabilityPercent
 	}
 
-	existing, err := uc.categories.ListByUser(ctx, input.UserID)
-	if err != nil {
-		return nil, err
-	}
-	for _, c := range existing {
-		if strings.EqualFold(c.Name, name) {
-			return nil, fmt.Errorf("%w: category %q already exists", apperrors.ErrConflict, name)
-		}
-	}
-
 	return uc.categories.Create(ctx, &dto.CategoryDTO{
-		UserID:              input.UserID,
 		Name:                name,
 		AvoidabilityPercent: &avoidability,
+		ContributorIDs:      []string{input.UserID},
 	})
 }
 
@@ -183,14 +119,8 @@ func NewListCategories(categories repositories.CategoryRepository) ListCategorie
 	return &listCategoriesUseCase{categories: categories}
 }
 
-func (uc *listCategoriesUseCase) Execute(ctx context.Context, userID string) ([]*dto.CategoryDTO, error) {
-	if err := ensureSystemCategories(ctx, uc.categories, userID); err != nil {
-		return nil, err
-	}
-	if _, err := ensureDefaultCategory(ctx, uc.categories, userID); err != nil {
-		return nil, err
-	}
-	return uc.categories.ListByUser(ctx, userID)
+func (uc *listCategoriesUseCase) Execute(ctx context.Context) ([]*dto.CategoryDTO, error) {
+	return uc.categories.ListAll(ctx)
 }
 
 type updateCategoryUseCase struct {
@@ -206,95 +136,83 @@ func (uc *updateCategoryUseCase) Execute(ctx context.Context, userID, id string,
 	if userID == "" || id == "" {
 		return nil, apperrors.ErrInvalidInput
 	}
-	existing, err := uc.categories.GetByID(ctx, userID, id)
+	existingDTO, err := uc.categories.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	if isSystemCategory(existing.Name) {
-		return nil, fmt.Errorf("%w: %q is a reserved category and can't be edited", apperrors.ErrInvalidInput, existing.Name)
-	}
+	category := categoryEntityFromDTO(existingDTO)
 
-	name := existing.Name
 	if input.Name != nil {
-		name = strings.TrimSpace(*input.Name)
+		name := strings.TrimSpace(*input.Name)
 		if name == "" {
 			return nil, fmt.Errorf("%w: category name is required", apperrors.ErrInvalidInput)
 		}
-		if isSystemCategory(name) {
+		if entities.IsSystemCategoryName(name) {
 			return nil, fmt.Errorf("%w: %q is a reserved category name", apperrors.ErrInvalidInput, name)
 		}
+		if err := category.Rename(name, userID); err != nil {
+			return nil, fmt.Errorf("%w: %v", apperrors.ErrInvalidInput, err)
+		}
 	}
-	if err := validateAvoidabilityPercent(input.AvoidabilityPercent); err != nil {
-		return nil, err
-	}
-	avoidabilityPercent := existing.AvoidabilityPercent
 	if input.AvoidabilityPercent != nil {
-		avoidabilityPercent = input.AvoidabilityPercent
-	}
-	// IsDefault is a one-way flag here: setting it true makes id the
-	// user's new default (atomically clearing whoever held it before —
-	// see CategoryRepository.SetDefault); false is rejected rather than
-	// silently ignored, since "no default" isn't a state this app
-	// supports — the invariant is always exactly one, enforced by the
-	// migration's partial unique index too.
-	if input.IsDefault != nil && !*input.IsDefault {
-		return nil, fmt.Errorf("%w: set is_default on the category you want as default instead of clearing it here", apperrors.ErrInvalidInput)
-	}
-
-	if !strings.EqualFold(name, existing.Name) {
-		siblings, err := uc.categories.ListByUser(ctx, userID)
-		if err != nil {
+		if err := validateAvoidabilityPercent(input.AvoidabilityPercent); err != nil {
 			return nil, err
 		}
-		for _, c := range siblings {
-			if c.ID != id && strings.EqualFold(c.Name, name) {
-				return nil, fmt.Errorf("%w: category %q already exists", apperrors.ErrConflict, name)
-			}
+		if err := category.UpdateAvoidabilityPercent(input.AvoidabilityPercent, userID); err != nil {
+			return nil, fmt.Errorf("%w: %v", apperrors.ErrInvalidInput, err)
 		}
 	}
 
-	if err := uc.categories.Update(ctx, userID, id, name, avoidabilityPercent); err != nil {
+	if err := uc.categories.Update(ctx, id, category.Name, category.AvoidabilityPercent); err != nil {
 		return nil, err
 	}
-	if input.IsDefault != nil && *input.IsDefault {
-		if err := uc.categories.SetDefault(ctx, userID, id); err != nil {
-			return nil, err
-		}
-	}
-	return uc.categories.GetByID(ctx, userID, id)
+	return uc.categories.GetByID(ctx, id)
 }
 
 type deleteCategoryUseCase struct {
 	categories repositories.CategoryRepository
+	settings   repositories.UserSettingsRepository
 }
 
 // NewDeleteCategory returns interface type for dependency injection.
-func NewDeleteCategory(categories repositories.CategoryRepository) DeleteCategoryUseCase {
-	return &deleteCategoryUseCase{categories: categories}
+func NewDeleteCategory(categories repositories.CategoryRepository, settings repositories.UserSettingsRepository) DeleteCategoryUseCase {
+	return &deleteCategoryUseCase{categories: categories, settings: settings}
 }
 
-func (uc *deleteCategoryUseCase) Execute(ctx context.Context, userID, id string) error {
+func (uc *deleteCategoryUseCase) Execute(ctx context.Context, userID, id string, reassignExisting bool) error {
 	if userID == "" || id == "" {
 		return apperrors.ErrInvalidInput
 	}
-	existing, err := uc.categories.GetByID(ctx, userID, id)
+	existing, err := uc.categories.GetByID(ctx, id)
 	if err != nil {
 		return err
 	}
-	if isSystemCategory(existing.Name) {
-		return fmt.Errorf("%w: %q is a reserved category and can't be deleted", apperrors.ErrInvalidInput, existing.Name)
+	category := categoryEntityFromDTO(existing)
+	if !category.CanBeHidden() {
+		return fmt.Errorf("%w: %q is a reserved category and can't be removed", apperrors.ErrInvalidInput, category.Name)
 	}
-	if existing.IsDefault {
-		return fmt.Errorf("%w: %q is the default category and can't be deleted — set a different category as default first", apperrors.ErrInvalidInput, existing.Name)
+
+	if !reassignExisting {
+		return uc.categories.Hide(ctx, userID, id)
 	}
-	// Every movement/purchase currently pointing at id needs somewhere to
-	// land before the FK it holds disappears — ensureDefaultCategory
-	// guarantees that target exists (lazily seeding "other" for a user
-	// who has never triggered GET /categories) rather than assuming
-	// listCategoriesUseCase already ran first.
-	def, err := ensureDefaultCategory(ctx, uc.categories, userID)
+
+	defaultCategoryID, err := resolveEffectiveDefaultCategoryID(ctx, uc.settings, userID)
 	if err != nil {
 		return err
 	}
-	return uc.categories.DeleteAndReassign(ctx, userID, id, def.ID)
+	return uc.categories.HideAndReassign(ctx, userID, id, defaultCategoryID)
+}
+
+// categoryEntityFromDTO converts a CategoryDTO to the domain entity so
+// the usecase can run its business-rule checks (CanBeEditedBy,
+// CanBeHidden, Rename, UpdateAvoidabilityPercent) instead of duplicating
+// them here.
+func categoryEntityFromDTO(c *dto.CategoryDTO) *entities.Category {
+	return &entities.Category{
+		ID:                  c.ID,
+		Name:                c.Name,
+		AvoidabilityPercent: c.AvoidabilityPercent,
+		ContributorIDs:      c.ContributorIDs,
+		CreatedAt:           c.CreatedAt,
+	}
 }

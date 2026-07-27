@@ -33,7 +33,14 @@ func preflight(ctx context.Context, dst *sql.DB) error {
 	// It's a soft, idempotent registry (ON CONFLICT DO NOTHING both in
 	// the migration and in copyCurrencies below), not ledger data, so
 	// pre-existing rows there don't indicate a prior migration.
-	tables := []string{"accounts", "account_snapshots", "categories", "credit_card_purchases", "movements", "exchange_rates"}
+	//
+	// categories is excluded for the same reason (BACK-14 follow-up):
+	// migrations/postgres/014 unconditionally seeds the three fixed-id
+	// system categories ("transfer", "income", "other"), so a fresh
+	// target is never actually empty there either — copyCategories below
+	// uses ON CONFLICT (id) DO NOTHING to skip re-inserting exactly those
+	// three.
+	tables := []string{"accounts", "account_snapshots", "credit_card_purchases", "movements", "exchange_rates"}
 	var nonEmpty []string
 	for _, t := range tables {
 		var n int
@@ -73,6 +80,8 @@ func run(ctx context.Context, src, dst *sql.DB, force bool) ([]tableCount, error
 		{"accounts", copyAccounts},
 		{"account_snapshots", copyAccountSnapshots},
 		{"categories", copyCategories},
+		{"category_maintainers", copyCategoryMaintainers},
+		{"user_hidden_categories", copyUserHiddenCategories},
 		{"credit_card_purchases", copyCreditCardPurchases},
 		{"movements", copyMovements},
 		{"exchange_rates", copyExchangeRates},
@@ -210,13 +219,18 @@ func copyCurrencies(ctx context.Context, src *sql.DB, tx *sql.Tx) (int, int, err
 }
 
 // copyCategories preserves the source's category ids exactly (not just
-// names) — movements/credit_card_purchases now reference categories by
-// id (BACK-14 follow-up: category_id is a real foreign key), so this
-// must run before copyCreditCardPurchases/copyMovements, and their own
-// category_id values carry across unchanged rather than needing any
-// name-based re-resolution.
+// names) — movements/credit_card_purchases reference categories by id
+// (BACK-14 follow-up: category_id is a real foreign key, and categories
+// are globally shared, not per-user), so this must run before
+// copyCreditCardPurchases/copyMovements, and their own category_id
+// values carry across unchanged rather than needing any name-based
+// re-resolution. ON CONFLICT (id) DO NOTHING skips the three fixed-id
+// system categories ("transfer", "income", "other"), which the target's
+// own schema migration already seeded with the same ids — see
+// preflight's comment on why categories is excluded from its
+// non-empty-target check.
 func copyCategories(ctx context.Context, src *sql.DB, tx *sql.Tx) (int, int, error) {
-	rows, err := src.QueryContext(ctx, `SELECT id, user_id, name, avoidability_percent, is_default, created_at FROM categories`)
+	rows, err := src.QueryContext(ctx, `SELECT id, name, avoidability_percent, created_at FROM categories`)
 	if err != nil {
 		return 0, 0, fmt.Errorf("read: %w", err)
 	}
@@ -227,7 +241,7 @@ func copyCategories(ctx context.Context, src *sql.DB, tx *sql.Tx) (int, int, err
 		c := &dto.CategoryDTO{}
 		var avoidabilityPercent sql.NullInt64
 		var createdAt string
-		if err := rows.Scan(&c.ID, &c.UserID, &c.Name, &avoidabilityPercent, &c.IsDefault, &createdAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.Name, &avoidabilityPercent, &createdAt); err != nil {
 			return 0, 0, fmt.Errorf("scan: %w", err)
 		}
 		if avoidabilityPercent.Valid {
@@ -246,9 +260,80 @@ func copyCategories(ctx context.Context, src *sql.DB, tx *sql.Tx) (int, int, err
 	written := 0
 	for _, c := range all {
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO categories (id, user_id, name, avoidability_percent, is_default, created_at) VALUES ($1, $2, $3, $4, $5, $6)`,
-			c.ID, c.UserID, c.Name, intOrNil(c.AvoidabilityPercent), c.IsDefault, c.CreatedAt); err != nil {
+			`INSERT INTO categories (id, name, avoidability_percent, created_at) VALUES ($1, $2, $3, $4) ON CONFLICT (id) DO NOTHING`,
+			c.ID, c.Name, intOrNil(c.AvoidabilityPercent), c.CreatedAt); err != nil {
 			return len(all), written, fmt.Errorf("insert %s: %w", c.ID, err)
+		}
+		written++
+	}
+	return len(all), written, nil
+}
+
+// copyCategoryMaintainers copies who may edit each category (BACK-14
+// follow-up). ON CONFLICT DO NOTHING mirrors copyCategories: the three
+// system categories carry no maintainers on either side, so this only
+// ever inserts fresh rows in practice, but stays idempotent regardless.
+func copyCategoryMaintainers(ctx context.Context, src *sql.DB, tx *sql.Tx) (int, int, error) {
+	rows, err := src.QueryContext(ctx, `SELECT category_id, user_id FROM category_maintainers`)
+	if err != nil {
+		return 0, 0, fmt.Errorf("read: %w", err)
+	}
+	defer rows.Close()
+
+	type maintainer struct{ categoryID, userID string }
+	var all []maintainer
+	for rows.Next() {
+		var m maintainer
+		if err := rows.Scan(&m.categoryID, &m.userID); err != nil {
+			return 0, 0, fmt.Errorf("scan: %w", err)
+		}
+		all = append(all, m)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, 0, err
+	}
+
+	written := 0
+	for _, m := range all {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO category_maintainers (category_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+			m.categoryID, m.userID); err != nil {
+			return len(all), written, fmt.Errorf("insert %s/%s: %w", m.categoryID, m.userID, err)
+		}
+		written++
+	}
+	return len(all), written, nil
+}
+
+// copyUserHiddenCategories copies each user's personal opt-outs (BACK-14
+// follow-up: DELETE /categories/{id} hides, it never deletes the shared
+// row) — same idempotent shape as copyCategoryMaintainers.
+func copyUserHiddenCategories(ctx context.Context, src *sql.DB, tx *sql.Tx) (int, int, error) {
+	rows, err := src.QueryContext(ctx, `SELECT user_id, category_id FROM user_hidden_categories`)
+	if err != nil {
+		return 0, 0, fmt.Errorf("read: %w", err)
+	}
+	defer rows.Close()
+
+	type hidden struct{ userID, categoryID string }
+	var all []hidden
+	for rows.Next() {
+		var h hidden
+		if err := rows.Scan(&h.userID, &h.categoryID); err != nil {
+			return 0, 0, fmt.Errorf("scan: %w", err)
+		}
+		all = append(all, h)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, 0, err
+	}
+
+	written := 0
+	for _, h := range all {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO user_hidden_categories (user_id, category_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+			h.userID, h.categoryID); err != nil {
+			return len(all), written, fmt.Errorf("insert %s/%s: %w", h.userID, h.categoryID, err)
 		}
 		written++
 	}

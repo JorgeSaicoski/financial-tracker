@@ -3,212 +3,100 @@ package postgresql
 import (
 	"context"
 	"errors"
-	"fmt"
-	"sync"
 	"testing"
 
 	"github.com/JorgeSaicoski/financial-tracker/internal/application/dto"
 	apperrors "github.com/JorgeSaicoski/financial-tracker/internal/pkg/errors"
 )
 
-func dtoCategory(userID, name string, avoidabilityPercent *int) *dto.CategoryDTO {
-	return &dto.CategoryDTO{UserID: userID, Name: name, AvoidabilityPercent: avoidabilityPercent}
+func dtoCategory(name string, avoidabilityPercent *int, contributorIDs ...string) *dto.CategoryDTO {
+	return &dto.CategoryDTO{Name: name, AvoidabilityPercent: avoidabilityPercent, ContributorIDs: contributorIDs}
 }
 
 func TestCategoryCreateGetRoundtrip(t *testing.T) {
 	repo := NewCategoryRepository(openTestDB(t))
 	ctx := context.Background()
-	userID := "u1"
 	avoidability := 80
 
-	created, err := repo.Create(ctx, dtoCategory(userID, "restaurants", &avoidability))
+	created, err := repo.Create(ctx, dtoCategory("restaurants", &avoidability, "u1"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	got, err := repo.GetByID(ctx, userID, created.ID)
+	got, err := repo.GetByID(ctx, created.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.Name != "restaurants" || got.AvoidabilityPercent == nil || *got.AvoidabilityPercent != 80 {
 		t.Errorf("got %+v", got)
 	}
-}
-
-func TestCategoryEnsureByNameIsIdempotent(t *testing.T) {
-	repo := NewCategoryRepository(openTestDB(t))
-	ctx := context.Background()
-	userID := "u1"
-	fifty := 50
-
-	first, err := repo.EnsureByName(ctx, userID, "groceries", &fifty)
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := repo.EnsureByName(ctx, userID, "Groceries", &fifty) // case-insensitive match
-	if err != nil {
-		t.Fatal(err)
-	}
-	if first.ID != second.ID {
-		t.Errorf("EnsureByName should return the existing row, got two different IDs: %s vs %s", first.ID, second.ID)
-	}
-
-	all, err := repo.ListByUser(ctx, userID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(all) != 1 {
-		t.Errorf("want exactly one category after two EnsureByName calls for the same name, got %d", len(all))
+	if len(got.ContributorIDs) != 1 || got.ContributorIDs[0] != "u1" {
+		t.Errorf("want u1 as sole contributor, got %+v", got.ContributorIDs)
 	}
 }
 
-// TestCategoryCreateRejectsDuplicateName guards the unique (user_id,
-// lower(name)) index the migration adds — the application layer's
-// list-then-compare check is the common-path guard, but the DB
-// constraint is the actual backstop against a race creating two rows
-// for the same name.
-func TestCategoryCreateRejectsDuplicateName(t *testing.T) {
+// TestCategoryCreateTwoUsersSameNameBothSucceed guards the BACK-14
+// follow-up model directly: categories are global and not unique by
+// name at all — two different users creating "restaurant" each get
+// their own row.
+func TestCategoryCreateTwoUsersSameNameBothSucceed(t *testing.T) {
 	repo := NewCategoryRepository(openTestDB(t))
 	ctx := context.Background()
-	userID := "u1"
 
-	if _, err := repo.Create(ctx, dtoCategory(userID, "food", nil)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := repo.Create(ctx, dtoCategory(userID, "Food", nil)); !errors.Is(err, apperrors.ErrConflict) {
-		t.Errorf("want ErrConflict inserting a case-variant duplicate name, got %v", err)
-	}
-}
-
-// TestCategoryEnsureByNameRecoversFromConcurrentInsert exercises the
-// actual race window a check-then-insert has: several goroutines all
-// miss the initial getByUserAndName read (name doesn't exist yet) and
-// all attempt Create for the same (user_id, lower(name)); the unique
-// index lets exactly one through, and the rest must recover by re-reading
-// the winner instead of surfacing the DB's unique-violation error.
-func TestCategoryEnsureByNameRecoversFromConcurrentInsert(t *testing.T) {
-	repo := NewCategoryRepository(openTestDB(t))
-	ctx := context.Background()
-	userID := "u1"
-	fifty := 50
-
-	const n = 8
-	var wg sync.WaitGroup
-	ids := make([]string, n)
-	errs := make([]error, n)
-	for i := 0; i < n; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			c, err := repo.EnsureByName(ctx, userID, "subscriptions", &fifty)
-			errs[i] = err
-			if c != nil {
-				ids[i] = c.ID
-			}
-		}(i)
-	}
-	wg.Wait()
-
-	for i, err := range errs {
-		if err != nil {
-			t.Fatalf("goroutine %d: EnsureByName returned an error instead of recovering: %v", i, err)
-		}
-	}
-	for i, id := range ids {
-		if id != ids[0] {
-			t.Errorf("goroutine %d resolved to a different category id (%s) than goroutine 0 (%s)", i, id, ids[0])
-		}
-	}
-
-	all, err := repo.ListByUser(ctx, userID)
+	a, err := repo.Create(ctx, dtoCategory("restaurant", nil, "u1"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(all) != 1 {
-		t.Errorf("want exactly one category row after %d concurrent EnsureByName calls, got %d", n, len(all))
-	}
-}
-
-// TestCategoryCreateConcurrentDuplicatesAllConflict exercises the explicit
-// POST /categories path (unlike EnsureByName, a genuine duplicate here
-// should fail, not silently resolve to the winner): several goroutines all
-// call Create directly for the same new (user_id, lower(name)); the unique
-// index lets exactly one through, and every loser must get ErrConflict
-// (409-mappable), not an unclassified error that writeUsecaseError would
-// turn into a 500.
-func TestCategoryCreateConcurrentDuplicatesAllConflict(t *testing.T) {
-	repo := NewCategoryRepository(openTestDB(t))
-	ctx := context.Background()
-	userID := "u1"
-
-	const n = 8
-	var wg sync.WaitGroup
-	errs := make([]error, n)
-	for i := 0; i < n; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			_, err := repo.Create(ctx, dtoCategory(userID, "dining", nil))
-			errs[i] = err
-		}(i)
-	}
-	wg.Wait()
-
-	var successes, conflicts int
-	for i, err := range errs {
-		switch {
-		case err == nil:
-			successes++
-		case errors.Is(err, apperrors.ErrConflict):
-			conflicts++
-		default:
-			t.Errorf("goroutine %d: want nil or ErrConflict, got %v", i, err)
-		}
-	}
-	if successes != 1 {
-		t.Errorf("want exactly 1 successful create among %d concurrent calls, got %d", n, successes)
-	}
-	if conflicts != n-1 {
-		t.Errorf("want %d ErrConflict losers, got %d", n-1, conflicts)
-	}
-}
-
-func TestCategoryListByUserScopesToOwner(t *testing.T) {
-	repo := NewCategoryRepository(openTestDB(t))
-	ctx := context.Background()
-
-	if _, err := repo.Create(ctx, dtoCategory("u1", "food", nil)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := repo.Create(ctx, dtoCategory("u2", "transport", nil)); err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := repo.ListByUser(ctx, "u1")
+	b, err := repo.Create(ctx, dtoCategory("restaurant", nil, "u2"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || got[0].Name != "food" {
-		t.Errorf("want exactly [food] for u1, got %+v", got)
+	if a.ID == b.ID {
+		t.Errorf("want two different rows, got the same id %q twice", a.ID)
+	}
+}
+
+func TestCategoryListAllReturnsEveryUsersCategories(t *testing.T) {
+	repo := NewCategoryRepository(openTestDB(t))
+	ctx := context.Background()
+
+	if _, err := repo.Create(ctx, dtoCategory("food", nil, "u1")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.Create(ctx, dtoCategory("transport", nil, "u2")); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := repo.ListAll(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := map[string]bool{}
+	for _, c := range got {
+		names[c.Name] = true
+	}
+	// The migration also seeds "transfer"/"income"/"other" — ListAll is
+	// unfiltered, so those are expected alongside the two just created.
+	if !names["food"] || !names["transport"] {
+		t.Errorf("want both users' categories visible, got %+v", got)
 	}
 }
 
 func TestCategoryUpdateRenamesAndChangesAvoidability(t *testing.T) {
 	repo := NewCategoryRepository(openTestDB(t))
 	ctx := context.Background()
-	userID := "u1"
 
-	created, err := repo.Create(ctx, dtoCategory(userID, "food", nil))
+	created, err := repo.Create(ctx, dtoCategory("food", nil, "u1"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	newAvoidability := 30
-	if err := repo.Update(ctx, userID, created.ID, "dining out", &newAvoidability); err != nil {
+	if err := repo.Update(ctx, created.ID, "dining out", &newAvoidability); err != nil {
 		t.Fatal(err)
 	}
 
-	got, err := repo.GetByID(ctx, userID, created.ID)
+	got, err := repo.GetByID(ctx, created.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,161 +109,161 @@ func TestCategoryUpdateNotFound(t *testing.T) {
 	repo := NewCategoryRepository(openTestDB(t))
 	ctx := context.Background()
 
-	err := repo.Update(ctx, "u1", "missing-id", "whatever", nil)
+	err := repo.Update(ctx, "missing-id", "whatever", nil)
 	if !errors.Is(err, apperrors.ErrNotFound) {
 		t.Errorf("want ErrNotFound, got %v", err)
 	}
 }
 
-func TestCategoryDeleteAndReassignRemovesRow(t *testing.T) {
-	repo := NewCategoryRepository(openTestDB(t))
-	ctx := context.Background()
-	userID := "u1"
-
-	def, err := repo.Create(ctx, dtoCategory(userID, "other", nil))
-	if err != nil {
-		t.Fatal(err)
-	}
-	created, err := repo.Create(ctx, dtoCategory(userID, "food", nil))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if err := repo.DeleteAndReassign(ctx, userID, created.ID, def.ID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := repo.GetByID(ctx, userID, created.ID); !errors.Is(err, apperrors.ErrNotFound) {
-		t.Errorf("want ErrNotFound after delete, got %v", err)
-	}
-}
-
-func TestCategoryDeleteAndReassignNotFound(t *testing.T) {
+func TestCategoryIsContributor(t *testing.T) {
 	repo := NewCategoryRepository(openTestDB(t))
 	ctx := context.Background()
 
-	def, err := repo.Create(ctx, dtoCategory("u1", "other", nil))
+	created, err := repo.Create(ctx, dtoCategory("food", nil, "u1"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if err := repo.DeleteAndReassign(ctx, "u1", "missing-id", def.ID); !errors.Is(err, apperrors.ErrNotFound) {
-		t.Errorf("want ErrNotFound, got %v", err)
+	is, err := repo.IsContributor(ctx, "u1", created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !is {
+		t.Error("want u1 to be a contributor")
+	}
+	is, err = repo.IsContributor(ctx, "u2", created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if is {
+		t.Error("want u2 to not be a contributor")
 	}
 }
 
-// TestCategoryDeleteAndReassignMovesMovementsAndPurchases exercises the
-// actual reassignment: movements and credit-card purchases pointing at
-// the deleted category must land on the default instead of getting
-// orphaned — the whole reason DeleteAndReassign exists over a plain
-// Delete now that category_id is a real foreign key (BACK-14 follow-up).
-func TestCategoryDeleteAndReassignMovesMovementsAndPurchases(t *testing.T) {
+func TestCategoryCountByContributor(t *testing.T) {
+	repo := NewCategoryRepository(openTestDB(t))
+	ctx := context.Background()
+
+	if _, err := repo.Create(ctx, dtoCategory("a", nil, "u1")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.Create(ctx, dtoCategory("b", nil, "u1")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.Create(ctx, dtoCategory("c", nil, "u2")); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := repo.CountByContributor(ctx, "u1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Errorf("count = %d, want 2", n)
+	}
+}
+
+func TestCategoryHideIsPerUserAndIdempotent(t *testing.T) {
+	repo := NewCategoryRepository(openTestDB(t))
+	ctx := context.Background()
+
+	created, err := repo.Create(ctx, dtoCategory("food", nil, "u1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := repo.Hide(ctx, "u2", created.ID); err != nil {
+		t.Fatal(err)
+	}
+	// Idempotent: hiding again must not error.
+	if err := repo.Hide(ctx, "u2", created.ID); err != nil {
+		t.Fatal(err)
+	}
+	// The row itself is untouched — hiding is not a delete.
+	got, err := repo.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Errorf("want the category to still exist after being hidden, got %v", err)
+	}
+	if got.Name != "food" {
+		t.Errorf("got %+v", got)
+	}
+}
+
+// TestCategoryHideAndReassignMovesOnlyCallersOwnRows exercises the actual
+// reassignment: movements and credit-card purchases the caller owns move
+// onto the default, but another user's rows referencing the same shared
+// category are untouched — the whole point of scoping reassignment to
+// the caller (BACK-14 follow-up: categories are shared, so "whose
+// default" would otherwise be ambiguous).
+func TestCategoryHideAndReassignMovesOnlyCallersOwnRows(t *testing.T) {
 	db := openTestDB(t)
 	categories := NewCategoryRepository(db)
 	movements := NewMovementRepository(db)
 	purchases := NewCreditCardPurchaseRepository(db)
 	ctx := context.Background()
-	userID := "u1"
+	now := nowTruncated()
 
-	def, err := categories.Create(ctx, dtoCategory(userID, "other", nil))
+	def, err := categories.Create(ctx, dtoCategory("other", nil, "u1"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	doomed, err := categories.Create(ctx, dtoCategory(userID, "dining", nil))
+	shared, err := categories.Create(ctx, dtoCategory("dining", nil, "u1"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	m, err := movements.Create(ctx, &dto.MovementDTO{
-		UserID: userID, Amount: -500, Currency: "usd", Category: "dining", PaymentMethod: "other",
-		Status: "active", SyncStatus: "pending", Timestamp: nowTruncated(), CreatedAt: nowTruncated(),
+	m1, err := movements.Create(ctx, &dto.MovementDTO{
+		UserID: "u1", Amount: -500, Currency: "usd", CategoryID: &shared.ID, PaymentMethod: "other",
+		Status: "active", SyncStatus: "pending", Timestamp: now, CreatedAt: now,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, _, err := purchases.CreateWithInstallments(ctx, &dto.CreditCardPurchaseDTO{
-		UserID: userID, Category: "dining", TotalAmount: -1000, Currency: "usd",
-		InstallmentCount: 1, PurchaseDate: nowTruncated(), Status: "active", CreatedAt: nowTruncated(),
+	p1, _, err := purchases.CreateWithInstallments(ctx, &dto.CreditCardPurchaseDTO{
+		UserID: "u1", CategoryID: &shared.ID, TotalAmount: -1000, Currency: "usd",
+		InstallmentCount: 1, PurchaseDate: now, Status: "active", CreatedAt: now,
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	if err := categories.DeleteAndReassign(ctx, userID, doomed.ID, def.ID); err != nil {
-		t.Fatal(err)
-	}
-
-	gotMovement, err := movements.GetByID(ctx, m.ID)
+	// A different user also references the same shared category — must
+	// stay untouched by u1's reassignment.
+	m2, err := movements.Create(ctx, &dto.MovementDTO{
+		UserID: "u2", Amount: -300, Currency: "usd", CategoryID: &shared.ID, PaymentMethod: "other",
+		Status: "active", SyncStatus: "pending", Timestamp: now, CreatedAt: now,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gotMovement.Category != "other" {
-		t.Errorf("movement category = %q, want reassigned to %q", gotMovement.Category, "other")
+
+	if err := categories.HideAndReassign(ctx, "u1", shared.ID, def.ID); err != nil {
+		t.Fatal(err)
 	}
-	gotPurchase, err := purchases.GetByID(ctx, p.ID)
+
+	gotM1, err := movements.GetByID(ctx, m1.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gotPurchase.Category != "other" {
-		t.Errorf("purchase category = %q, want reassigned to %q", gotPurchase.Category, "other")
+	if gotM1.CategoryID == nil || *gotM1.CategoryID != def.ID {
+		t.Errorf("u1's movement category_id = %v, want reassigned to %q", gotM1.CategoryID, def.ID)
 	}
-}
-
-// TestCategorySetDefaultConcurrentCallsLeaveExactlyOneDefault exercises
-// the race window SetDefault's clear-then-set transaction has when no
-// category is default yet: several goroutines all call SetDefault on
-// different existing categories for the same user at once. Unlike
-// Create, SetDefault is a repeatable "clear old, set new" operation, not
-// an insert-or-fail one — two calls that don't truly overlap in time
-// both legitimately succeed in turn (the second correctly clears the
-// first's now-committed default and sets its own), so more than one
-// success among n concurrent calls is expected, not a bug. What must
-// hold: any error is ErrConflict (from truly-overlapping calls hitting
-// the partial unique index on (user_id) WHERE is_default, migrations/
-// postgres/014_movement_category_fk.sql — never a raw 500), and exactly
-// one category ends up flagged default once every call has returned.
-func TestCategorySetDefaultConcurrentCallsLeaveExactlyOneDefault(t *testing.T) {
-	repo := NewCategoryRepository(openTestDB(t))
-	ctx := context.Background()
-	userID := "u1"
-
-	const n = 8
-	ids := make([]string, n)
-	for i := 0; i < n; i++ {
-		c, err := repo.Create(ctx, dtoCategory(userID, fmt.Sprintf("cat-%d", i), nil))
-		if err != nil {
-			t.Fatal(err)
-		}
-		ids[i] = c.ID
-	}
-
-	var wg sync.WaitGroup
-	errs := make([]error, n)
-	for i, id := range ids {
-		wg.Add(1)
-		go func(i int, id string) {
-			defer wg.Done()
-			errs[i] = repo.SetDefault(ctx, userID, id)
-		}(i, id)
-	}
-	wg.Wait()
-
-	for i, err := range errs {
-		if err != nil && !errors.Is(err, apperrors.ErrConflict) {
-			t.Errorf("goroutine %d: want nil or ErrConflict, got %v", i, err)
-		}
-	}
-
-	all, err := repo.ListByUser(ctx, userID)
+	gotP1, err := purchases.GetByID(ctx, p1.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var defaults int
-	for _, c := range all {
-		if c.IsDefault {
-			defaults++
-		}
+	if gotP1.CategoryID == nil || *gotP1.CategoryID != def.ID {
+		t.Errorf("u1's purchase category_id = %v, want reassigned to %q", gotP1.CategoryID, def.ID)
 	}
-	if defaults != 1 {
-		t.Errorf("want exactly 1 default after %d concurrent SetDefault calls, got %d: %+v", n, defaults, all)
+	gotM2, err := movements.GetByID(ctx, m2.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotM2.CategoryID == nil || *gotM2.CategoryID != shared.ID {
+		t.Errorf("u2's movement must NOT be reassigned by u1's delete, got %v", gotM2.CategoryID)
+	}
+
+	// The shared category row itself still exists — u2 can still use it.
+	if _, err := categories.GetByID(ctx, shared.ID); err != nil {
+		t.Errorf("want the shared category to still exist, got %v", err)
 	}
 }
