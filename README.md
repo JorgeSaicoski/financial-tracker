@@ -146,6 +146,14 @@ implements.
   date; no awareness of a card's real closing/due day.
 - **Ledger-service only stores money facts** (`user_id, amount, currency`):
   description/category/payment method live only in financial-tracker's DB.
+- **`POST /import/archive` drops reversal links.** `cancels_movement_id`/
+  `reversed_by_movement_id` are self-referencing foreign keys on
+  `movements`, checked immediately (not deferred) by both SQLite and
+  Postgres here; an original and its reversal reference each other in
+  opposite directions, so no single insertion order satisfies both within
+  one restore. Everything else about both rows (amount, status, currency,
+  ...) restores exactly — only the explicit cross-link between them is
+  lost.
 
 ## Per-user settings & entitlements (`user_settings` table)
 
@@ -239,6 +247,10 @@ gets from cashflow totals).
 | `GET` | `/exchange-rates?user_id=` | The user's exchange-rate history, grouped by currency (current rate + full history, newest `effective_from` first). |
 | `POST` | `/exchange-rates` | Set/backfill a currency's rate against USD. Body: `{currency, units_per_usd, user_id?, effective_from?}` (`units_per_usd` a decimal string; `effective_from` defaults to today, normalized to midnight UTC). Posting the same `(currency, effective_from)` again replaces that row instead of duplicating it. |
 | `DELETE` | `/exchange-rates/{id}` | Remove a rate row the user owns. |
+| `GET` | `/settings/local-archive?user_id=` | The user's `local_archive_enabled` toggle (BACK-15's "no cloud" tier; defaults to `false`). |
+| `PUT` | `/settings/local-archive` | Set the toggle: `{local_archive_enabled, user_id?}`. Independent of any cloud-storage setting — never deletes or stops writing anything server-side by itself. |
+| `GET` | `/export/archive?user_id=` | The user's full restorable state — accounts, movements, credit-card purchases — as plaintext JSON. The frontend's "Local backup" panel encrypts this client-side (AES-256-GCM, PBKDF2-SHA256-derived key) before it's ever saved to a file; this endpoint itself has no encryption of its own. |
+| `POST` | `/import/archive` | Restore a (frontend-decrypted) archive in the same shape `GET /export/archive` returns. Idempotent by row ID — a row that already exists is skipped, never overwritten; safe to import the same archive more than once. `cancels_movement_id`/`reversed_by_movement_id` are not restored (see Known limitations). Returns counts restored/skipped per collection. |
 
 `amount` is an integer in the smallest currency unit (cents), negative for
 expenses, positive for income, and cannot be zero. Splitting an amount too

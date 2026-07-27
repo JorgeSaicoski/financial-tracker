@@ -14,5 +14,9 @@ type CreditCardPurchaseRepository interface {
 	// — either everything lands or nothing does.
 	CreateWithInstallments(ctx context.Context, purchase *dto.CreditCardPurchaseDTO, installments []*dto.MovementDTO) (*dto.CreditCardPurchaseDTO, []*dto.MovementDTO, error)
 	GetByID(ctx context.Context, id string) (*dto.CreditCardPurchaseDTO, error)
+	// ListByUser returns every purchase grouping record for the user,
+	// newest purchase_date first. Added for BACK-15's full-account export
+	// — nothing else needed a bulk read of a user's purchases before.
+	ListByUser(ctx context.Context, userID string) ([]*dto.CreditCardPurchaseDTO, error)
 	MarkCancelled(ctx context.Context, id string) error
 }
