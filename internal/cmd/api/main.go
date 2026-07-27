@@ -170,7 +170,7 @@ func main() {
 	deleteExchangeRate := usecases.NewDeleteExchangeRate(exchangeRateRepo)
 	createRecurringRule := usecases.NewCreateRecurringRule(recurringRuleRepo, accountRepo)
 	listRecurringRules := usecases.NewListRecurringRules(recurringRuleRepo)
-	updateRecurringRule := usecases.NewUpdateRecurringRule(recurringRuleRepo)
+	updateRecurringRule := usecases.NewUpdateRecurringRule(recurringRuleRepo, accountRepo)
 	getLocalArchiveSetting := usecases.NewGetLocalArchiveSetting(localArchiveRepo)
 	setLocalArchiveSetting := usecases.NewSetLocalArchiveSetting(localArchiveRepo)
 	exportArchive := usecases.NewExportArchive(accountRepo, movementRepo, purchaseRepo)

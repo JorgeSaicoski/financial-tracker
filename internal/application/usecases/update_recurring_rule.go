@@ -11,12 +11,13 @@ import (
 )
 
 type updateRecurringRuleUseCase struct {
-	rules repositories.RecurringRuleRepository
+	rules    repositories.RecurringRuleRepository
+	accounts repositories.AccountRepository
 }
 
 // NewUpdateRecurringRule returns interface type for dependency injection.
-func NewUpdateRecurringRule(rules repositories.RecurringRuleRepository) UpdateRecurringRuleUseCase {
-	return &updateRecurringRuleUseCase{rules: rules}
+func NewUpdateRecurringRule(rules repositories.RecurringRuleRepository, accounts repositories.AccountRepository) UpdateRecurringRuleUseCase {
+	return &updateRecurringRuleUseCase{rules: rules, accounts: accounts}
 }
 
 func (uc *updateRecurringRuleUseCase) Execute(ctx context.Context, userID, id string, input UpdateRecurringRuleInput) (*dto.RecurringRuleDTO, error) {
@@ -70,6 +71,25 @@ func (uc *updateRecurringRuleUseCase) Execute(ctx context.Context, userID, id st
 	}
 	if amount == 0 || currency == "" {
 		return nil, apperrors.ErrInvalidInput
+	}
+
+	// Same check CreateRecurringRule performs on the way in: a rule linked
+	// to an account must generate movements in that account's currency, or
+	// every future generation would fail CreateMovement's own currency
+	// match check. Re-validated here (not just at create time) because
+	// either accountID or currency can change independently via PATCH.
+	if accountID != nil {
+		account, err := uc.accounts.GetByID(ctx, *accountID)
+		if apperrors.Is(err, apperrors.ErrNotFound) {
+			return nil, fmt.Errorf("%w: account not found", apperrors.ErrInvalidInput)
+		}
+		if err != nil {
+			return nil, err
+		}
+		if account.Currency != currency {
+			return nil, fmt.Errorf("%w: rule currency %q does not match account currency %q",
+				apperrors.ErrInvalidInput, currency, account.Currency)
+		}
 	}
 
 	dayOfMonth := existing.DayOfMonth
