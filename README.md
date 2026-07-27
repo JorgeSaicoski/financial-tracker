@@ -160,9 +160,9 @@ Ledger sync is per-user, not global: each user has `ledger_sync_entitled`
 Effective sync is `entitled AND enabled`. A missing row means
 all-`true` (today's default, unchanged behavior) — rows are only created
 lazily by the first `PATCH /settings` write, so existing users need no
-backfill. `cloud_storage_entitled` is stored and exposed the same way,
-but nothing enforces it yet (that's BACK-19's job, once there's a paid
-tier to sell).
+backfill. `cloud_storage_entitled` is stored and exposed the same way;
+BACK-19 (below) is what actually drives it now that there's a paid tier
+to sell.
 
 - The sync loop (`application/sync/service.go`) excludes every
   sync-disabled user's movements from each pass — including movements
@@ -232,6 +232,75 @@ Key rotation is out of scope for v1 — `ENCRYPTION_MASTER_KEY`/
 permanently unrecoverable, so back them up the same way you'd back up a
 database password (see `deploy/.env.example`).
 
+## Paid cloud-storage subscription (BACK-19)
+
+The app is fully usable for free, forever, with your data kept only in a
+local, password-encrypted archive you manage yourself (BACK-15) — the
+server never holds a durable copy of a free-tier user's data beyond what
+the local database already has. Paying (~10 USD/year, an anchor price,
+not final) doesn't unlock features; it unlocks *the operator taking on
+the responsibility of not losing your data*: a durable, at-rest-encrypted
+(BACK-16) copy in Postgres, usable from more than one device, that you
+don't have to remember to back up yourself. This is strictly less
+private than the free tier, not more — see BACK-16's "what this tier
+does and doesn't protect against" above.
+
+- **`subscriptions` table**: one row per user —
+  `{user_id, provider, provider_subscription_id, status, current_period_end,
+  created_at, updated_at}`. `status` is `active` | `past_due` | `canceled`.
+  This is the payment provider's view of billing state; the entitlement
+  the rest of the app actually reads is still `user_settings.cloud_storage_entitled`.
+- **`POST /billing/webhook`** — provider-signed, unauthenticated by user
+  token (the payment provider has no financial-tracker session). Body is
+  a provider-agnostic shape (`{user_id, provider, provider_subscription_id,
+  status, current_period_end}`); a real Stripe (or other) integration
+  translates its own event payload into this shape before calling in.
+  Authenticity comes from an `X-Billing-Signature` header — HMAC-SHA256
+  over the raw request body, keyed by `BILLING_WEBHOOK_SECRET` — checked
+  before the body is even JSON-decoded.
+- **Entitlement only flips *true* immediately** (on `active`): gaining
+  access should never wait. Losing it — from either `past_due` or an
+  explicit `canceled` — never flips immediately, even from the webhook
+  that reports it. **A grace period (`BILLING_GRACE_PERIOD_DAYS`,
+  default 7) applies to both**: "a late card shouldn't cut off access
+  instantly," and cancelling gets the same leniency rather than an
+  asymmetric instant cutoff. A background sweep
+  (`internal/application/billing`, interval `BILLING_SWEEP_INTERVAL`,
+  default 1h) flips `cloud_storage_entitled` to `false` once
+  `current_period_end + grace period` has passed for a still-`past_due`
+  or still-`canceled` subscription.
+- **Grandfathering**: a user who already existed before this shipped
+  keeps `cloud_storage_entitled = true` regardless of subscription
+  status — the existing "absence of a row means true" default (above)
+  already covers them; nobody already using the product loses access
+  silently because billing shipped. Only a genuinely new signup (first
+  time `EnsureUser` ever sees that user id) gets an explicit
+  `cloud_storage_entitled = false` row, overriding that default.
+- **Non-destructive lapse**: losing entitlement never deletes hosted data
+  on the spot — nothing in this codebase purges data on an entitlement
+  change. Hosted data stays exportable (`GET /export/archive`) through a
+  documented 30-day retention window after entitlement lapses; an actual
+  automated purge past that window is not implemented (would be its own
+  future ticket) — the window today is a policy statement, not enforced
+  by a deletion job.
+- **`GET /billing/plan?currency=`** — the annual price
+  (`BILLING_REFERENCE_PRICE_USD_CENTS`, default 1000 = $10.00/year)
+  converted to the requested currency using the caller's own BACK-11
+  exchange rate, e.g. `{"currency": "brl", "amount": 5000}`. Falls back
+  to `{"currency": "usd", "amount": <reference>}` when no rate is known
+  for the requested currency — the response's own `currency` field always
+  says what currency `amount` is actually in; never assume it echoes the
+  request.
+- **`GET /settings`** gains `subscription_status`/
+  `subscription_current_period_end` (omitted entirely for a user who has
+  never had a subscription row) alongside the existing entitlement
+  booleans.
+- **Ledger-audit-tier monetization is undecided**: whether
+  `ledger_sync_enabled` (BACK-16's pseudonymous audit sync) is bundled
+  into this same subscription, sold separately, or stays permanently free
+  is not decided by this ticket — `ProcessBillingWebhookUseCase` only
+  ever touches `cloud_storage_entitled` today.
+
 ## API
 
 | Method | Path | Purpose |
@@ -262,6 +331,8 @@ database password (see `deploy/.env.example`).
 | `PUT` | `/settings/local-archive` | Set the toggle: `{local_archive_enabled, user_id?}`. Independent of any cloud-storage setting — never deletes or stops writing anything server-side by itself. |
 | `GET` | `/export/archive?user_id=` | The user's full restorable state — accounts, movements, credit-card purchases — as plaintext JSON. The frontend's "Local backup" panel encrypts this client-side (AES-256-GCM, PBKDF2-SHA256-derived key) before it's ever saved to a file; this endpoint itself has no encryption of its own. |
 | `POST` | `/import/archive` | Restore a (frontend-decrypted) archive in the same shape `GET /export/archive` returns. Idempotent by row ID — a row that already exists is skipped, never overwritten; safe to import the same archive more than once. `cancels_movement_id`/`reversed_by_movement_id` are not restored (see Known limitations). Returns counts restored/skipped per collection. |
+| `POST` | `/billing/webhook` | Unauthenticated by user token — provider-signed instead (`X-Billing-Signature`, HMAC-SHA256 over the raw body, `BILLING_WEBHOOK_SECRET`). Body: `{user_id, provider, provider_subscription_id, status, current_period_end}`. Upserts the subscription row; `active` flips `cloud_storage_entitled` to `true` immediately, `past_due`/`canceled` don't flip it until the grace-period sweep. |
+| `GET` | `/billing/plan?currency=` | The annual price converted to `currency` using the caller's own exchange rate, falling back to the USD reference price if none is known. Response's own `currency` field says what `amount` is actually expressed in. |
 
 `amount` is an integer in the smallest currency unit (cents), negative for
 expenses, positive for income, and cannot be zero. Splitting an amount too

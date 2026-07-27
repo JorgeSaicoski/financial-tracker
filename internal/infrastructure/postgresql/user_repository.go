@@ -56,6 +56,15 @@ func (r *userRepository) GetByID(ctx context.Context, userID string) (*dto.UserD
 	return u, err
 }
 
+func (r *userRepository) Exists(ctx context.Context, userID string) (bool, error) {
+	var exists bool
+	err := r.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM users WHERE id = $1)`, userID).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("postgresql: check user exists: %w", err)
+	}
+	return exists, nil
+}
+
 // scanUser adapts one user row to the application layer's UserDTO — the
 // contract this repository implements.
 func scanUser(row scannable) (*dto.UserDTO, error) {
