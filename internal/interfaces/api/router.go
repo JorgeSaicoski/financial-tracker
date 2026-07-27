@@ -54,6 +54,7 @@ func NewRouter(
 	protected.HandleFunc("DELETE /categories/{id}", categoryHandler.DeleteCategory)
 	protected.HandleFunc("GET /cashflow", movementHandler.Cashflow)
 	protected.HandleFunc("GET /reports/purchasing-power", reportHandler.PurchasingPower)
+	protected.HandleFunc("GET /reports/avoidability-score", reportHandler.AvoidabilityScore)
 
 	protected.HandleFunc("GET /accounts", accountHandler.ListAccounts)
 	protected.HandleFunc("POST /accounts", accountHandler.CreateAccount)

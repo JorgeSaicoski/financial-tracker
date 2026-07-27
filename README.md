@@ -71,6 +71,22 @@ Beyond movements, the tracker knows about:
   movements never count; a currency missing a rate for some date marks
   that month's USD figures `usd_incomplete: true` rather than guessing —
   native figures are always complete regardless.
+- **Avoidability follow-through score** (`GET
+  /reports/avoidability-score?months=`) — did the user actually follow
+  through on what they rated avoidable? Per calendar month, per category,
+  per native currency: `baseline` (the trailing average of that same
+  category's spend over its 3 preceding full calendar months — a fixed
+  3-month window; a category needs data in at least 2 of those 3 months
+  or it's flagged `insufficient_history: true` instead of a fabricated
+  baseline), `actual` (this month's spend, always reported), and
+  `reduction_percent` = `(baseline − actual) / baseline × 100`.
+  `weighted_score` = `reduction_percent × avoidability_percent / 100` — a
+  big cut in a high-avoidability category counts more than the same cut
+  in a low-avoidability one. `overall_score` sums `weighted_score` across
+  every category with a valid baseline in that currency (a category
+  missing one is excluded from the sum entirely, never treated as a zero
+  contribution). Shares its month/currency bucketing and category-spending
+  computation with the purchasing-power report above.
 
 Backend layout follows Clean Architecture (see `CleanExampleGo` for the
 reference pattern this was modeled on): the **domain** layer holds pure
@@ -254,6 +270,7 @@ gets from cashflow totals).
 | `DELETE` | `/categories/{id}` | Remove a category the user owns. 400 on a system category. Movements still referencing the deleted name are untouched — they just resolve to no avoidability going forward. |
 | `GET` | `/cashflow?from=&to=&user_id=` | Money in / out / net over the interval, per currency (`totals`) and per account (`by_account`, unassigned movements in their own bucket). `from`/`to` required. Transfers are excluded. |
 | `GET` | `/reports/purchasing-power?months=` | Per-month, per-currency spending/income/profit/`potential_savings`, each with a USD view — see "Purchasing power" above. `months` defaults to 6, clamped to 24. |
+| `GET` | `/reports/avoidability-score?months=` | Per-month, per-category, per-currency `baseline`/`actual`/`reduction_percent`/`weighted_score` plus a per-currency `overall_score` — see "Avoidability follow-through score" above. `months` defaults to 6, clamped to 24. |
 | `GET` | `/accounts` | All accounts with `estimated_balance`, latest `reported_balance`/`reported_at`, `movements_since_report` and `last_return` (+ the valid `account_types`). |
 | `POST` | `/accounts` | Create an account. Body: `{name, type?, currency?, user_id?}`. Currency must be registered; duplicate names (case-insensitive) are rejected. |
 | `POST` | `/accounts/{id}/balance` | Report the account's real current balance: `{balance}` (smallest unit). Returns the updated account view, including the newly computed `last_return` when a previous report exists. |
