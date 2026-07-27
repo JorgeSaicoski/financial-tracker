@@ -37,7 +37,7 @@ func openTestDB(t *testing.T) *sql.DB {
 	if err := Migrate(db); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	if _, err := db.Exec(`TRUNCATE TABLE account_snapshots, movements, credit_card_purchases, accounts, user_local_archive_settings, user_settings CASCADE`); err != nil {
+	if _, err := db.Exec(`TRUNCATE TABLE account_snapshots, movements, credit_card_purchases, accounts, user_local_archive_settings, user_settings, plans CASCADE`); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
 	return db
@@ -360,7 +360,7 @@ func TestMovementUpdateMetadataAndFinancial(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := repo.UpdateMetadata(ctx, created.ID, "renamed", string(entities.CategoryTransport), string(entities.PaymentMethodPix), &account.ID); err != nil {
+	if err := repo.UpdateMetadata(ctx, created.ID, "renamed", string(entities.CategoryTransport), string(entities.PaymentMethodPix), &account.ID, nil); err != nil {
 		t.Fatalf("update metadata: %v", err)
 	}
 	got, err := repo.GetByID(ctx, created.ID)
@@ -390,7 +390,7 @@ func TestMovementUpdateMetadataAndFinancial(t *testing.T) {
 		t.Errorf("metadata must be untouched by UpdateFinancial: %+v", got)
 	}
 
-	if err := repo.UpdateMetadata(ctx, "missing", "x", string(entities.CategoryOther), string(entities.PaymentMethodOther), nil); !errors.Is(err, apperrors.ErrNotFound) {
+	if err := repo.UpdateMetadata(ctx, "missing", "x", string(entities.CategoryOther), string(entities.PaymentMethodOther), nil, nil); !errors.Is(err, apperrors.ErrNotFound) {
 		t.Errorf("update metadata on missing id: want ErrNotFound, got %v", err)
 	}
 	if err := repo.UpdateFinancial(ctx, "missing", -1, "usd", time.Now()); !errors.Is(err, apperrors.ErrNotFound) {

@@ -45,7 +45,7 @@ func NewMovementRepository(db *sql.DB) repositories.MovementRepository {
 const movementColumns = `id, user_id, amount, currency, description, category, payment_method,
 	credit_card_purchase_id, installment_number, status, cancels_movement_id, reversed_by_movement_id,
 	timestamp, sync_status, ledger_transaction_id, sync_attempts, last_sync_error, last_sync_attempt_at,
-	synced_at, created_at, account_id, transfer_id`
+	synced_at, created_at, account_id, transfer_id, plan_id`
 
 func (r *movementRepository) Create(ctx context.Context, movement *dto.MovementDTO) (*dto.MovementDTO, error) {
 	if movement.ID == "" {
@@ -187,10 +187,34 @@ func (r *movementRepository) MarkSyncFailed(ctx context.Context, movementID, syn
 		syncErr, formatTime(at), movementID)
 }
 
-func (r *movementRepository) UpdateMetadata(ctx context.Context, movementID, description, category, paymentMethod string, accountID *string) error {
+func (r *movementRepository) UpdateMetadata(ctx context.Context, movementID, description, category, paymentMethod string, accountID, planID *string) error {
 	return r.execOnRow(ctx,
-		`UPDATE movements SET description = ?, category = ?, payment_method = ?, account_id = ? WHERE id = ?`,
-		nullString(description), category, paymentMethod, accountID, movementID)
+		`UPDATE movements SET description = ?, category = ?, payment_method = ?, account_id = ?, plan_id = ? WHERE id = ?`,
+		nullString(description), category, paymentMethod, accountID, planID, movementID)
+}
+
+// SumByPlan sums non-voided movements tagged with planID over [from, to]
+// (both inclusive) on their effective timestamp — see the
+// application/repositories contract's own doc comment for why "active"
+// (not further excluding reversal pairs) is the right rule here, same as
+// NetByAccount, and for why "to" is inclusive.
+func (r *movementRepository) SumByPlan(ctx context.Context, planID string, from, to *time.Time) (int64, error) {
+	query := `SELECT COALESCE(SUM(amount), 0) FROM movements WHERE plan_id = ? AND status = 'active'`
+	args := []any{planID}
+	if from != nil {
+		query += ` AND timestamp >= ?`
+		args = append(args, formatTime(*from))
+	}
+	if to != nil {
+		query += ` AND timestamp <= ?`
+		args = append(args, formatTime(*to))
+	}
+
+	var sum int64
+	if err := r.db.QueryRowContext(ctx, query, args...).Scan(&sum); err != nil {
+		return 0, fmt.Errorf("sqlite: sum by plan: %w", err)
+	}
+	return sum, nil
 }
 
 func (r *movementRepository) UpdateFinancial(ctx context.Context, movementID string, amount int64, currency string, timestamp time.Time) error {
@@ -400,6 +424,24 @@ func (r *movementRepositoryTx) NetByAccount(ctx context.Context, accountID strin
 	return net, nil
 }
 
+func (r *movementRepositoryTx) SumByPlan(ctx context.Context, planID string, from, to *time.Time) (int64, error) {
+	query := `SELECT COALESCE(SUM(amount), 0) FROM movements WHERE plan_id = ? AND status = 'active'`
+	args := []any{planID}
+	if from != nil {
+		query += ` AND timestamp >= ?`
+		args = append(args, formatTime(*from))
+	}
+	if to != nil {
+		query += ` AND timestamp <= ?`
+		args = append(args, formatTime(*to))
+	}
+	var sum int64
+	if err := r.tx.QueryRowContext(ctx, query, args...).Scan(&sum); err != nil {
+		return 0, fmt.Errorf("sqlite: sum by plan: %w", err)
+	}
+	return sum, nil
+}
+
 func (r *movementRepositoryTx) ListPendingSync(ctx context.Context, now time.Time, retryCooldown time.Duration, excludedUserIDs []string) ([]*dto.MovementDTO, error) {
 	clause, excludeArgs := excludedUserIDsClause(excludedUserIDs)
 	args := []any{formatTime(now), formatTime(now.Add(-retryCooldown))}
@@ -440,10 +482,10 @@ func (r *movementRepositoryTx) MarkSyncFailed(ctx context.Context, movementID, s
 		syncErr, formatTime(at), movementID)
 }
 
-func (r *movementRepositoryTx) UpdateMetadata(ctx context.Context, movementID, description, category, paymentMethod string, accountID *string) error {
+func (r *movementRepositoryTx) UpdateMetadata(ctx context.Context, movementID, description, category, paymentMethod string, accountID, planID *string) error {
 	return r.execOnRow(ctx,
-		`UPDATE movements SET description = ?, category = ?, payment_method = ?, account_id = ? WHERE id = ?`,
-		nullString(description), category, paymentMethod, accountID, movementID)
+		`UPDATE movements SET description = ?, category = ?, payment_method = ?, account_id = ?, plan_id = ? WHERE id = ?`,
+		nullString(description), category, paymentMethod, accountID, planID, movementID)
 }
 
 func (r *movementRepositoryTx) UpdateFinancial(ctx context.Context, movementID string, amount int64, currency string, timestamp time.Time) error {
@@ -545,14 +587,14 @@ type execer interface {
 func insertMovement(ctx context.Context, ex execer, m *dto.MovementDTO) error {
 	_, err := ex.ExecContext(ctx,
 		`INSERT INTO movements (`+movementColumns+`)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		m.ID, m.UserID, m.Amount, m.Currency,
 		nullString(m.Description), m.Category, m.PaymentMethod,
 		m.CreditCardPurchaseID, m.InstallmentNumber,
 		m.Status, m.CancelsMovementID, m.ReversedByMovementID,
 		formatTime(m.Timestamp), m.SyncStatus, m.LedgerTransactionID,
 		m.SyncAttempts, m.LastSyncError, nullTime(m.LastSyncAttemptAt),
-		nullTime(m.SyncedAt), formatTime(m.CreatedAt), m.AccountID, m.TransferID)
+		nullTime(m.SyncedAt), formatTime(m.CreatedAt), m.AccountID, m.TransferID, m.PlanID)
 	if err != nil {
 		return fmt.Errorf("sqlite: insert movement: %w", err)
 	}
@@ -573,6 +615,7 @@ func scanMovement(row scannable) (*dto.MovementDTO, error) {
 		description, lastSyncError          sql.NullString
 		purchaseID, cancelsID, reversedByID sql.NullString
 		ledgerTxID, accountID, transferID   sql.NullString
+		planID                              sql.NullString
 		installmentNumber                   sql.NullInt64
 		timestamp, createdAt                string
 		lastAttemptAt, syncedAt             sql.NullString
@@ -585,7 +628,7 @@ func scanMovement(row scannable) (*dto.MovementDTO, error) {
 		&m.Status, &cancelsID, &reversedByID,
 		&timestamp, &m.SyncStatus, &ledgerTxID,
 		&m.SyncAttempts, &lastSyncError, &lastAttemptAt,
-		&syncedAt, &createdAt, &accountID, &transferID)
+		&syncedAt, &createdAt, &accountID, &transferID, &planID)
 	if err != nil {
 		return nil, err
 	}
@@ -593,6 +636,7 @@ func scanMovement(row scannable) (*dto.MovementDTO, error) {
 	m.Description = description.String
 	m.AccountID = stringPtr(accountID)
 	m.TransferID = stringPtr(transferID)
+	m.PlanID = stringPtr(planID)
 	m.CreditCardPurchaseID = stringPtr(purchaseID)
 	m.CancelsMovementID = stringPtr(cancelsID)
 	m.ReversedByMovementID = stringPtr(reversedByID)

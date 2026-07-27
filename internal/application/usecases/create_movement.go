@@ -14,12 +14,13 @@ import (
 type createMovementUseCase struct {
 	repo     repositories.MovementRepository
 	accounts repositories.AccountRepository
+	plans    repositories.PlanRepository
 	settings repositories.UserSettingsRepository
 }
 
 // NewCreateMovement returns interface type for dependency injection.
-func NewCreateMovement(repo repositories.MovementRepository, accounts repositories.AccountRepository, settings repositories.UserSettingsRepository) CreateMovementUseCase {
-	return &createMovementUseCase{repo: repo, accounts: accounts, settings: settings}
+func NewCreateMovement(repo repositories.MovementRepository, accounts repositories.AccountRepository, plans repositories.PlanRepository, settings repositories.UserSettingsRepository) CreateMovementUseCase {
+	return &createMovementUseCase{repo: repo, accounts: accounts, plans: plans, settings: settings}
 }
 
 func (uc *createMovementUseCase) Execute(ctx context.Context, input CreateMovementInput) (*dto.MovementDTO, error) {
@@ -28,6 +29,15 @@ func (uc *createMovementUseCase) Execute(ctx context.Context, input CreateMoveme
 	}
 
 	category, paymentMethod, err := normalizeCategoryAndMethod(input.Category, input.PaymentMethod)
+	if err != nil {
+		return nil, err
+	}
+
+	var planIDInput string
+	if input.PlanID != nil {
+		planIDInput = *input.PlanID
+	}
+	planID, err := resolvePlanForMovement(ctx, uc.plans, input.UserID, planIDInput, input.Currency)
 	if err != nil {
 		return nil, err
 	}
@@ -68,6 +78,7 @@ func (uc *createMovementUseCase) Execute(ctx context.Context, input CreateMoveme
 		Category:      category,
 		PaymentMethod: paymentMethod,
 		AccountID:     input.AccountID,
+		PlanID:        planID,
 		Status:        entities.MovementStatusActive,
 		SyncStatus:    syncStatus,
 		Timestamp:     now,

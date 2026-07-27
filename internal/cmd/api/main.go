@@ -82,6 +82,7 @@ func main() {
 		currencyRepo     repositories.CurrencyRepository
 		exchangeRateRepo repositories.ExchangeRateRepository
 		localArchiveRepo repositories.LocalArchiveSettingsRepository
+		planRepo         repositories.PlanRepository
 		userRepo         repositories.UserRepository
 		settingsRepo     repositories.UserSettingsRepository
 	)
@@ -114,6 +115,7 @@ func main() {
 		currencyRepo = postgresql.NewCurrencyRepository(db)
 		exchangeRateRepo = postgresql.NewExchangeRateRepository(db)
 		localArchiveRepo = postgresql.NewLocalArchiveSettingsRepository(db)
+		planRepo = postgresql.NewPlanRepository(db)
 		userRepo = postgresql.NewUserRepository(db)
 		settingsRepo = postgresql.NewUserSettingsRepository(db)
 	case "sqlite":
@@ -132,6 +134,7 @@ func main() {
 		currencyRepo = sqlite.NewCurrencyRepository(db)
 		exchangeRateRepo = sqlite.NewExchangeRateRepository(db)
 		localArchiveRepo = sqlite.NewLocalArchiveSettingsRepository(db)
+		planRepo = sqlite.NewPlanRepository(db)
 		userRepo = sqlite.NewUserRepository(db)
 		settingsRepo = sqlite.NewUserSettingsRepository(db)
 	default:
@@ -144,11 +147,11 @@ func main() {
 	ledgerGateway := ledgerservice.NewLedgerGateway(ledgerClient)
 	syncService := syncapp.NewService(movementRepo, settingsRepo, ledgerGateway, log, retryCooldown)
 
-	createMovement := usecases.NewCreateMovement(movementRepo, accountRepo, settingsRepo)
+	createMovement := usecases.NewCreateMovement(movementRepo, accountRepo, planRepo, settingsRepo)
 	createPurchase := usecases.NewCreateCreditCardPurchase(purchaseRepo, settingsRepo)
 	getMovement := usecases.NewGetMovement(movementRepo)
 	listMovements := usecases.NewListMovements(movementRepo)
-	updateMovement := usecases.NewUpdateMovement(movementRepo, accountRepo, syncService)
+	updateMovement := usecases.NewUpdateMovement(movementRepo, accountRepo, planRepo, syncService)
 	cancelMovement := usecases.NewCancelMovement(movementRepo, syncService)
 	cancelPurchase := usecases.NewCancelCreditCardPurchase(purchaseRepo, movementRepo, syncService)
 	getCashflow := usecases.NewGetCashflow(movementRepo, accountRepo)
@@ -157,7 +160,7 @@ func main() {
 	reportBalance := usecases.NewReportAccountBalance(accountRepo, movementRepo)
 	listCurrencies := usecases.NewListCurrencies(currencyRepo)
 	addCurrency := usecases.NewAddCurrency(currencyRepo)
-	transferBetweenAccounts := usecases.NewTransferBetweenAccounts(movementRepo, accountRepo, settingsRepo)
+	transferBetweenAccounts := usecases.NewTransferBetweenAccounts(movementRepo, accountRepo, planRepo, settingsRepo)
 	cancelTransfer := usecases.NewCancelTransfer(movementRepo, syncService)
 	setExchangeRate := usecases.NewSetExchangeRate(exchangeRateRepo, currencyRepo)
 	listExchangeRates := usecases.NewListExchangeRates(exchangeRateRepo)
@@ -166,6 +169,10 @@ func main() {
 	setLocalArchiveSetting := usecases.NewSetLocalArchiveSetting(localArchiveRepo)
 	exportArchive := usecases.NewExportArchive(accountRepo, movementRepo, purchaseRepo)
 	importArchive := usecases.NewImportArchive(accountRepo, movementRepo, purchaseRepo)
+	createPlan := usecases.NewCreatePlan(planRepo, accountRepo)
+	listPlans := usecases.NewListPlans(planRepo, movementRepo)
+	getPlan := usecases.NewGetPlan(planRepo, movementRepo)
+	updatePlan := usecases.NewUpdatePlan(planRepo)
 	ensureUser := usecases.NewEnsureUser(userRepo)
 	getUser := usecases.NewGetUser(userRepo)
 	getSettings := usecases.NewGetUserSettings(settingsRepo)
@@ -189,6 +196,7 @@ func main() {
 	transferHandler := handlers.NewTransferHandler(transferBetweenAccounts, cancelTransfer, log)
 	exchangeRateHandler := handlers.NewExchangeRateHandler(setExchangeRate, listExchangeRates, deleteExchangeRate, log)
 	archiveHandler := handlers.NewArchiveHandler(getLocalArchiveSetting, setLocalArchiveSetting, exportArchive, importArchive, log)
+	planHandler := handlers.NewPlanHandler(createPlan, listPlans, getPlan, updatePlan, log)
 	settingsHandler := handlers.NewSettingsHandler(getSettings, updateSettings, log)
 	userHandler := handlers.NewUserHandler(getUser, log)
 	configHandler := handlers.NewConfigHandler(standalone, authEnabled, log)
@@ -215,7 +223,7 @@ func main() {
 		log.Info("auth: validating Authorization bearer tokens against OIDC issuer %s (audience %q)", oidcIssuerURL, oidcAudience)
 	}
 
-	router := api.NewRouter(movementHandler, accountHandler, currencyHandler, transferHandler, exchangeRateHandler, archiveHandler, settingsHandler, userHandler, configHandler, authMiddleware, corsAllowedOrigin)
+	router := api.NewRouter(movementHandler, accountHandler, currencyHandler, transferHandler, exchangeRateHandler, archiveHandler, planHandler, settingsHandler, userHandler, configHandler, authMiddleware, corsAllowedOrigin)
 
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
@@ -227,7 +235,7 @@ func main() {
 	}
 	addr := ":" + port
 	log.Info("financial-tracker API listening on %s (db driver %s at %s, syncing to ledger-service at %s every %s)", addr, dbDriver, dbDescription, ledgerServiceURL, syncInterval)
-	log.Info("endpoints: GET /config | GET|PATCH /settings | POST /movements | GET /movements | PATCH /movements/{id} | POST /movements/{id}/cancel | POST /credit-card-purchases/{id}/cancel | POST /sync | GET /categories | GET /cashflow | GET|POST /accounts | POST /accounts/{id}/balance | GET|POST /currencies | POST /transfers | POST /transfers/{id}/cancel | GET|POST /exchange-rates | DELETE /exchange-rates/{id} | GET|PUT /settings/local-archive | GET /export/archive | POST /import/archive | GET /me")
+	log.Info("endpoints: GET /config | GET|PATCH /settings | POST /movements | GET /movements | PATCH /movements/{id} | POST /movements/{id}/cancel | POST /credit-card-purchases/{id}/cancel | POST /sync | GET /categories | GET /cashflow | GET|POST /accounts | POST /accounts/{id}/balance | GET|POST /currencies | POST /transfers | POST /transfers/{id}/cancel | GET|POST /exchange-rates | DELETE /exchange-rates/{id} | GET|PUT /settings/local-archive | GET /export/archive | POST /import/archive | GET|POST /plans | GET|PATCH /plans/{id} | GET /me")
 
 	if err := http.ListenAndServe(addr, router); err != nil {
 		log.Error("server failed: %v", err)

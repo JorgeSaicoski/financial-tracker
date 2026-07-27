@@ -185,6 +185,40 @@ tier to sell).
   ```
   A real admin surface is icebox (see `financial-tracker-plan.md`).
 
+## Financial plans (`plans` table, BACK-10)
+
+A plan is a monthly-figure goal with a pace checker computed on every read
+— it never changes `status`/numbers as a side effect of a `GET`. Two
+types, always in the plan's own `currency` (never summed across
+currencies):
+
+- **`stress_test`** — a hypothetical recurring cost (e.g. "what if I had a
+  $500/mo car payment") that never posts a real movement. Its progress is
+  the real month-to-date income minus expense (reusing `GET /cashflow`'s
+  own exclusions: voided movements and the `transfer` category) minus
+  `monthly_target_amount` — a real surplus/deficit against a hypothetical
+  cost. v1's month-end projection linearly extrapolates month-to-date
+  expenses; income is never extrapolated (it's lumpy — salary lands on
+  one day), so an early-month check can flag "behind" before payday. That
+  is accepted v1 behavior, not a bug.
+- **`savings`** — a real target amount by a real deadline, funded by real
+  movements tagged with the new nullable `movements.plan_id` column.
+  Progress is the literal `SUM(amount)` of non-cancelled tagged
+  movements. The recommended funding shape is a `POST /transfers` call
+  with `plan_id` set — the destination leg gets tagged, category stays
+  `transfer`, so the contribution never inflates `GET /cashflow`'s
+  income/expense totals. A plain tagged movement (money arriving from
+  outside, not a transfer) is also accepted, and — being real new money
+  in a category other than `transfer` — does count in cashflow, same as
+  any other income.
+
+The pace checker (`GET /plans/{id}`'s `on_track` + `projected_shortfall`)
+compares linear expected pace (day 20 of a 30-day month → 66% of the
+month's figure) against actual progress. Moving a plan out of `active`
+(`completed`/`abandoned`) is always an explicit `PATCH /plans/{id}`, never
+implicit. Frontend is out of scope for this ticket — a plans screen is
+icebox.
+
 ## API
 
 | Method | Path | Purpose |
@@ -192,10 +226,10 @@ tier to sell).
 | `GET` | `/config` | Unauthenticated. `{standalone, auth_enabled}` — what the frontend reads before deciding whether to show the login guard. |
 | `GET` | `/settings?user_id=` | The caller's own settings — entitlement (operator-controlled, read-only here) and preference. Defaults to all-`true` if the user has never touched them (no row needed). |
 | `PATCH` | `/settings?user_id=` | Body: `{ledger_sync_enabled}` — the only field a user may change. Any attempt to set `ledger_sync_entitled`/`cloud_storage_entitled` (or any other key) is rejected with 400. Re-enabling reclassifies movements created while sync was off (`sync_status: "local"`) back to `"pending"`, so the next `/sync` pass pushes exactly that backlog. |
-| `POST` | `/movements` | Create a movement. Body: `{amount, currency?, user_id?, description?, category?, payment_method?, installments?, account_id?}`. With `payment_method="credit_card"` and `installments > 1`, splits into monthly installments and returns the purchase + its movements (no `account_id` allowed in that case). An `account_id`'s currency must match the movement's. |
+| `POST` | `/movements` | Create a movement. Body: `{amount, currency?, user_id?, description?, category?, payment_method?, installments?, account_id?, plan_id?}`. With `payment_method="credit_card"` and `installments > 1`, splits into monthly installments and returns the purchase + its movements (no `account_id` allowed in that case). An `account_id`'s currency must match the movement's. `plan_id` (BACK-10) tags the movement as funding a savings plan — the plan must exist, belong to the caller, be `active`, be a savings (not stress-test) plan, and share the movement's currency, or the request is rejected (400). |
 | `GET` | `/movements?id={uuid}` | Fetch one movement. |
 | `GET` | `/movements?user_id={uuid}&currency=&from=&to=&limit=&offset=` | List movements + computed `balance` (voided rows excluded from the balance). `from`/`to` take `YYYY-MM-DD` or RFC 3339 (`to` is inclusive when date-only). Each row carries `status` and `sync_status`. |
-| `PATCH` | `/movements/{id}` | Edit one movement. Body: any subset of `{description, category, payment_method, account_id, amount, currency, timestamp}`. `description`/`category`/`payment_method`/`account_id` are local-only metadata and always editable (`account_id: ""` clears it). `amount`/`currency`/`timestamp` edit in place if the movement hasn't synced yet; on an already-synced movement they instead produce a reversal + a replacement (both returned, original left untouched). Rejects voided/reversed movements, reversals themselves, and financial edits on a single credit-card installment or transfer leg (409 in all cases). |
+| `PATCH` | `/movements/{id}` | Edit one movement. Body: any subset of `{description, category, payment_method, account_id, plan_id, amount, currency, timestamp}`. `description`/`category`/`payment_method`/`account_id`/`plan_id` are local-only metadata and always editable (`account_id: ""`/`plan_id: ""` clears it; `plan_id` set to a non-empty value is validated the same way as on create). `amount`/`currency`/`timestamp` edit in place if the movement hasn't synced yet; on an already-synced movement they instead produce a reversal + a replacement (both returned, original left untouched). Rejects voided/reversed movements, reversals themselves, and financial edits on a single credit-card installment or transfer leg (409 in all cases). |
 | `POST` | `/movements/{id}/cancel` | Cancel one movement (void or reversal — see semantics above). Returns the movement and, if created, the reversal. |
 | `POST` | `/credit-card-purchases/{id}/cancel` | Cancel a whole installment purchase. Returns which installments were voided vs reversed. |
 | `POST` | `/sync` | Run one sync pass against ledger-service now. Returns `{synced, failed}`. |
@@ -206,7 +240,7 @@ tier to sell).
 | `POST` | `/accounts/{id}/balance` | Report the account's real current balance: `{balance}` (smallest unit). Returns the updated account view, including the newly computed `last_return` when a previous report exists. |
 | `GET` | `/currencies` | Registered currency codes. |
 | `POST` | `/currencies` | Register a code: `{code}` (2–10 lowercase alphanumerics). Idempotent; returns the updated list. |
-| `POST` | `/transfers` | Move money between two of the user's own accounts. Body: `{from_account_id, to_account_id, amount, description?, user_id?, timestamp?}` (`amount` positive). v1 requires both accounts to hold the same currency. Creates a linked debit (`-amount` on `from_account_id`) and credit (`+amount` on `to_account_id`) atomically, category `transfer`, sharing a `transfer_id`. Returns `{transfer_id, debit, credit}`. |
+| `POST` | `/transfers` | Move money between two of the user's own accounts. Body: `{from_account_id, to_account_id, amount, description?, user_id?, timestamp?, plan_id?}` (`amount` positive). v1 requires both accounts to hold the same currency. Creates a linked debit (`-amount` on `from_account_id`) and credit (`+amount` on `to_account_id`) atomically, category `transfer`, sharing a `transfer_id`. `plan_id` (BACK-10), when set, tags only the credit (destination) leg — the recommended way to fund a savings plan without inflating income/expense cashflow. Returns `{transfer_id, debit, credit}`. |
 | `POST` | `/transfers/{id}/cancel` | Cancel both legs of a transfer (`{id}` is the `transfer_id`). Each leg is voided or reversed independently based on its own `sync_status`, same as `/movements/{id}/cancel`. Returns `{debit, credit}`, each shaped like `POST /movements/{id}/cancel`'s response. |
 | `GET` | `/exchange-rates?user_id=` | The user's exchange-rate history, grouped by currency (current rate + full history, newest `effective_from` first). |
 | `POST` | `/exchange-rates` | Set/backfill a currency's rate against USD. Body: `{currency, units_per_usd, user_id?, effective_from?}` (`units_per_usd` a decimal string; `effective_from` defaults to today, normalized to midnight UTC). Posting the same `(currency, effective_from)` again replaces that row instead of duplicating it. |
@@ -215,6 +249,10 @@ tier to sell).
 | `PUT` | `/settings/local-archive` | Set the toggle: `{local_archive_enabled, user_id?}`. Independent of any cloud-storage setting — never deletes or stops writing anything server-side by itself. |
 | `GET` | `/export/archive?user_id=` | The user's full restorable state — accounts, movements, credit-card purchases — as plaintext JSON. The frontend's "Local backup" panel encrypts this client-side (AES-256-GCM, PBKDF2-SHA256-derived key) before it's ever saved to a file; this endpoint itself has no encryption of its own. |
 | `POST` | `/import/archive` | Restore a (frontend-decrypted) archive in the same shape `GET /export/archive` returns. Idempotent by row ID — a row that already exists is skipped, never overwritten; safe to import the same archive more than once. `cancels_movement_id`/`reversed_by_movement_id` are not restored (see Known limitations). Returns counts restored/skipped per collection. |
+| `POST` | `/plans` | Create a plan (BACK-10). Body: `{name, plan_type, currency, monthly_target_amount, target_amount?, account_id?, start_date?, end_date?}`. `plan_type` is `stress_test` or `savings`. A savings plan requires `target_amount` and `account_id` (the account's currency must match `currency`); a stress-test plan rejects both. `start_date` defaults to now. |
+| `GET` | `/plans` | List every plan the caller owns, each with lightweight progress: a savings plan's all-time contribution total, or a stress-test plan's current (not projected) month-to-date surplus/deficit. |
+| `GET` | `/plans/{id}` | One plan's full progress plus the pace checker computed on read: `on_track` and, for a savings plan, `projected_shortfall` (linear month-end projection vs. `monthly_target_amount`). Never changes `status` as a side effect. |
+| `PATCH` | `/plans/{id}` | Edit a plan. Body: any subset of `{name, target_amount, monthly_target_amount, end_date, status}`. `target_amount` is only editable on a savings plan. `status` (`active`/`completed`/`abandoned`) is the only way a plan leaves `active` — a `GET` never does this itself. |
 
 `amount` is an integer in the smallest currency unit (cents), negative for
 expenses, positive for income, and cannot be zero. Splitting an amount too

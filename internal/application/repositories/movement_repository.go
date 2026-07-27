@@ -36,6 +36,20 @@ type MovementRepository interface {
 	// double-count a movement stamped exactly T. Nil bounds mean open.
 	NetByAccount(ctx context.Context, accountID string, after, until *time.Time) (int64, error)
 
+	// SumByPlan sums non-voided movements tagged with planID over
+	// [from, to] (both inclusive) on their effective timestamp (BACK-10)
+	// — same exclusion rule ListMovements' own balance calculation
+	// applies (a reversed original and its reversal both stay in the sum
+	// and net to zero via their opposite signs, so neither needs special-
+	// casing here). "to" inclusive matters for the pace checker: it calls
+	// this with to=now, and a contribution recorded at that exact instant
+	// must still count toward "progress as of now" rather than being
+	// excluded by a boundary technicality. Nil bounds mean open; called
+	// with both bounds nil for a plan's all-time progress toward
+	// TargetAmount, and with [month start, now] for the pace checker's
+	// this-month figure.
+	SumByPlan(ctx context.Context, planID string, from, to *time.Time) (int64, error)
+
 	// ListPendingSync returns active movements not yet synced to
 	// ledger-service that are due (timestamp <= now) and were not
 	// attempted within retryCooldown, oldest first. A zero cooldown
@@ -55,10 +69,10 @@ type MovementRepository interface {
 	MarkLocalPending(ctx context.Context, userID string) error
 
 	// UpdateMetadata overwrites the local-only fields — description,
-	// category, payment method, account — regardless of sync status,
-	// since none of them are ever pushed to ledger-service. Category and
-	// paymentMethod arrive already validated by the usecase.
-	UpdateMetadata(ctx context.Context, id, description, category, paymentMethod string, accountID *string) error
+	// category, payment method, account, plan — regardless of sync
+	// status, since none of them are ever pushed to ledger-service.
+	// Category and paymentMethod arrive already validated by the usecase.
+	UpdateMetadata(ctx context.Context, id, description, category, paymentMethod string, accountID, planID *string) error
 	// UpdateFinancial overwrites amount/currency/timestamp in place.
 	// Callers must only use this on a movement that hasn't synced yet —
 	// once ledger-service has it, these fields are immutable there.

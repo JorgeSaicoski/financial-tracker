@@ -20,7 +20,7 @@ func TestGetCashflowExcludesTransfers(t *testing.T) {
 	income.Timestamp = now
 	movements.add(income)
 
-	if _, err := NewTransferBetweenAccounts(movements, accounts, newFakeUserSettingsRepo()).Execute(context.Background(), TransferBetweenAccountsInput{
+	if _, err := NewTransferBetweenAccounts(movements, accounts, newFakePlanRepo(), newFakeUserSettingsRepo()).Execute(context.Background(), TransferBetweenAccountsInput{
 		UserID: "u1", FromAccountID: from.ID, ToAccountID: to.ID, Amount: 300, Timestamp: now,
 	}); err != nil {
 		t.Fatal(err)

@@ -16,12 +16,13 @@ import (
 type updateMovementUseCase struct {
 	repo     repositories.MovementRepository
 	accounts repositories.AccountRepository
+	plans    repositories.PlanRepository
 	sync     services.SyncTrigger
 }
 
 // NewUpdateMovement returns interface type for dependency injection.
-func NewUpdateMovement(repo repositories.MovementRepository, accounts repositories.AccountRepository, sync services.SyncTrigger) UpdateMovementUseCase {
-	return &updateMovementUseCase{repo: repo, accounts: accounts, sync: sync}
+func NewUpdateMovement(repo repositories.MovementRepository, accounts repositories.AccountRepository, plans repositories.PlanRepository, sync services.SyncTrigger) UpdateMovementUseCase {
+	return &updateMovementUseCase{repo: repo, accounts: accounts, plans: plans, sync: sync}
 }
 
 func (uc *updateMovementUseCase) Execute(ctx context.Context, userID, id string, input UpdateMovementInput) (UpdateMovementResult, error) {
@@ -47,7 +48,7 @@ func (uc *updateMovementUseCase) Execute(ctx context.Context, userID, id string,
 	}
 
 	editsFinancial := input.Amount != nil || input.Currency != nil || input.Timestamp != nil
-	editsMetadata := input.Description != nil || input.Category != nil || input.PaymentMethod != nil || input.AccountID != nil
+	editsMetadata := input.Description != nil || input.Category != nil || input.PaymentMethod != nil || input.AccountID != nil || input.PlanID != nil
 
 	if editsFinancial && movement.CreditCardPurchaseID != nil {
 		return UpdateMovementResult{}, fmt.Errorf(
@@ -84,7 +85,19 @@ func (uc *updateMovementUseCase) Execute(ctx context.Context, userID, id string,
 		}
 	}
 
+	planIDInput := ""
+	if movement.PlanID != nil {
+		planIDInput = *movement.PlanID
+	}
+	if input.PlanID != nil {
+		planIDInput = *input.PlanID
+	}
+
 	category, paymentMethod, err := normalizeCategoryAndMethod(categoryInput, paymentMethodInput)
+	if err != nil {
+		return UpdateMovementResult{}, err
+	}
+	planID, err := resolvePlanForMovement(ctx, uc.plans, movement.UserID, planIDInput, currency)
 	if err != nil {
 		return UpdateMovementResult{}, err
 	}
@@ -110,11 +123,11 @@ func (uc *updateMovementUseCase) Execute(ctx context.Context, userID, id string,
 
 	if !editsFinancial {
 		if editsMetadata {
-			if err := uc.repo.UpdateMetadata(ctx, movement.ID, description, string(category), string(paymentMethod), accountID); err != nil {
+			if err := uc.repo.UpdateMetadata(ctx, movement.ID, description, string(category), string(paymentMethod), accountID, planID); err != nil {
 				return UpdateMovementResult{}, err
 			}
-			movementDTO.Description, movementDTO.Category, movementDTO.PaymentMethod, movementDTO.AccountID =
-				description, string(category), string(paymentMethod), accountID
+			movementDTO.Description, movementDTO.Category, movementDTO.PaymentMethod, movementDTO.AccountID, movementDTO.PlanID =
+				description, string(category), string(paymentMethod), accountID, planID
 		}
 		return UpdateMovementResult{Movement: movementDTO}, nil
 	}
@@ -127,7 +140,7 @@ func (uc *updateMovementUseCase) Execute(ctx context.Context, userID, id string,
 			return UpdateMovementResult{}, err
 		}
 		if editsMetadata {
-			if err := uc.repo.UpdateMetadata(ctx, movement.ID, description, string(category), string(paymentMethod), accountID); err != nil {
+			if err := uc.repo.UpdateMetadata(ctx, movement.ID, description, string(category), string(paymentMethod), accountID, planID); err != nil {
 				if rollbackErr := uc.repo.UpdateFinancial(ctx, movement.ID, originalAmount, originalCurrency, originalTimestamp); rollbackErr != nil {
 					return UpdateMovementResult{}, fmt.Errorf(
 						"metadata update failed after financial update and rollback also failed: metadata: %w; rollback: %v",
@@ -135,8 +148,8 @@ func (uc *updateMovementUseCase) Execute(ctx context.Context, userID, id string,
 				}
 				return UpdateMovementResult{}, err
 			}
-			movementDTO.Description, movementDTO.Category, movementDTO.PaymentMethod, movementDTO.AccountID =
-				description, string(category), string(paymentMethod), accountID
+			movementDTO.Description, movementDTO.Category, movementDTO.PaymentMethod, movementDTO.AccountID, movementDTO.PlanID =
+				description, string(category), string(paymentMethod), accountID, planID
 		}
 		movementDTO.Amount, movementDTO.Currency, movementDTO.Timestamp = amount, currency, timestamp
 		return UpdateMovementResult{Movement: movementDTO}, nil
@@ -168,6 +181,7 @@ func (uc *updateMovementUseCase) Execute(ctx context.Context, userID, id string,
 			Category:      category,
 			PaymentMethod: paymentMethod,
 			AccountID:     accountID,
+			PlanID:        planID,
 			Status:        entities.MovementStatusActive,
 			SyncStatus:    entities.SyncStatusPending,
 			Timestamp:     timestamp,

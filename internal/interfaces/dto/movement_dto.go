@@ -19,6 +19,8 @@ type CreateMovementRequest struct {
 	PaymentMethod string `json:"payment_method,omitempty"`
 	Installments  int    `json:"installments,omitempty"`
 	AccountID     string `json:"account_id,omitempty"`
+	// PlanID (BACK-10) tags this movement as funding a savings plan.
+	PlanID string `json:"plan_id,omitempty"`
 }
 
 type MovementResponse struct {
@@ -40,6 +42,7 @@ type MovementResponse struct {
 	CancelsMovementID    string `json:"cancels_movement_id,omitempty"`
 	ReversedByMovementID string `json:"reversed_by_movement_id,omitempty"`
 	TransferID           string `json:"transfer_id,omitempty"`
+	PlanID               string `json:"plan_id,omitempty"`
 }
 
 // UpdateMovementRequest is the API request body for PATCH /movements/{id}.
@@ -53,6 +56,7 @@ type UpdateMovementRequest struct {
 	Category      *string    `json:"category,omitempty"`
 	PaymentMethod *string    `json:"payment_method,omitempty"`
 	AccountID     *string    `json:"account_id,omitempty"`
+	PlanID        *string    `json:"plan_id,omitempty"`
 	Amount        *int64     `json:"amount,omitempty"`
 	Currency      *string    `json:"currency,omitempty"`
 	Timestamp     *time.Time `json:"timestamp,omitempty"`
