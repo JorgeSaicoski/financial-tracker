@@ -154,9 +154,7 @@ func (uc *getPurchasingPowerUseCase) buildCurrencyView(
 			expense := -m.Amount
 			view.TotalExpenses += expense
 
-			if avoidability := EffectiveAvoidability(m, categoriesByName); avoidability != nil {
-				view.PotentialSavings += expense * int64(*avoidability) / 100
-			}
+			view.PotentialSavings += entities.PotentialSaving(expense, EffectiveAvoidability(m, categoriesByName))
 
 			categoryKey := m.Category
 			spending, ok := spendingByCategory[categoryKey]
@@ -184,9 +182,7 @@ func (uc *getPurchasingPowerUseCase) buildCurrencyView(
 				view.IncomeUSD += usdAmount
 			} else {
 				view.TotalExpensesUSD += -usdAmount
-				if avoidability := EffectiveAvoidability(m, categoriesByName); avoidability != nil {
-					view.PotentialSavingsUSD += -usdAmount * int64(*avoidability) / 100
-				}
+				view.PotentialSavingsUSD += entities.PotentialSaving(-usdAmount, EffectiveAvoidability(m, categoriesByName))
 			}
 		}
 
