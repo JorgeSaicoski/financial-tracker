@@ -117,11 +117,13 @@ type SyncSummaryResponse struct {
 
 // CategoryResponse is one row of the caller's category registry (BACK-14).
 // AvoidabilityPercent is nil only for the two system categories
-// ("transfer", "income").
+// ("transfer", "income") — no omitempty, so that comes across as an
+// explicit JSON null a client can check for, not a missing key
+// indistinguishable from a client/server version mismatch.
 type CategoryResponse struct {
 	ID                  string `json:"id"`
 	Name                string `json:"name"`
-	AvoidabilityPercent *int   `json:"avoidability_percent,omitempty"`
+	AvoidabilityPercent *int   `json:"avoidability_percent"`
 }
 
 type CategoriesResponse struct {

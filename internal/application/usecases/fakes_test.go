@@ -354,6 +354,19 @@ func (f *fakePurchaseRepo) MarkCancelled(_ context.Context, id string) error {
 	return nil
 }
 
+func (f *fakePurchaseRepo) ListByUser(_ context.Context, userID string) ([]*dto.CreditCardPurchaseDTO, error) {
+	var out []*dto.CreditCardPurchaseDTO
+	for _, p := range f.byID {
+		if p.UserID != userID {
+			continue
+		}
+		cp := *p
+		out = append(out, &cp)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].PurchaseDate.After(out[j].PurchaseDate) })
+	return out, nil
+}
+
 type fakeSyncTrigger struct {
 	calls int
 }
@@ -498,6 +511,26 @@ func (f *fakeExchangeRateRepo) Delete(_ context.Context, userID, id string) erro
 		return apperrors.ErrNotFound
 	}
 	delete(f.byID, id)
+	return nil
+}
+
+// fakeLocalArchiveSettingsRepo is an in-memory LocalArchiveSettingsRepository.
+// A user with no entry defaults to false, matching the real SQLite/Postgres
+// implementations' "no row yet" behavior.
+type fakeLocalArchiveSettingsRepo struct {
+	enabled map[string]bool
+}
+
+func newFakeLocalArchiveSettingsRepo() *fakeLocalArchiveSettingsRepo {
+	return &fakeLocalArchiveSettingsRepo{enabled: map[string]bool{}}
+}
+
+func (f *fakeLocalArchiveSettingsRepo) IsEnabled(_ context.Context, userID string) (bool, error) {
+	return f.enabled[userID], nil
+}
+
+func (f *fakeLocalArchiveSettingsRepo) SetEnabled(_ context.Context, userID string, enabled bool) error {
+	f.enabled[userID] = enabled
 	return nil
 }
 
