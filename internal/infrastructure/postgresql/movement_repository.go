@@ -47,7 +47,7 @@ func NewMovementRepository(db *sql.DB) repositories.MovementRepository {
 const movementColumns = `id, user_id, amount, currency, description, category, payment_method,
 	credit_card_purchase_id, installment_number, status, cancels_movement_id, reversed_by_movement_id,
 	timestamp, sync_status, ledger_transaction_id, sync_attempts, last_sync_error, last_sync_attempt_at,
-	synced_at, created_at, account_id, transfer_id, avoidability_override_percent`
+	synced_at, created_at, account_id, transfer_id, avoidability_override_percent, recurring_rule_id`
 
 func (r *movementRepository) Create(ctx context.Context, movement *dto.MovementDTO) (*dto.MovementDTO, error) {
 	if movement.ID == "" {
@@ -538,7 +538,7 @@ func queryMovements(ctx context.Context, q queryer, query string, args ...any) (
 func insertMovement(ctx context.Context, ex execer, m *dto.MovementDTO) error {
 	_, err := ex.ExecContext(ctx,
 		`INSERT INTO movements (`+movementColumns+`)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)`,
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)`,
 		m.ID, m.UserID, m.Amount, m.Currency,
 		nullString(m.Description), m.Category, m.PaymentMethod,
 		strOrNil(m.CreditCardPurchaseID), intOrNil(m.InstallmentNumber),
@@ -546,7 +546,7 @@ func insertMovement(ctx context.Context, ex execer, m *dto.MovementDTO) error {
 		m.Timestamp, m.SyncStatus, strOrNil(m.LedgerTransactionID),
 		m.SyncAttempts, strOrNil(m.LastSyncError), timeOrNil(m.LastSyncAttemptAt),
 		timeOrNil(m.SyncedAt), m.CreatedAt, strOrNil(m.AccountID), strOrNil(m.TransferID),
-		intOrNil(m.AvoidabilityOverridePercent))
+		intOrNil(m.AvoidabilityOverridePercent), strOrNil(m.RecurringRuleID))
 	if err != nil {
 		return fmt.Errorf("postgresql: insert movement: %w", err)
 	}
@@ -567,6 +567,7 @@ func scanMovement(row scannable) (*dto.MovementDTO, error) {
 		description, lastSyncError          sql.NullString
 		purchaseID, cancelsID, reversedByID sql.NullString
 		ledgerTxID, accountID, transferID   sql.NullString
+		recurringRuleID                     sql.NullString
 		installmentNumber                   sql.NullInt64
 		syncAttempts                        int64
 		lastAttemptAt, syncedAt             sql.NullTime
@@ -581,7 +582,7 @@ func scanMovement(row scannable) (*dto.MovementDTO, error) {
 		&m.Timestamp, &m.SyncStatus, &ledgerTxID,
 		&syncAttempts, &lastSyncError, &lastAttemptAt,
 		&syncedAt, &m.CreatedAt, &accountID, &transferID,
-		&avoidabilityOverride)
+		&avoidabilityOverride, &recurringRuleID)
 	if err != nil {
 		return nil, err
 	}
@@ -590,6 +591,7 @@ func scanMovement(row scannable) (*dto.MovementDTO, error) {
 	m.SyncAttempts = int(syncAttempts)
 	m.AccountID = stringPtr(accountID)
 	m.TransferID = stringPtr(transferID)
+	m.RecurringRuleID = stringPtr(recurringRuleID)
 	m.CreditCardPurchaseID = stringPtr(purchaseID)
 	m.CancelsMovementID = stringPtr(cancelsID)
 	m.ReversedByMovementID = stringPtr(reversedByID)

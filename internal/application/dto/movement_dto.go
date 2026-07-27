@@ -37,6 +37,7 @@ type MovementDTO struct {
 
 	CreditCardPurchaseID *string
 	InstallmentNumber    *int // 1-based
+	RecurringRuleID      *string
 
 	Status               string
 	CancelsMovementID    *string
@@ -62,11 +63,11 @@ func MovementFromEntity(m *entities.Movement) *MovementDTO {
 		return nil
 	}
 	return &MovementDTO{
-		ID:                   m.ID,
-		UserID:               m.UserID,
-		Amount:               m.Amount,
-		Currency:             m.Currency,
-		Description:          m.Description,
+		ID:                          m.ID,
+		UserID:                      m.UserID,
+		Amount:                      m.Amount,
+		Currency:                    m.Currency,
+		Description:                 m.Description,
 		Category:                    m.Category,
 		PaymentMethod:               string(m.PaymentMethod),
 		AvoidabilityOverridePercent: m.AvoidabilityOverridePercent,
@@ -74,17 +75,18 @@ func MovementFromEntity(m *entities.Movement) *MovementDTO {
 		TransferID:                  m.TransferID,
 		CreditCardPurchaseID:        m.CreditCardPurchaseID,
 		InstallmentNumber:           m.InstallmentNumber,
+		RecurringRuleID:             m.RecurringRuleID,
 		Status:                      string(m.Status),
-		CancelsMovementID:    m.CancelsMovementID,
-		ReversedByMovementID: m.ReversedByMovementID,
-		Timestamp:            m.Timestamp,
-		SyncStatus:           string(m.SyncStatus),
-		LedgerTransactionID:  m.LedgerTransactionID,
-		SyncAttempts:         m.SyncAttempts,
-		LastSyncError:        m.LastSyncError,
-		LastSyncAttemptAt:    m.LastSyncAttemptAt,
-		SyncedAt:             m.SyncedAt,
-		CreatedAt:            m.CreatedAt,
+		CancelsMovementID:           m.CancelsMovementID,
+		ReversedByMovementID:        m.ReversedByMovementID,
+		Timestamp:                   m.Timestamp,
+		SyncStatus:                  string(m.SyncStatus),
+		LedgerTransactionID:         m.LedgerTransactionID,
+		SyncAttempts:                m.SyncAttempts,
+		LastSyncError:               m.LastSyncError,
+		LastSyncAttemptAt:           m.LastSyncAttemptAt,
+		SyncedAt:                    m.SyncedAt,
+		CreatedAt:                   m.CreatedAt,
 	}
 }
 
@@ -117,16 +119,17 @@ func (m *MovementDTO) ToEntity() *entities.Movement {
 		TransferID:                  m.TransferID,
 		CreditCardPurchaseID:        m.CreditCardPurchaseID,
 		InstallmentNumber:           m.InstallmentNumber,
+		RecurringRuleID:             m.RecurringRuleID,
 		Status:                      entities.MovementStatus(m.Status),
-		CancelsMovementID:    m.CancelsMovementID,
-		ReversedByMovementID: m.ReversedByMovementID,
-		Timestamp:            m.Timestamp,
-		SyncStatus:           entities.SyncStatus(m.SyncStatus),
-		LedgerTransactionID:  m.LedgerTransactionID,
-		SyncAttempts:         m.SyncAttempts,
-		LastSyncError:        m.LastSyncError,
-		LastSyncAttemptAt:    m.LastSyncAttemptAt,
-		SyncedAt:             m.SyncedAt,
-		CreatedAt:            m.CreatedAt,
+		CancelsMovementID:           m.CancelsMovementID,
+		ReversedByMovementID:        m.ReversedByMovementID,
+		Timestamp:                   m.Timestamp,
+		SyncStatus:                  entities.SyncStatus(m.SyncStatus),
+		LedgerTransactionID:         m.LedgerTransactionID,
+		SyncAttempts:                m.SyncAttempts,
+		LastSyncError:               m.LastSyncError,
+		LastSyncAttemptAt:           m.LastSyncAttemptAt,
+		SyncedAt:                    m.SyncedAt,
+		CreatedAt:                   m.CreatedAt,
 	}
 }
