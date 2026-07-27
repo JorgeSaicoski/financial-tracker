@@ -36,10 +36,28 @@ type CategoryRepository interface {
 	// always-overwrite convention as MovementRepository.UpdateMetadata;
 	// the usecase layer resolves a partial PATCH into the full merged
 	// values before calling this. apperrors.ErrNotFound if it doesn't
-	// exist or isn't owned by userID.
+	// exist or isn't owned by userID. Never touches IsDefault — see
+	// SetDefault.
 	Update(ctx context.Context, userID, id, name string, avoidabilityPercent *int) error
-	// Delete removes a category owned by userID. apperrors.ErrNotFound if
-	// it doesn't exist or isn't owned by userID. Deleting one still
-	// referenced by movements is allowed — it's a label, not an FK.
-	Delete(ctx context.Context, userID, id string) error
+	// HasDefault reports whether userID already has a category flagged
+	// IsDefault — used by ensureDefaultCategory to seed one exactly once
+	// per user, the same lazy, absence-safe pattern EnsureByName gives
+	// the system categories.
+	HasDefault(ctx context.Context, userID string) (bool, error)
+	// SetDefault atomically clears IsDefault on whatever category
+	// currently carries it for userID (if any) and sets it on id — the
+	// partial unique index on (user_id) WHERE is_default backs this, so
+	// even a racing pair of calls can't leave two categories flagged
+	// default. apperrors.ErrNotFound if id doesn't exist or isn't owned
+	// by userID.
+	SetDefault(ctx context.Context, userID, id string) error
+	// DeleteAndReassign atomically reassigns every movement and
+	// credit-card purchase referencing categoryID to defaultCategoryID,
+	// then deletes categoryID — the id/deleteCategoryUseCase's answer to
+	// what "deleting one still referenced by movements" now means with a
+	// real category_id foreign key (BACK-14 follow-up); the caller
+	// (deleteCategoryUseCase) has already verified categoryID isn't
+	// itself the default. apperrors.ErrNotFound if categoryID doesn't
+	// exist or isn't owned by userID.
+	DeleteAndReassign(ctx context.Context, userID, categoryID, defaultCategoryID string) error
 }

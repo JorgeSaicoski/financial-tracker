@@ -756,7 +756,36 @@ func (f *fakeCategoryRepo) Update(_ context.Context, userID, id, name string, av
 	return nil
 }
 
-func (f *fakeCategoryRepo) Delete(_ context.Context, userID, id string) error {
+func (f *fakeCategoryRepo) HasDefault(_ context.Context, userID string) (bool, error) {
+	for _, c := range f.byID {
+		if c.UserID == userID && c.IsDefault {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (f *fakeCategoryRepo) SetDefault(_ context.Context, userID, id string) error {
+	target, ok := f.byID[id]
+	if !ok || target.UserID != userID {
+		return apperrors.ErrNotFound
+	}
+	for _, c := range f.byID {
+		if c.UserID == userID {
+			c.IsDefault = false
+		}
+	}
+	target.IsDefault = true
+	return nil
+}
+
+// DeleteAndReassign doesn't actually move fakeMovementRepo/
+// fakeCreditCardPurchaseRepo rows onto defaultID — the fakes don't share
+// state across each other the way the real repositories share one
+// database, and no usecase-level test here asserts on post-delete
+// movement category names. That reassignment is exercised for real by
+// the live-DB repository tests instead.
+func (f *fakeCategoryRepo) DeleteAndReassign(_ context.Context, userID, id, defaultID string) error {
 	c, ok := f.byID[id]
 	if !ok || c.UserID != userID {
 		return apperrors.ErrNotFound

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/JorgeSaicoski/financial-tracker/internal/application/dto"
 	apperrors "github.com/JorgeSaicoski/financial-tracker/internal/pkg/errors"
@@ -177,17 +178,21 @@ func TestCategoryUpdateNotFound(t *testing.T) {
 	}
 }
 
-func TestCategoryDeleteRemovesRow(t *testing.T) {
+func TestCategoryDeleteAndReassignRemovesRow(t *testing.T) {
 	repo := NewCategoryRepository(openTestDB(t))
 	ctx := context.Background()
 	userID := "u1"
 
+	def, err := repo.Create(ctx, dtoCategory(userID, "other", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
 	created, err := repo.Create(ctx, dtoCategory(userID, "food", nil))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if err := repo.Delete(ctx, userID, created.ID); err != nil {
+	if err := repo.DeleteAndReassign(ctx, userID, created.ID, def.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := repo.GetByID(ctx, userID, created.ID); !errors.Is(err, apperrors.ErrNotFound) {
@@ -195,12 +200,74 @@ func TestCategoryDeleteRemovesRow(t *testing.T) {
 	}
 }
 
-func TestCategoryDeleteNotFound(t *testing.T) {
+func TestCategoryDeleteAndReassignNotFound(t *testing.T) {
 	repo := NewCategoryRepository(openTestDB(t))
 	ctx := context.Background()
 
-	err := repo.Delete(ctx, "u1", "missing-id")
-	if !errors.Is(err, apperrors.ErrNotFound) {
+	def, err := repo.Create(ctx, dtoCategory("u1", "other", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := repo.DeleteAndReassign(ctx, "u1", "missing-id", def.ID); !errors.Is(err, apperrors.ErrNotFound) {
 		t.Errorf("want ErrNotFound, got %v", err)
+	}
+}
+
+// TestCategoryDeleteAndReassignMovesMovementsAndPurchases exercises the
+// actual reassignment: movements and credit-card purchases pointing at
+// the deleted category must land on the default instead of getting
+// orphaned — the whole reason DeleteAndReassign exists over a plain
+// Delete now that category_id is a real foreign key (BACK-14 follow-up).
+func TestCategoryDeleteAndReassignMovesMovementsAndPurchases(t *testing.T) {
+	db := openTestDB(t)
+	categories := NewCategoryRepository(db)
+	movements := NewMovementRepository(db)
+	purchases := NewCreditCardPurchaseRepository(db)
+	ctx := context.Background()
+	userID := "u1"
+	now := time.Now().UTC()
+
+	def, err := categories.Create(ctx, dtoCategory(userID, "other", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	doomed, err := categories.Create(ctx, dtoCategory(userID, "dining", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := movements.Create(ctx, &dto.MovementDTO{
+		UserID: userID, Amount: -500, Currency: "usd", Category: "dining", PaymentMethod: "other",
+		Status: "active", SyncStatus: "pending", Timestamp: now, CreatedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, _, err := purchases.CreateWithInstallments(ctx, &dto.CreditCardPurchaseDTO{
+		UserID: userID, Category: "dining", TotalAmount: -1000, Currency: "usd",
+		InstallmentCount: 1, PurchaseDate: now, Status: "active", CreatedAt: now,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := categories.DeleteAndReassign(ctx, userID, doomed.ID, def.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	gotMovement, err := movements.GetByID(ctx, m.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotMovement.Category != "other" {
+		t.Errorf("movement category = %q, want reassigned to %q", gotMovement.Category, "other")
+	}
+	gotPurchase, err := purchases.GetByID(ctx, p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPurchase.Category != "other" {
+		t.Errorf("purchase category = %q, want reassigned to %q", gotPurchase.Category, "other")
 	}
 }

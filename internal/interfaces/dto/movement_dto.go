@@ -125,6 +125,10 @@ type CategoryResponse struct {
 	ID                  string `json:"id"`
 	Name                string `json:"name"`
 	AvoidabilityPercent *int   `json:"avoidability_percent"`
+	// IsDefault (BACK-14 follow-up) marks the one category per user that
+	// movements/purchases get reassigned to when their own category is
+	// deleted.
+	IsDefault bool `json:"is_default"`
 }
 
 type CategoriesResponse struct {

@@ -33,7 +33,7 @@ func preflight(ctx context.Context, dst *sql.DB) error {
 	// It's a soft, idempotent registry (ON CONFLICT DO NOTHING both in
 	// the migration and in copyCurrencies below), not ledger data, so
 	// pre-existing rows there don't indicate a prior migration.
-	tables := []string{"accounts", "account_snapshots", "credit_card_purchases", "movements", "exchange_rates"}
+	tables := []string{"accounts", "account_snapshots", "categories", "credit_card_purchases", "movements", "exchange_rates"}
 	var nonEmpty []string
 	for _, t := range tables {
 		var n int
@@ -72,6 +72,7 @@ func run(ctx context.Context, src, dst *sql.DB, force bool) ([]tableCount, error
 		{"currencies", copyCurrencies},
 		{"accounts", copyAccounts},
 		{"account_snapshots", copyAccountSnapshots},
+		{"categories", copyCategories},
 		{"credit_card_purchases", copyCreditCardPurchases},
 		{"movements", copyMovements},
 		{"exchange_rates", copyExchangeRates},
@@ -208,6 +209,52 @@ func copyCurrencies(ctx context.Context, src *sql.DB, tx *sql.Tx) (int, int, err
 	return len(all), written, nil
 }
 
+// copyCategories preserves the source's category ids exactly (not just
+// names) — movements/credit_card_purchases now reference categories by
+// id (BACK-14 follow-up: category_id is a real foreign key), so this
+// must run before copyCreditCardPurchases/copyMovements, and their own
+// category_id values carry across unchanged rather than needing any
+// name-based re-resolution.
+func copyCategories(ctx context.Context, src *sql.DB, tx *sql.Tx) (int, int, error) {
+	rows, err := src.QueryContext(ctx, `SELECT id, user_id, name, avoidability_percent, is_default, created_at FROM categories`)
+	if err != nil {
+		return 0, 0, fmt.Errorf("read: %w", err)
+	}
+	defer rows.Close()
+
+	var all []*dto.CategoryDTO
+	for rows.Next() {
+		c := &dto.CategoryDTO{}
+		var avoidabilityPercent sql.NullInt64
+		var createdAt string
+		if err := rows.Scan(&c.ID, &c.UserID, &c.Name, &avoidabilityPercent, &c.IsDefault, &createdAt); err != nil {
+			return 0, 0, fmt.Errorf("scan: %w", err)
+		}
+		if avoidabilityPercent.Valid {
+			n := int(avoidabilityPercent.Int64)
+			c.AvoidabilityPercent = &n
+		}
+		if c.CreatedAt, err = parseTimestamp(createdAt); err != nil {
+			return 0, 0, fmt.Errorf("parse created_at for %s: %w", c.ID, err)
+		}
+		all = append(all, c)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, 0, err
+	}
+
+	written := 0
+	for _, c := range all {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO categories (id, user_id, name, avoidability_percent, is_default, created_at) VALUES ($1, $2, $3, $4, $5, $6)`,
+			c.ID, c.UserID, c.Name, intOrNil(c.AvoidabilityPercent), c.IsDefault, c.CreatedAt); err != nil {
+			return len(all), written, fmt.Errorf("insert %s: %w", c.ID, err)
+		}
+		written++
+	}
+	return len(all), written, nil
+}
+
 func copyAccounts(ctx context.Context, src *sql.DB, tx *sql.Tx) (int, int, error) {
 	rows, err := src.QueryContext(ctx, `SELECT id, user_id, name, type, currency, created_at FROM accounts`)
 	if err != nil {
@@ -281,22 +328,33 @@ func copyAccountSnapshots(ctx context.Context, src *sql.DB, tx *sql.Tx) (int, in
 	return len(all), written, nil
 }
 
+// creditCardPurchaseRow mirrors dto.CreditCardPurchaseDTO but carries a
+// raw category_id (BACK-14 follow-up) instead of a resolved name — this
+// tool preserves the source's category ids exactly (copyCategories runs
+// first), it doesn't re-resolve by name the way the application layer's
+// resolveCategory does.
+type creditCardPurchaseRow struct {
+	dto.CreditCardPurchaseDTO
+	CategoryID *string
+}
+
 func copyCreditCardPurchases(ctx context.Context, src *sql.DB, tx *sql.Tx) (int, int, error) {
-	rows, err := src.QueryContext(ctx, `SELECT id, user_id, description, category, total_amount, currency, installment_count, purchase_date, status, created_at FROM credit_card_purchases`)
+	rows, err := src.QueryContext(ctx, `SELECT id, user_id, description, category_id, total_amount, currency, installment_count, purchase_date, status, created_at FROM credit_card_purchases`)
 	if err != nil {
 		return 0, 0, fmt.Errorf("read: %w", err)
 	}
 	defer rows.Close()
 
-	var all []*dto.CreditCardPurchaseDTO
+	var all []*creditCardPurchaseRow
 	for rows.Next() {
-		p := &dto.CreditCardPurchaseDTO{}
-		var description sql.NullString
+		p := &creditCardPurchaseRow{}
+		var description, categoryID sql.NullString
 		var purchaseDate, createdAt string
-		if err := rows.Scan(&p.ID, &p.UserID, &description, &p.Category, &p.TotalAmount, &p.Currency, &p.InstallmentCount, &purchaseDate, &p.Status, &createdAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.UserID, &description, &categoryID, &p.TotalAmount, &p.Currency, &p.InstallmentCount, &purchaseDate, &p.Status, &createdAt); err != nil {
 			return 0, 0, fmt.Errorf("scan: %w", err)
 		}
 		p.Description = description.String
+		p.CategoryID = nullableString(categoryID)
 		if p.PurchaseDate, err = parseTimestamp(purchaseDate); err != nil {
 			return 0, 0, fmt.Errorf("parse purchase_date for %s: %w", p.ID, err)
 		}
@@ -312,9 +370,9 @@ func copyCreditCardPurchases(ctx context.Context, src *sql.DB, tx *sql.Tx) (int,
 	written := 0
 	for _, p := range all {
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO credit_card_purchases (id, user_id, description, category, total_amount, currency, installment_count, purchase_date, status, created_at)
+			`INSERT INTO credit_card_purchases (id, user_id, description, category_id, total_amount, currency, installment_count, purchase_date, status, created_at)
 			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-			p.ID, p.UserID, nullString(p.Description), p.Category, p.TotalAmount, p.Currency, p.InstallmentCount, p.PurchaseDate, p.Status, p.CreatedAt); err != nil {
+			p.ID, p.UserID, nullString(p.Description), strOrNil(p.CategoryID), p.TotalAmount, p.Currency, p.InstallmentCount, p.PurchaseDate, p.Status, p.CreatedAt); err != nil {
 			return len(all), written, fmt.Errorf("insert %s: %w", p.ID, err)
 		}
 		written++
@@ -369,9 +427,19 @@ type movementSelfRef struct {
 	reversedByMovementID *string
 }
 
+// movementRow mirrors dto.MovementDTO but carries a raw category_id
+// (BACK-14 follow-up) instead of a resolved name — this tool preserves
+// the source's category ids exactly (copyCategories runs first), it
+// doesn't re-resolve by name the way the application layer's
+// resolveCategory does.
+type movementRow struct {
+	dto.MovementDTO
+	CategoryID *string
+}
+
 func copyMovements(ctx context.Context, src *sql.DB, tx *sql.Tx) (int, int, error) {
 	rows, err := src.QueryContext(ctx, `
-		SELECT id, user_id, amount, currency, description, category, payment_method,
+		SELECT id, user_id, amount, currency, description, category_id, payment_method,
 		       credit_card_purchase_id, installment_number, status,
 		       cancels_movement_id, reversed_by_movement_id, timestamp,
 		       sync_status, ledger_transaction_id, sync_attempts, last_sync_error,
@@ -382,11 +450,11 @@ func copyMovements(ctx context.Context, src *sql.DB, tx *sql.Tx) (int, int, erro
 	}
 	defer rows.Close()
 
-	var all []*dto.MovementDTO
+	var all []*movementRow
 	var selfRefs []movementSelfRef
 	for rows.Next() {
-		m := &dto.MovementDTO{}
-		var description sql.NullString
+		m := &movementRow{}
+		var description, categoryID sql.NullString
 		var creditCardPurchaseID, accountID, transferID sql.NullString
 		var installmentNumber sql.NullInt64
 		var cancelsMovementID, reversedByMovementID sql.NullString
@@ -396,7 +464,7 @@ func copyMovements(ctx context.Context, src *sql.DB, tx *sql.Tx) (int, int, erro
 		var createdAt string
 
 		if err := rows.Scan(
-			&m.ID, &m.UserID, &m.Amount, &m.Currency, &description, &m.Category, &m.PaymentMethod,
+			&m.ID, &m.UserID, &m.Amount, &m.Currency, &description, &categoryID, &m.PaymentMethod,
 			&creditCardPurchaseID, &installmentNumber, &m.Status,
 			&cancelsMovementID, &reversedByMovementID, &timestamp,
 			&m.SyncStatus, &ledgerTransactionID, &m.SyncAttempts, &lastSyncError,
@@ -406,6 +474,7 @@ func copyMovements(ctx context.Context, src *sql.DB, tx *sql.Tx) (int, int, erro
 		}
 
 		m.Description = description.String
+		m.CategoryID = nullableString(categoryID)
 		m.CreditCardPurchaseID = nullableString(creditCardPurchaseID)
 		m.InstallmentNumber = nullableInt(installmentNumber)
 		m.AccountID = nullableString(accountID)
@@ -445,7 +514,7 @@ func copyMovements(ctx context.Context, src *sql.DB, tx *sql.Tx) (int, int, erro
 	for _, m := range all {
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO movements (
-				id, user_id, amount, currency, description, category, payment_method,
+				id, user_id, amount, currency, description, category_id, payment_method,
 				credit_card_purchase_id, installment_number, status,
 				cancels_movement_id, reversed_by_movement_id, timestamp,
 				sync_status, ledger_transaction_id, sync_attempts, last_sync_error,
@@ -457,7 +526,7 @@ func copyMovements(ctx context.Context, src *sql.DB, tx *sql.Tx) (int, int, erro
 				$12, $13, $14, $15,
 				$16, $17, $18, $19, $20
 			)`,
-			m.ID, m.UserID, m.Amount, m.Currency, nullString(m.Description), m.Category, m.PaymentMethod,
+			m.ID, m.UserID, m.Amount, m.Currency, nullString(m.Description), strOrNil(m.CategoryID), m.PaymentMethod,
 			strOrNil(m.CreditCardPurchaseID), intOrNil(m.InstallmentNumber), m.Status,
 			m.Timestamp,
 			m.SyncStatus, strOrNil(m.LedgerTransactionID), m.SyncAttempts, strOrNil(m.LastSyncError),

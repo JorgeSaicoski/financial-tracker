@@ -13,5 +13,10 @@ type CategoryDTO struct {
 	UserID              string
 	Name                string
 	AvoidabilityPercent *int
-	CreatedAt           time.Time
+	// IsDefault (BACK-14 follow-up) marks the one category per user that
+	// movements/purchases get reassigned to when their own category is
+	// deleted — exactly one per user, enforced by a partial unique index
+	// (see migrations/014_movement_category_fk.sql).
+	IsDefault bool
+	CreatedAt time.Time
 }

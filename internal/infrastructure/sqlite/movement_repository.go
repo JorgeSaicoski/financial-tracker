@@ -29,7 +29,7 @@ func excludedUserIDsClause(excludedUserIDs []string) (string, []any) {
 		placeholders[i] = "?"
 		args[i] = uid
 	}
-	return " AND user_id NOT IN (" + strings.Join(placeholders, ", ") + ")", args
+	return " AND movements.user_id NOT IN (" + strings.Join(placeholders, ", ") + ")", args
 }
 
 type movementRepository struct {
@@ -42,10 +42,32 @@ func NewMovementRepository(db *sql.DB) repositories.MovementRepository {
 	return &movementRepository{db: db}
 }
 
-const movementColumns = `id, user_id, amount, currency, description, category, payment_method,
+// movementInsertColumns is the column list an INSERT into movements
+// targets — category_id (BACK-14 follow-up), not category: the DTO's
+// Category name is resolved to an id at write time (see
+// resolveCategoryID) rather than stored directly.
+const movementInsertColumns = `id, user_id, amount, currency, description, category_id, payment_method,
 	credit_card_purchase_id, installment_number, status, cancels_movement_id, reversed_by_movement_id,
 	timestamp, sync_status, ledger_transaction_id, sync_attempts, last_sync_error, last_sync_attempt_at,
 	synced_at, created_at, account_id, transfer_id, avoidability_override_percent, recurring_rule_id`
+
+// movementSelectColumns is what every read query selects — a LEFT JOIN
+// against categories resolves category_id back to a name (COALESCE to
+// "" when NULL, matching the old column's always-a-string contract), so
+// dto.MovementDTO.Category keeps behaving exactly as it did when
+// category was a plain string column. Every column is qualified with
+// "movements." since categories also has id/user_id/created_at and an
+// unqualified reference would be ambiguous once joined.
+const movementSelectColumns = `movements.id, movements.user_id, movements.amount, movements.currency, movements.description,
+	COALESCE(categories.name, '') AS category, movements.payment_method,
+	movements.credit_card_purchase_id, movements.installment_number, movements.status,
+	movements.cancels_movement_id, movements.reversed_by_movement_id, movements.timestamp,
+	movements.sync_status, movements.ledger_transaction_id, movements.sync_attempts,
+	movements.last_sync_error, movements.last_sync_attempt_at, movements.synced_at,
+	movements.created_at, movements.account_id, movements.transfer_id,
+	movements.avoidability_override_percent, movements.recurring_rule_id`
+
+const movementFromClause = `movements LEFT JOIN categories ON movements.category_id = categories.id`
 
 func (r *movementRepository) Create(ctx context.Context, movement *dto.MovementDTO) (*dto.MovementDTO, error) {
 	if movement.ID == "" {
@@ -80,7 +102,8 @@ func (r *movementRepository) CreateBatch(ctx context.Context, movements []*dto.M
 }
 
 func (r *movementRepository) GetByID(ctx context.Context, movementID string) (*dto.MovementDTO, error) {
-	row := r.db.QueryRowContext(ctx, `SELECT `+movementColumns+` FROM movements WHERE id = ?`, movementID)
+	row := r.db.QueryRowContext(ctx,
+		`SELECT `+movementSelectColumns+` FROM `+movementFromClause+` WHERE movements.id = ?`, movementID)
 	m, err := scanMovement(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, apperrors.ErrNotFound
@@ -89,21 +112,21 @@ func (r *movementRepository) GetByID(ctx context.Context, movementID string) (*d
 }
 
 func (r *movementRepository) ListByUser(ctx context.Context, userID string, currency *string, from, to *time.Time, limit, offset int) ([]*dto.MovementDTO, error) {
-	query := `SELECT ` + movementColumns + ` FROM movements WHERE user_id = ?`
+	query := `SELECT ` + movementSelectColumns + ` FROM ` + movementFromClause + ` WHERE movements.user_id = ?`
 	args := []any{userID}
 	if currency != nil {
-		query += ` AND currency = ?`
+		query += ` AND movements.currency = ?`
 		args = append(args, *currency)
 	}
 	if from != nil {
-		query += ` AND timestamp >= ?`
+		query += ` AND movements.timestamp >= ?`
 		args = append(args, formatTime(*from))
 	}
 	if to != nil {
-		query += ` AND timestamp < ?`
+		query += ` AND movements.timestamp < ?`
 		args = append(args, formatTime(*to))
 	}
-	query += ` ORDER BY timestamp DESC, created_at DESC LIMIT ? OFFSET ?`
+	query += ` ORDER BY movements.timestamp DESC, movements.created_at DESC LIMIT ? OFFSET ?`
 	if limit <= 0 {
 		limit = -1 // SQLite: no limit
 	}
@@ -114,13 +137,13 @@ func (r *movementRepository) ListByUser(ctx context.Context, userID string, curr
 
 func (r *movementRepository) ListByCreditCardPurchase(ctx context.Context, purchaseID string) ([]*dto.MovementDTO, error) {
 	return r.queryMovements(ctx,
-		`SELECT `+movementColumns+` FROM movements WHERE credit_card_purchase_id = ? ORDER BY installment_number ASC`,
+		`SELECT `+movementSelectColumns+` FROM `+movementFromClause+` WHERE movements.credit_card_purchase_id = ? ORDER BY movements.installment_number ASC`,
 		purchaseID)
 }
 
 func (r *movementRepository) ListByTransferID(ctx context.Context, transferID string) ([]*dto.MovementDTO, error) {
 	return r.queryMovements(ctx,
-		`SELECT `+movementColumns+` FROM movements WHERE transfer_id = ? ORDER BY amount ASC`,
+		`SELECT `+movementSelectColumns+` FROM `+movementFromClause+` WHERE movements.transfer_id = ? ORDER BY movements.amount ASC`,
 		transferID)
 }
 
@@ -148,11 +171,11 @@ func (r *movementRepository) ListPendingSync(ctx context.Context, now time.Time,
 	args := []any{formatTime(now), formatTime(now.Add(-retryCooldown))}
 	args = append(args, excludeArgs...)
 	return r.queryMovements(ctx,
-		`SELECT `+movementColumns+` FROM movements
-		 WHERE status = 'active' AND sync_status IN ('pending', 'failed')
-		   AND timestamp <= ?
-		   AND (last_sync_attempt_at IS NULL OR last_sync_attempt_at <= ?)`+clause+`
-		 ORDER BY timestamp ASC`,
+		`SELECT `+movementSelectColumns+` FROM `+movementFromClause+`
+		 WHERE movements.status = 'active' AND movements.sync_status IN ('pending', 'failed')
+		   AND movements.timestamp <= ?
+		   AND (movements.last_sync_attempt_at IS NULL OR movements.last_sync_attempt_at <= ?)`+clause+`
+		 ORDER BY movements.timestamp ASC`,
 		args...)
 }
 
@@ -188,9 +211,13 @@ func (r *movementRepository) MarkSyncFailed(ctx context.Context, movementID, syn
 }
 
 func (r *movementRepository) UpdateMetadata(ctx context.Context, movementID, description, category, paymentMethod string, accountID *string) error {
+	categoryID, err := resolveCategoryIDByMovement(ctx, r.db, movementID, category)
+	if err != nil {
+		return err
+	}
 	return r.execOnRow(ctx,
-		`UPDATE movements SET description = ?, category = ?, payment_method = ?, account_id = ? WHERE id = ?`,
-		nullString(description), category, paymentMethod, accountID, movementID)
+		`UPDATE movements SET description = ?, category_id = ?, payment_method = ?, account_id = ? WHERE id = ?`,
+		nullString(description), categoryID, paymentMethod, accountID, movementID)
 }
 
 func (r *movementRepository) UpdateAvoidabilityOverride(ctx context.Context, movementID string, avoidabilityOverridePercent *int) error {
@@ -345,7 +372,8 @@ func (r *movementRepositoryTx) CreateBatch(ctx context.Context, movements []*dto
 }
 
 func (r *movementRepositoryTx) GetByID(ctx context.Context, movementID string) (*dto.MovementDTO, error) {
-	row := r.tx.QueryRowContext(ctx, `SELECT `+movementColumns+` FROM movements WHERE id = ?`, movementID)
+	row := r.tx.QueryRowContext(ctx,
+		`SELECT `+movementSelectColumns+` FROM `+movementFromClause+` WHERE movements.id = ?`, movementID)
 	m, err := scanMovement(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, apperrors.ErrNotFound
@@ -354,21 +382,21 @@ func (r *movementRepositoryTx) GetByID(ctx context.Context, movementID string) (
 }
 
 func (r *movementRepositoryTx) ListByUser(ctx context.Context, userID string, currency *string, from, to *time.Time, limit, offset int) ([]*dto.MovementDTO, error) {
-	query := `SELECT ` + movementColumns + ` FROM movements WHERE user_id = ?`
+	query := `SELECT ` + movementSelectColumns + ` FROM ` + movementFromClause + ` WHERE movements.user_id = ?`
 	args := []any{userID}
 	if currency != nil {
-		query += ` AND currency = ?`
+		query += ` AND movements.currency = ?`
 		args = append(args, *currency)
 	}
 	if from != nil {
-		query += ` AND timestamp >= ?`
+		query += ` AND movements.timestamp >= ?`
 		args = append(args, formatTime(*from))
 	}
 	if to != nil {
-		query += ` AND timestamp < ?`
+		query += ` AND movements.timestamp < ?`
 		args = append(args, formatTime(*to))
 	}
-	query += ` ORDER BY timestamp DESC, created_at DESC LIMIT ? OFFSET ?`
+	query += ` ORDER BY movements.timestamp DESC, movements.created_at DESC LIMIT ? OFFSET ?`
 	if limit <= 0 {
 		limit = -1
 	}
@@ -378,13 +406,13 @@ func (r *movementRepositoryTx) ListByUser(ctx context.Context, userID string, cu
 
 func (r *movementRepositoryTx) ListByCreditCardPurchase(ctx context.Context, purchaseID string) ([]*dto.MovementDTO, error) {
 	return r.queryMovements(ctx,
-		`SELECT `+movementColumns+` FROM movements WHERE credit_card_purchase_id = ? ORDER BY installment_number ASC`,
+		`SELECT `+movementSelectColumns+` FROM `+movementFromClause+` WHERE movements.credit_card_purchase_id = ? ORDER BY movements.installment_number ASC`,
 		purchaseID)
 }
 
 func (r *movementRepositoryTx) ListByTransferID(ctx context.Context, transferID string) ([]*dto.MovementDTO, error) {
 	return r.queryMovements(ctx,
-		`SELECT `+movementColumns+` FROM movements WHERE transfer_id = ? ORDER BY amount ASC`,
+		`SELECT `+movementSelectColumns+` FROM `+movementFromClause+` WHERE movements.transfer_id = ? ORDER BY movements.amount ASC`,
 		transferID)
 }
 
@@ -411,11 +439,11 @@ func (r *movementRepositoryTx) ListPendingSync(ctx context.Context, now time.Tim
 	args := []any{formatTime(now), formatTime(now.Add(-retryCooldown))}
 	args = append(args, excludeArgs...)
 	return r.queryMovements(ctx,
-		`SELECT `+movementColumns+` FROM movements
-		 WHERE status = 'active' AND sync_status IN ('pending', 'failed')
-		   AND timestamp <= ?
-		   AND (last_sync_attempt_at IS NULL OR last_sync_attempt_at <= ?)`+clause+`
-		 ORDER BY timestamp ASC`,
+		`SELECT `+movementSelectColumns+` FROM `+movementFromClause+`
+		 WHERE movements.status = 'active' AND movements.sync_status IN ('pending', 'failed')
+		   AND movements.timestamp <= ?
+		   AND (movements.last_sync_attempt_at IS NULL OR movements.last_sync_attempt_at <= ?)`+clause+`
+		 ORDER BY movements.timestamp ASC`,
 		args...)
 }
 
@@ -447,9 +475,13 @@ func (r *movementRepositoryTx) MarkSyncFailed(ctx context.Context, movementID, s
 }
 
 func (r *movementRepositoryTx) UpdateMetadata(ctx context.Context, movementID, description, category, paymentMethod string, accountID *string) error {
+	categoryID, err := resolveCategoryIDByMovement(ctx, r.tx, movementID, category)
+	if err != nil {
+		return err
+	}
 	return r.execOnRow(ctx,
-		`UPDATE movements SET description = ?, category = ?, payment_method = ?, account_id = ? WHERE id = ?`,
-		nullString(description), category, paymentMethod, accountID, movementID)
+		`UPDATE movements SET description = ?, category_id = ?, payment_method = ?, account_id = ? WHERE id = ?`,
+		nullString(description), categoryID, paymentMethod, accountID, movementID)
 }
 
 func (r *movementRepositoryTx) UpdateAvoidabilityOverride(ctx context.Context, movementID string, avoidabilityOverridePercent *int) error {
@@ -554,12 +586,67 @@ type execer interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
 
-func insertMovement(ctx context.Context, ex execer, m *dto.MovementDTO) error {
-	_, err := ex.ExecContext(ctx,
-		`INSERT INTO movements (`+movementColumns+`)
+// queryRower is the read half execer's write half pairs with — both
+// *sql.DB and *sql.Tx satisfy both, so resolveCategoryID* helpers work
+// identically whether called inside insertMovement's transaction or a
+// standalone UpdateMetadata call.
+type queryRower interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+// resolveCategoryID looks up categoryName's id for userID, returning nil
+// (SQL NULL) for an empty name — the "genuinely uncategorized" case
+// resolveCategory (usecases/categories.go) already passes through
+// unresolved. A non-empty name that doesn't resolve means some caller
+// wrote/updated a movement without first ensuring the category exists
+// (resolveCategory, ensureSystemCategories, or an import path doing the
+// same) — a real bug in that caller, not a normal "not found" this
+// repository should paper over.
+func resolveCategoryID(ctx context.Context, q queryRower, userID, categoryName string) (any, error) {
+	if categoryName == "" {
+		return nil, nil
+	}
+	var categoryID string
+	err := q.QueryRowContext(ctx,
+		`SELECT id FROM categories WHERE user_id = ? AND lower(name) = lower(?)`, userID, categoryName,
+	).Scan(&categoryID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("sqlite: category %q not registered for user %s — caller must ensure it exists first", categoryName, userID)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("sqlite: resolve category id: %w", err)
+	}
+	return categoryID, nil
+}
+
+// resolveCategoryIDByMovement is resolveCategoryID for UpdateMetadata,
+// which is given a movement id rather than a user id directly — it looks
+// up the owning user_id first so the category lookup stays scoped to the
+// right registry.
+func resolveCategoryIDByMovement(ctx context.Context, q queryRower, movementID, categoryName string) (any, error) {
+	var userID string
+	if err := q.QueryRowContext(ctx, `SELECT user_id FROM movements WHERE id = ?`, movementID).Scan(&userID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, apperrors.ErrNotFound
+		}
+		return nil, fmt.Errorf("sqlite: load movement user for category resolution: %w", err)
+	}
+	return resolveCategoryID(ctx, q, userID, categoryName)
+}
+
+func insertMovement(ctx context.Context, ex interface {
+	execer
+	queryRower
+}, m *dto.MovementDTO) error {
+	categoryID, err := resolveCategoryID(ctx, ex, m.UserID, m.Category)
+	if err != nil {
+		return err
+	}
+	_, err = ex.ExecContext(ctx,
+		`INSERT INTO movements (`+movementInsertColumns+`)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		m.ID, m.UserID, m.Amount, m.Currency,
-		nullString(m.Description), m.Category, m.PaymentMethod,
+		nullString(m.Description), categoryID, m.PaymentMethod,
 		m.CreditCardPurchaseID, m.InstallmentNumber,
 		m.Status, m.CancelsMovementID, m.ReversedByMovementID,
 		formatTime(m.Timestamp), m.SyncStatus, m.LedgerTransactionID,

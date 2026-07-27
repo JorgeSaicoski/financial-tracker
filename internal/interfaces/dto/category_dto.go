@@ -10,8 +10,11 @@ type CreateCategoryRequest struct {
 
 // UpdateCategoryRequest is the API request body for PATCH /categories/{id}.
 // A field absent from the JSON body leaves that value unchanged; system
-// categories reject any edit at all.
+// categories reject any edit at all. "is_default": true makes this
+// category the caller's new default (atomically replacing whoever held
+// it); "is_default": false is rejected — there's always exactly one.
 type UpdateCategoryRequest struct {
 	Name                *string `json:"name,omitempty"`
 	AvoidabilityPercent *int    `json:"avoidability_percent,omitempty"`
+	IsDefault           *bool   `json:"is_default,omitempty"`
 }

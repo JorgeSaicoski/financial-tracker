@@ -47,7 +47,7 @@ func openTargetDB(t *testing.T) *sql.DB {
 	if err := postgresql.Migrate(db); err != nil {
 		t.Fatalf("migrate target: %v", err)
 	}
-	if _, err := db.Exec(`TRUNCATE TABLE account_snapshots, movements, credit_card_purchases, accounts, exchange_rates CASCADE`); err != nil {
+	if _, err := db.Exec(`TRUNCATE TABLE account_snapshots, movements, credit_card_purchases, accounts, exchange_rates, categories CASCADE`); err != nil {
 		t.Fatalf("truncate target: %v", err)
 	}
 	return db
@@ -70,6 +70,20 @@ func seedSource(t *testing.T, db *sql.DB) {
 	movementRepo := sqlite.NewMovementRepository(db)
 	purchaseRepo := sqlite.NewCreditCardPurchaseRepository(db)
 	accountRepo := sqlite.NewAccountRepository(db)
+	categoryRepo := sqlite.NewCategoryRepository(db)
+
+	// category_id is a real foreign key (BACK-14 follow-up) — every
+	// category name this seed uses below must be registered first, the
+	// same way the account it references is created first.
+	fifty := 50
+	for _, name := range []string{"food", "shopping"} {
+		if _, err := categoryRepo.EnsureByName(ctx, testUserID, name, &fifty); err != nil {
+			t.Fatalf("seed category %q: %v", name, err)
+		}
+	}
+	if _, err := categoryRepo.EnsureByName(ctx, testUserID, entities.CategoryTransfer, nil); err != nil {
+		t.Fatalf("seed transfer category: %v", err)
+	}
 
 	account, err := accountRepo.Create(ctx, &dto.AccountDTO{
 		UserID:    testUserID,

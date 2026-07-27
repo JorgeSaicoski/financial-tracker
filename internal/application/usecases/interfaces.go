@@ -443,30 +443,36 @@ type CreateCategoryUseCase interface {
 	Execute(ctx context.Context, input CreateCategoryInput) (*dto.CategoryDTO, error)
 }
 
-// ListCategoriesUseCase lazily ensures the two system categories exist
-// for userID first (absence-safe, same pattern as user_settings), then
-// returns every category row, name ascending.
+// ListCategoriesUseCase lazily ensures the two system categories and the
+// user's default category exist first (absence-safe, same pattern as
+// user_settings), then returns every category row, name ascending.
 type ListCategoriesUseCase interface {
 	Execute(ctx context.Context, userID string) ([]*dto.CategoryDTO, error)
 }
 
 // UpdateCategoryInput carries a PATCH /categories/{id} body — nil means
-// "leave unchanged", same convention as UpdateMovementInput.
+// "leave unchanged", same convention as UpdateMovementInput. IsDefault
+// is one-way: true makes this category the user's new default
+// (atomically replacing whoever held it); false is rejected rather than
+// clearing it, since the app always has exactly one default per user.
 type UpdateCategoryInput struct {
 	Name                *string
 	AvoidabilityPercent *int
+	IsDefault           *bool
 }
 
 // UpdateCategoryUseCase rejects edits to the two reserved system names,
-// renaming onto an existing name (case-insensitive), and an
-// AvoidabilityPercent outside 0-100.
+// renaming onto an existing name (case-insensitive), an
+// AvoidabilityPercent outside 0-100, and IsDefault:false.
 type UpdateCategoryUseCase interface {
 	Execute(ctx context.Context, userID, id string, input UpdateCategoryInput) (*dto.CategoryDTO, error)
 }
 
-// DeleteCategoryUseCase rejects deleting a reserved system category.
-// Deleting one still referenced by movements is allowed — it's a label,
-// not an FK.
+// DeleteCategoryUseCase rejects deleting a reserved system category or
+// the user's current default category (BACK-14 follow-up: category_id
+// is now a real foreign key, so every movement/purchase referencing the
+// deleted category is reassigned to the default first — see
+// CategoryRepository.DeleteAndReassign).
 type DeleteCategoryUseCase interface {
 	Execute(ctx context.Context, userID, id string) error
 }

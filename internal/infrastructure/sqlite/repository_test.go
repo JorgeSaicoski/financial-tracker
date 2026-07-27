@@ -27,6 +27,12 @@ func openTestDB(t *testing.T) *sql.DB {
 	return db
 }
 
+// testMovement leaves Category empty (uncategorized, no category_id
+// lookup needed) since most callers don't care about it — category_id
+// is a real foreign key now (BACK-14 follow-up), so a test that does
+// care must register the category first via NewCategoryRepository(db)
+// and set .Category on the returned DTO, the same way callers already
+// register an account before setting .AccountID.
 func testMovement(amount int64) *dto.MovementDTO {
 	now := time.Now().UTC()
 	return &dto.MovementDTO{
@@ -34,7 +40,6 @@ func testMovement(amount int64) *dto.MovementDTO {
 		Amount:        amount,
 		Currency:      "usd",
 		Description:   "coffee",
-		Category:      "food",
 		PaymentMethod: string(entities.PaymentMethodCash),
 		Status:        string(entities.MovementStatusActive),
 		SyncStatus:    string(entities.SyncStatusPending),
@@ -44,10 +49,16 @@ func testMovement(amount int64) *dto.MovementDTO {
 }
 
 func TestMovementCreateGetRoundtrip(t *testing.T) {
-	repo := NewMovementRepository(openTestDB(t))
+	db := openTestDB(t)
+	repo := NewMovementRepository(db)
 	ctx := context.Background()
 
-	created, err := repo.Create(ctx, testMovement(-450))
+	if _, err := NewCategoryRepository(db).EnsureByName(ctx, "00000000-0000-0000-0000-000000000001", "food", nil); err != nil {
+		t.Fatal(err)
+	}
+	m := testMovement(-450)
+	m.Category = "food"
+	created, err := repo.Create(ctx, m)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -313,6 +324,9 @@ func TestMovementUpdateMetadataAndFinancial(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := NewCategoryRepository(db).EnsureByName(ctx, created.UserID, "transport", nil); err != nil {
+		t.Fatal(err)
+	}
 
 	account, err := NewAccountRepository(db).Create(ctx, &dto.AccountDTO{
 		UserID: created.UserID, Name: "wallet", Type: string(entities.AccountTypeCash),
@@ -460,6 +474,10 @@ func TestPurchaseCreateWithInstallments(t *testing.T) {
 	movements := NewMovementRepository(db)
 	ctx := context.Background()
 	now := time.Now().UTC()
+
+	if _, err := NewCategoryRepository(db).EnsureByName(ctx, "00000000-0000-0000-0000-000000000001", "shopping", nil); err != nil {
+		t.Fatal(err)
+	}
 
 	purchase := &dto.CreditCardPurchaseDTO{
 		UserID:           "00000000-0000-0000-0000-000000000001",
@@ -685,6 +703,14 @@ func TestPurchaseListByUser(t *testing.T) {
 	purchases := NewCreditCardPurchaseRepository(db)
 	ctx := context.Background()
 	now := time.Now().UTC()
+
+	categories := NewCategoryRepository(db)
+	if _, err := categories.EnsureByName(ctx, "00000000-0000-0000-0000-000000000001", "shopping", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := categories.EnsureByName(ctx, "00000000-0000-0000-0000-000000000002", "shopping", nil); err != nil {
+		t.Fatal(err)
+	}
 
 	mine := &dto.CreditCardPurchaseDTO{
 		UserID: "00000000-0000-0000-0000-000000000001", Category: "shopping",

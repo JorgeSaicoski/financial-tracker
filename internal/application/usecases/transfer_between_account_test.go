@@ -25,7 +25,7 @@ func TestTransferBetweenAccountsHappyPath(t *testing.T) {
 	from := mustCreateAccount(t, accounts, "u1", "usd")
 	to := mustCreateAccount(t, accounts, "u1", "usd")
 
-	uc := NewTransferBetweenAccounts(movements, accounts, newFakeUserSettingsRepo())
+	uc := NewTransferBetweenAccounts(movements, accounts, newFakeUserSettingsRepo(), newFakeCategoryRepo())
 	result, err := uc.Execute(context.Background(), TransferBetweenAccountsInput{
 		UserID: "u1", FromAccountID: from.ID, ToAccountID: to.ID, Amount: 500, Description: "moving cash",
 	})
@@ -66,7 +66,7 @@ func TestTransferBetweenAccountsRejectsCurrencyMismatch(t *testing.T) {
 	from := mustCreateAccount(t, accounts, "u1", "usd")
 	to := mustCreateAccount(t, accounts, "u1", "brl")
 
-	uc := NewTransferBetweenAccounts(movements, accounts, newFakeUserSettingsRepo())
+	uc := NewTransferBetweenAccounts(movements, accounts, newFakeUserSettingsRepo(), newFakeCategoryRepo())
 	_, err := uc.Execute(context.Background(), TransferBetweenAccountsInput{
 		UserID: "u1", FromAccountID: from.ID, ToAccountID: to.ID, Amount: 100,
 	})
@@ -80,7 +80,7 @@ func TestTransferBetweenAccountsRejectsSameAccount(t *testing.T) {
 	accounts := newFakeAccountRepo()
 	account := mustCreateAccount(t, accounts, "u1", "usd")
 
-	uc := NewTransferBetweenAccounts(movements, accounts, newFakeUserSettingsRepo())
+	uc := NewTransferBetweenAccounts(movements, accounts, newFakeUserSettingsRepo(), newFakeCategoryRepo())
 	_, err := uc.Execute(context.Background(), TransferBetweenAccountsInput{
 		UserID: "u1", FromAccountID: account.ID, ToAccountID: account.ID, Amount: 100,
 	})
@@ -95,7 +95,7 @@ func TestTransferBetweenAccountsRejectsUnknownOrForeignAccount(t *testing.T) {
 	mine := mustCreateAccount(t, accounts, "u1", "usd")
 	someoneElses := mustCreateAccount(t, accounts, "u2", "usd")
 
-	uc := NewTransferBetweenAccounts(movements, accounts, newFakeUserSettingsRepo())
+	uc := NewTransferBetweenAccounts(movements, accounts, newFakeUserSettingsRepo(), newFakeCategoryRepo())
 
 	if _, err := uc.Execute(context.Background(), TransferBetweenAccountsInput{
 		UserID: "u1", FromAccountID: mine.ID, ToAccountID: "does-not-exist", Amount: 100,
@@ -116,7 +116,7 @@ func TestTransferBetweenAccountsRejectsNonPositiveAmount(t *testing.T) {
 	from := mustCreateAccount(t, accounts, "u1", "usd")
 	to := mustCreateAccount(t, accounts, "u1", "usd")
 
-	uc := NewTransferBetweenAccounts(movements, accounts, newFakeUserSettingsRepo())
+	uc := NewTransferBetweenAccounts(movements, accounts, newFakeUserSettingsRepo(), newFakeCategoryRepo())
 	for _, amount := range []int64{0, -100} {
 		if _, err := uc.Execute(context.Background(), TransferBetweenAccountsInput{
 			UserID: "u1", FromAccountID: from.ID, ToAccountID: to.ID, Amount: amount,
@@ -148,7 +148,7 @@ func TestCancelTransferCancelsBothLegsPerSyncStatus(t *testing.T) {
 			from := mustCreateAccount(t, accounts, "u1", "usd")
 			to := mustCreateAccount(t, accounts, "u1", "usd")
 
-			transferUC := NewTransferBetweenAccounts(movements, accounts, newFakeUserSettingsRepo())
+			transferUC := NewTransferBetweenAccounts(movements, accounts, newFakeUserSettingsRepo(), newFakeCategoryRepo())
 			transfer, err := transferUC.Execute(context.Background(), TransferBetweenAccountsInput{
 				UserID: "u1", FromAccountID: from.ID, ToAccountID: to.ID, Amount: 500,
 			})
@@ -219,7 +219,7 @@ func TestCancelTransferRollsBackFirstLegWhenSecondLegFails(t *testing.T) {
 	from := mustCreateAccount(t, accounts, "u1", "usd")
 	to := mustCreateAccount(t, accounts, "u1", "usd")
 
-	transferUC := NewTransferBetweenAccounts(movements, accounts, newFakeUserSettingsRepo())
+	transferUC := NewTransferBetweenAccounts(movements, accounts, newFakeUserSettingsRepo(), newFakeCategoryRepo())
 	transfer, err := transferUC.Execute(context.Background(), TransferBetweenAccountsInput{
 		UserID: "u1", FromAccountID: from.ID, ToAccountID: to.ID, Amount: 500,
 	})
@@ -278,7 +278,7 @@ func TestCancelMovementRejectsDirectSingleLegCancel(t *testing.T) {
 	from := mustCreateAccount(t, accounts, "u1", "usd")
 	to := mustCreateAccount(t, accounts, "u1", "usd")
 
-	transfer, err := NewTransferBetweenAccounts(movements, accounts, newFakeUserSettingsRepo()).Execute(context.Background(), TransferBetweenAccountsInput{
+	transfer, err := NewTransferBetweenAccounts(movements, accounts, newFakeUserSettingsRepo(), newFakeCategoryRepo()).Execute(context.Background(), TransferBetweenAccountsInput{
 		UserID: "u1", FromAccountID: from.ID, ToAccountID: to.ID, Amount: 500,
 	})
 	if err != nil {

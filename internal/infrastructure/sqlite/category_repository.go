@@ -35,7 +35,7 @@ func NewCategoryRepository(db *sql.DB) repositories.CategoryRepository {
 	return &categoryRepository{db: db}
 }
 
-const categoryColumns = `id, user_id, name, avoidability_percent, created_at`
+const categoryColumns = `id, user_id, name, avoidability_percent, is_default, created_at`
 
 // EnsureByName is a check-then-insert, not an atomic upsert. SQLite's
 // single-connection pool (db.SetMaxOpenConns(1), see db.go) already
@@ -115,8 +115,8 @@ func (r *categoryRepository) Create(ctx context.Context, c *dto.CategoryDTO) (*d
 		c.CreatedAt = time.Now().UTC()
 	}
 	_, err := r.db.ExecContext(ctx,
-		`INSERT INTO categories (`+categoryColumns+`) VALUES (?, ?, ?, ?, ?)`,
-		c.ID, c.UserID, c.Name, nullableInt(c.AvoidabilityPercent), formatTime(c.CreatedAt))
+		`INSERT INTO categories (`+categoryColumns+`) VALUES (?, ?, ?, ?, ?, ?)`,
+		c.ID, c.UserID, c.Name, nullableInt(c.AvoidabilityPercent), c.IsDefault, formatTime(c.CreatedAt))
 	if err != nil {
 		if isUniqueViolation(err) {
 			return nil, fmt.Errorf("%w: category %q already exists", apperrors.ErrConflict, c.Name)
@@ -143,8 +143,72 @@ func (r *categoryRepository) Update(ctx context.Context, userID, categoryID, nam
 	return nil
 }
 
-func (r *categoryRepository) Delete(ctx context.Context, userID, categoryID string) error {
-	result, err := r.db.ExecContext(ctx,
+func (r *categoryRepository) HasDefault(ctx context.Context, userID string) (bool, error) {
+	var n int
+	if err := r.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM categories WHERE user_id = ? AND is_default = 1`, userID,
+	).Scan(&n); err != nil {
+		return false, fmt.Errorf("sqlite: check default category: %w", err)
+	}
+	return n > 0, nil
+}
+
+// SetDefault runs both statements in a transaction so a crash between
+// them can never leave two categories (or zero) flagged default for the
+// same user — the partial unique index on (user_id) WHERE is_default
+// backs this at the constraint level too.
+func (r *categoryRepository) SetDefault(ctx context.Context, userID, categoryID string) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("sqlite: begin set default: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE categories SET is_default = 0 WHERE user_id = ? AND is_default = 1`, userID,
+	); err != nil {
+		return fmt.Errorf("sqlite: clear previous default: %w", err)
+	}
+	result, err := tx.ExecContext(ctx,
+		`UPDATE categories SET is_default = 1 WHERE id = ? AND user_id = ?`, categoryID, userID)
+	if err != nil {
+		return fmt.Errorf("sqlite: set default: %w", err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("sqlite: set default rows affected: %w", err)
+	}
+	if n == 0 {
+		return apperrors.ErrNotFound
+	}
+	return tx.Commit()
+}
+
+// DeleteAndReassign moves every movement and credit-card purchase
+// pointing at categoryID onto defaultCategoryID before deleting
+// categoryID, all inside one transaction — a crash partway through must
+// never leave a movement's category_id pointing at a row that no longer
+// exists.
+func (r *categoryRepository) DeleteAndReassign(ctx context.Context, userID, categoryID, defaultCategoryID string) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("sqlite: begin delete and reassign: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE movements SET category_id = ? WHERE category_id = ? AND user_id = ?`,
+		defaultCategoryID, categoryID, userID,
+	); err != nil {
+		return fmt.Errorf("sqlite: reassign movements: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE credit_card_purchases SET category_id = ? WHERE category_id = ? AND user_id = ?`,
+		defaultCategoryID, categoryID, userID,
+	); err != nil {
+		return fmt.Errorf("sqlite: reassign credit card purchases: %w", err)
+	}
+	result, err := tx.ExecContext(ctx,
 		`DELETE FROM categories WHERE id = ? AND user_id = ?`, categoryID, userID)
 	if err != nil {
 		return fmt.Errorf("sqlite: delete category: %w", err)
@@ -156,7 +220,7 @@ func (r *categoryRepository) Delete(ctx context.Context, userID, categoryID stri
 	if n == 0 {
 		return apperrors.ErrNotFound
 	}
-	return nil
+	return tx.Commit()
 }
 
 // nullableInt converts a *int to the driver.Value SQLite expects for a
@@ -171,11 +235,11 @@ func nullableInt(v *int) interface{} {
 
 func scanCategory(row scannable) (*dto.CategoryDTO, error) {
 	var (
-		c                    dto.CategoryDTO
-		avoidabilityPercent  sql.NullInt64
-		createdAt            string
+		c                   dto.CategoryDTO
+		avoidabilityPercent sql.NullInt64
+		createdAt           string
 	)
-	if err := row.Scan(&c.ID, &c.UserID, &c.Name, &avoidabilityPercent, &createdAt); err != nil {
+	if err := row.Scan(&c.ID, &c.UserID, &c.Name, &avoidabilityPercent, &c.IsDefault, &createdAt); err != nil {
 		return nil, err
 	}
 	if avoidabilityPercent.Valid {

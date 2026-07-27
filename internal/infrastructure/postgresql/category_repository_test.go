@@ -3,6 +3,7 @@ package postgresql
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 
@@ -226,17 +227,21 @@ func TestCategoryUpdateNotFound(t *testing.T) {
 	}
 }
 
-func TestCategoryDeleteRemovesRow(t *testing.T) {
+func TestCategoryDeleteAndReassignRemovesRow(t *testing.T) {
 	repo := NewCategoryRepository(openTestDB(t))
 	ctx := context.Background()
 	userID := "u1"
 
+	def, err := repo.Create(ctx, dtoCategory(userID, "other", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
 	created, err := repo.Create(ctx, dtoCategory(userID, "food", nil))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if err := repo.Delete(ctx, userID, created.ID); err != nil {
+	if err := repo.DeleteAndReassign(ctx, userID, created.ID, def.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := repo.GetByID(ctx, userID, created.ID); !errors.Is(err, apperrors.ErrNotFound) {
@@ -244,12 +249,133 @@ func TestCategoryDeleteRemovesRow(t *testing.T) {
 	}
 }
 
-func TestCategoryDeleteNotFound(t *testing.T) {
+func TestCategoryDeleteAndReassignNotFound(t *testing.T) {
 	repo := NewCategoryRepository(openTestDB(t))
 	ctx := context.Background()
 
-	err := repo.Delete(ctx, "u1", "missing-id")
-	if !errors.Is(err, apperrors.ErrNotFound) {
+	def, err := repo.Create(ctx, dtoCategory("u1", "other", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := repo.DeleteAndReassign(ctx, "u1", "missing-id", def.ID); !errors.Is(err, apperrors.ErrNotFound) {
 		t.Errorf("want ErrNotFound, got %v", err)
+	}
+}
+
+// TestCategoryDeleteAndReassignMovesMovementsAndPurchases exercises the
+// actual reassignment: movements and credit-card purchases pointing at
+// the deleted category must land on the default instead of getting
+// orphaned — the whole reason DeleteAndReassign exists over a plain
+// Delete now that category_id is a real foreign key (BACK-14 follow-up).
+func TestCategoryDeleteAndReassignMovesMovementsAndPurchases(t *testing.T) {
+	db := openTestDB(t)
+	categories := NewCategoryRepository(db)
+	movements := NewMovementRepository(db)
+	purchases := NewCreditCardPurchaseRepository(db)
+	ctx := context.Background()
+	userID := "u1"
+
+	def, err := categories.Create(ctx, dtoCategory(userID, "other", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	doomed, err := categories.Create(ctx, dtoCategory(userID, "dining", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := movements.Create(ctx, &dto.MovementDTO{
+		UserID: userID, Amount: -500, Currency: "usd", Category: "dining", PaymentMethod: "other",
+		Status: "active", SyncStatus: "pending", Timestamp: nowTruncated(), CreatedAt: nowTruncated(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, _, err := purchases.CreateWithInstallments(ctx, &dto.CreditCardPurchaseDTO{
+		UserID: userID, Category: "dining", TotalAmount: -1000, Currency: "usd",
+		InstallmentCount: 1, PurchaseDate: nowTruncated(), Status: "active", CreatedAt: nowTruncated(),
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := categories.DeleteAndReassign(ctx, userID, doomed.ID, def.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	gotMovement, err := movements.GetByID(ctx, m.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotMovement.Category != "other" {
+		t.Errorf("movement category = %q, want reassigned to %q", gotMovement.Category, "other")
+	}
+	gotPurchase, err := purchases.GetByID(ctx, p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPurchase.Category != "other" {
+		t.Errorf("purchase category = %q, want reassigned to %q", gotPurchase.Category, "other")
+	}
+}
+
+// TestCategorySetDefaultConcurrentCallsLeaveExactlyOneDefault exercises
+// the race window SetDefault's clear-then-set transaction has when no
+// category is default yet: several goroutines all call SetDefault on
+// different existing categories for the same user at once. Unlike
+// Create, SetDefault is a repeatable "clear old, set new" operation, not
+// an insert-or-fail one — two calls that don't truly overlap in time
+// both legitimately succeed in turn (the second correctly clears the
+// first's now-committed default and sets its own), so more than one
+// success among n concurrent calls is expected, not a bug. What must
+// hold: any error is ErrConflict (from truly-overlapping calls hitting
+// the partial unique index on (user_id) WHERE is_default, migrations/
+// postgres/014_movement_category_fk.sql — never a raw 500), and exactly
+// one category ends up flagged default once every call has returned.
+func TestCategorySetDefaultConcurrentCallsLeaveExactlyOneDefault(t *testing.T) {
+	repo := NewCategoryRepository(openTestDB(t))
+	ctx := context.Background()
+	userID := "u1"
+
+	const n = 8
+	ids := make([]string, n)
+	for i := 0; i < n; i++ {
+		c, err := repo.Create(ctx, dtoCategory(userID, fmt.Sprintf("cat-%d", i), nil))
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids[i] = c.ID
+	}
+
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	for i, id := range ids {
+		wg.Add(1)
+		go func(i int, id string) {
+			defer wg.Done()
+			errs[i] = repo.SetDefault(ctx, userID, id)
+		}(i, id)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil && !errors.Is(err, apperrors.ErrConflict) {
+			t.Errorf("goroutine %d: want nil or ErrConflict, got %v", i, err)
+		}
+	}
+
+	all, err := repo.ListByUser(ctx, userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var defaults int
+	for _, c := range all {
+		if c.IsDefault {
+			defaults++
+		}
+	}
+	if defaults != 1 {
+		t.Errorf("want exactly 1 default after %d concurrent SetDefault calls, got %d: %+v", n, defaults, all)
 	}
 }

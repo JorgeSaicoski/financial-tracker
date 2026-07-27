@@ -16,6 +16,13 @@ import (
 // same default the one-time migration backfill uses.
 const defaultCategoryAvoidability = 50
 
+// defaultCategoryName is the fallback category lazily seeded per user
+// (BACK-14 follow-up) and flagged IsDefault — the user is free to rename
+// it or flag a different category as the default instead; "other" is
+// just what a brand-new user starts with, not a reserved name like
+// entities.CategoryTransfer/CategoryIncome.
+const defaultCategoryName = "other"
+
 // isSystemCategory reports whether name (case-insensitive) is one of the
 // two reserved category names code branches on directly (Account.Send/
 // Receive, getCashflowUseCase) — not spend, so they carry no
@@ -61,6 +68,57 @@ func ensureSystemCategories(ctx context.Context, categories repositories.Categor
 		return err
 	}
 	return nil
+}
+
+// ensureDefaultCategory lazily seeds userID's fallback category
+// (BACK-14 follow-up) the first time it's needed — same absence-safe
+// pattern as ensureSystemCategories, but only acts once: if the user
+// already has a category flagged IsDefault (seeded here earlier, or set
+// explicitly since via updateCategoryUseCase), it's left alone. Returns
+// the user's current default row either way, since deleteCategoryUseCase
+// needs its id to reassign onto.
+func ensureDefaultCategory(ctx context.Context, categories repositories.CategoryRepository, userID string) (*dto.CategoryDTO, error) {
+	has, err := categories.HasDefault(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if !has {
+		avoidability := defaultCategoryAvoidability
+		def, err := categories.EnsureByName(ctx, userID, defaultCategoryName, &avoidability)
+		if err != nil {
+			return nil, err
+		}
+		// A concurrent caller may have set a default between the
+		// HasDefault check above and here (e.g. an explicit PATCH
+		// is_default:true racing this lazy seed) — SetDefault would
+		// just move it back, so re-check rather than blindly setting.
+		has, err = categories.HasDefault(ctx, userID)
+		if err != nil {
+			return nil, err
+		}
+		if !has {
+			if err := categories.SetDefault(ctx, userID, def.ID); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return getDefaultCategory(ctx, categories, userID)
+}
+
+// getDefaultCategory finds userID's current default row. Only called
+// after ensureDefaultCategory has guaranteed one exists, so ErrNotFound
+// here would mean that invariant broke rather than a normal "not found".
+func getDefaultCategory(ctx context.Context, categories repositories.CategoryRepository, userID string) (*dto.CategoryDTO, error) {
+	all, err := categories.ListByUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range all {
+		if c.IsDefault {
+			return c, nil
+		}
+	}
+	return nil, fmt.Errorf("%w: user has no default category", apperrors.ErrNotFound)
 }
 
 // validateAvoidabilityPercent rejects a value outside 0-100 — shared by
@@ -129,6 +187,9 @@ func (uc *listCategoriesUseCase) Execute(ctx context.Context, userID string) ([]
 	if err := ensureSystemCategories(ctx, uc.categories, userID); err != nil {
 		return nil, err
 	}
+	if _, err := ensureDefaultCategory(ctx, uc.categories, userID); err != nil {
+		return nil, err
+	}
 	return uc.categories.ListByUser(ctx, userID)
 }
 
@@ -170,6 +231,15 @@ func (uc *updateCategoryUseCase) Execute(ctx context.Context, userID, id string,
 	if input.AvoidabilityPercent != nil {
 		avoidabilityPercent = input.AvoidabilityPercent
 	}
+	// IsDefault is a one-way flag here: setting it true makes id the
+	// user's new default (atomically clearing whoever held it before —
+	// see CategoryRepository.SetDefault); false is rejected rather than
+	// silently ignored, since "no default" isn't a state this app
+	// supports — the invariant is always exactly one, enforced by the
+	// migration's partial unique index too.
+	if input.IsDefault != nil && !*input.IsDefault {
+		return nil, fmt.Errorf("%w: set is_default on the category you want as default instead of clearing it here", apperrors.ErrInvalidInput)
+	}
 
 	if !strings.EqualFold(name, existing.Name) {
 		siblings, err := uc.categories.ListByUser(ctx, userID)
@@ -185,6 +255,11 @@ func (uc *updateCategoryUseCase) Execute(ctx context.Context, userID, id string,
 
 	if err := uc.categories.Update(ctx, userID, id, name, avoidabilityPercent); err != nil {
 		return nil, err
+	}
+	if input.IsDefault != nil && *input.IsDefault {
+		if err := uc.categories.SetDefault(ctx, userID, id); err != nil {
+			return nil, err
+		}
 	}
 	return uc.categories.GetByID(ctx, userID, id)
 }
@@ -209,5 +284,17 @@ func (uc *deleteCategoryUseCase) Execute(ctx context.Context, userID, id string)
 	if isSystemCategory(existing.Name) {
 		return fmt.Errorf("%w: %q is a reserved category and can't be deleted", apperrors.ErrInvalidInput, existing.Name)
 	}
-	return uc.categories.Delete(ctx, userID, id)
+	if existing.IsDefault {
+		return fmt.Errorf("%w: %q is the default category and can't be deleted — set a different category as default first", apperrors.ErrInvalidInput, existing.Name)
+	}
+	// Every movement/purchase currently pointing at id needs somewhere to
+	// land before the FK it holds disappears — ensureDefaultCategory
+	// guarantees that target exists (lazily seeding "other" for a user
+	// who has never triggered GET /categories) rather than assuming
+	// listCategoriesUseCase already ran first.
+	def, err := ensureDefaultCategory(ctx, uc.categories, userID)
+	if err != nil {
+		return err
+	}
+	return uc.categories.DeleteAndReassign(ctx, userID, id, def.ID)
 }

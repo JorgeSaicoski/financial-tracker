@@ -19,14 +19,15 @@ import (
 // movements, since movements can reference either by ID and both tables
 // enforce that with a foreign key.
 type importArchiveUseCase struct {
-	accounts  repositories.AccountRepository
-	movements repositories.MovementRepository
-	purchases repositories.CreditCardPurchaseRepository
+	accounts   repositories.AccountRepository
+	movements  repositories.MovementRepository
+	purchases  repositories.CreditCardPurchaseRepository
+	categories repositories.CategoryRepository
 }
 
 // NewImportArchive returns interface type for dependency injection.
-func NewImportArchive(accounts repositories.AccountRepository, movements repositories.MovementRepository, purchases repositories.CreditCardPurchaseRepository) ImportArchiveUseCase {
-	return &importArchiveUseCase{accounts: accounts, movements: movements, purchases: purchases}
+func NewImportArchive(accounts repositories.AccountRepository, movements repositories.MovementRepository, purchases repositories.CreditCardPurchaseRepository, categories repositories.CategoryRepository) ImportArchiveUseCase {
+	return &importArchiveUseCase{accounts: accounts, movements: movements, purchases: purchases, categories: categories}
 }
 
 func (uc *importArchiveUseCase) Execute(ctx context.Context, userID string, bundle ArchiveBundle) (ImportArchiveResult, error) {
@@ -55,6 +56,35 @@ func (uc *importArchiveUseCase) Execute(ctx context.Context, userID string, bund
 		return ImportArchiveResult{}, err
 	}
 	existingMovementIDs := toIDSet(existingMovements, func(m *dto.MovementDTO) string { return m.ID })
+
+	// The movement/purchase repositories now resolve Category by name
+	// against the registry at insert time (BACK-14 follow-up: category_id
+	// is a real FK) — unlike the normal create paths, restore writes the
+	// archive's category names directly, so every distinct one must be
+	// registered here first or the batch insert below fails outright.
+	// EnsureByName's neutral 50% default matches what implicit
+	// registration on the normal write path already does.
+	categoryNames := make(map[string]bool)
+	for _, m := range bundle.Movements {
+		if m != nil && m.Category != "" {
+			categoryNames[m.Category] = true
+		}
+	}
+	for _, p := range bundle.CreditCardPurchases {
+		if p != nil && p.Category != "" {
+			categoryNames[p.Category] = true
+		}
+	}
+	for name := range categoryNames {
+		var avoidabilityPercent *int
+		if !isSystemCategory(name) {
+			v := defaultCategoryAvoidability
+			avoidabilityPercent = &v
+		}
+		if _, err := uc.categories.EnsureByName(ctx, userID, name, avoidabilityPercent); err != nil {
+			return ImportArchiveResult{}, err
+		}
+	}
 
 	var result ImportArchiveResult
 

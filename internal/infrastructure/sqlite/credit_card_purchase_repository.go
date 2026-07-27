@@ -22,8 +22,24 @@ func NewCreditCardPurchaseRepository(db *sql.DB) repositories.CreditCardPurchase
 	return &creditCardPurchaseRepository{db: db}
 }
 
-const purchaseColumns = `id, user_id, description, category, total_amount, currency,
+// purchaseInsertColumns is the column list an INSERT into
+// credit_card_purchases targets — category_id (BACK-14 follow-up), not
+// category: the DTO's Category name is resolved to an id at write time,
+// same as movements (see resolveCategoryID).
+const purchaseInsertColumns = `id, user_id, description, category_id, total_amount, currency,
 	installment_count, purchase_date, status, created_at`
+
+// purchaseSelectColumns/purchaseFromClause mirror
+// movementSelectColumns/movementFromClause: a LEFT JOIN against
+// categories resolves category_id back to a name, so
+// dto.CreditCardPurchaseDTO.Category keeps behaving exactly as it did
+// when category was a plain string column.
+const purchaseSelectColumns = `credit_card_purchases.id, credit_card_purchases.user_id, credit_card_purchases.description,
+	COALESCE(categories.name, '') AS category, credit_card_purchases.total_amount, credit_card_purchases.currency,
+	credit_card_purchases.installment_count, credit_card_purchases.purchase_date, credit_card_purchases.status,
+	credit_card_purchases.created_at`
+
+const purchaseFromClause = `credit_card_purchases LEFT JOIN categories ON credit_card_purchases.category_id = categories.id`
 
 func (r *creditCardPurchaseRepository) CreateWithInstallments(ctx context.Context, purchase *dto.CreditCardPurchaseDTO, installments []*dto.MovementDTO) (*dto.CreditCardPurchaseDTO, []*dto.MovementDTO, error) {
 	if purchase.ID == "" {
@@ -36,10 +52,14 @@ func (r *creditCardPurchaseRepository) CreateWithInstallments(ctx context.Contex
 	}
 	defer tx.Rollback()
 
+	categoryID, err := resolveCategoryID(ctx, tx, purchase.UserID, purchase.Category)
+	if err != nil {
+		return nil, nil, err
+	}
 	_, err = tx.ExecContext(ctx,
-		`INSERT INTO credit_card_purchases (`+purchaseColumns+`)
+		`INSERT INTO credit_card_purchases (`+purchaseInsertColumns+`)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		purchase.ID, purchase.UserID, nullString(purchase.Description), purchase.Category,
+		purchase.ID, purchase.UserID, nullString(purchase.Description), categoryID,
 		purchase.TotalAmount, purchase.Currency, purchase.InstallmentCount,
 		formatTime(purchase.PurchaseDate), purchase.Status, formatTime(purchase.CreatedAt))
 	if err != nil {
@@ -63,7 +83,8 @@ func (r *creditCardPurchaseRepository) CreateWithInstallments(ctx context.Contex
 }
 
 func (r *creditCardPurchaseRepository) GetByID(ctx context.Context, purchaseID string) (*dto.CreditCardPurchaseDTO, error) {
-	row := r.db.QueryRowContext(ctx, `SELECT `+purchaseColumns+` FROM credit_card_purchases WHERE id = ?`, purchaseID)
+	row := r.db.QueryRowContext(ctx,
+		`SELECT `+purchaseSelectColumns+` FROM `+purchaseFromClause+` WHERE credit_card_purchases.id = ?`, purchaseID)
 	p, err := scanPurchase(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, apperrors.ErrNotFound
@@ -100,7 +121,7 @@ func scanPurchase(row scannable) (*dto.CreditCardPurchaseDTO, error) {
 
 func (r *creditCardPurchaseRepository) ListByUser(ctx context.Context, userID string) ([]*dto.CreditCardPurchaseDTO, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT `+purchaseColumns+` FROM credit_card_purchases WHERE user_id = ? ORDER BY purchase_date DESC`, userID)
+		`SELECT `+purchaseSelectColumns+` FROM `+purchaseFromClause+` WHERE credit_card_purchases.user_id = ? ORDER BY credit_card_purchases.purchase_date DESC`, userID)
 	if err != nil {
 		return nil, fmt.Errorf("sqlite: query purchases: %w", err)
 	}
