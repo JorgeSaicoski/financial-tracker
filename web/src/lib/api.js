@@ -142,6 +142,27 @@ export function cancelTransfer(id) {
 	return request(`/transfers/${id}/cancel`, { method: 'POST' });
 }
 
+// --- Import ---
+
+export function getImportSpec() {
+	return request('/import/movements/spec');
+}
+
+// csvText is the raw CSV body (spec's fixed header + data rows). Options
+// map straight onto the endpoint's query params; all default to false.
+export function importMovements(csvText, { dryRun = false, allowPartial = false, skipDuplicates = false } = {}) {
+	const query = new URLSearchParams();
+	if (dryRun) query.set('dry_run', 'true');
+	if (allowPartial) query.set('allow_partial', 'true');
+	if (skipDuplicates) query.set('skip_duplicates', 'true');
+	const qs = query.toString();
+	return request(`/import/movements${qs ? `?${qs}` : ''}`, {
+		method: 'POST',
+		headers: { 'Content-Type': 'text/csv' },
+		body: csvText
+	});
+}
+
 // --- Currencies ---
 
 export function getCurrencies() {
