@@ -45,10 +45,11 @@ tag or point it at a fork if needed, e.g.
 cd deploy
 cp .env.example .env
 # edit .env: set FT_POSTGRES_PASSWORD, LEDGER_POSTGRES_PASSWORD,
-# AUTHENTIK_POSTGRES_PASSWORD/AUTHENTIK_SECRET_KEY, and
-# ENCRYPTION_MASTER_KEY/LEDGER_HMAC_KEY to real secrets (or point them at
-# your secrets manager of choice — anything that lands in .env works,
-# nothing is hardcoded in compose.yaml), and adjust
+# AUTHENTIK_POSTGRES_PASSWORD/AUTHENTIK_SECRET_KEY,
+# AUTHENTIK_BOOTSTRAP_PASSWORD/AUTHENTIK_BOOTSTRAP_TOKEN (see "Authentik"
+# below), and ENCRYPTION_MASTER_KEY/LEDGER_HMAC_KEY to real secrets (or
+# point them at your secrets manager of choice — anything that lands in
+# .env works, nothing is hardcoded in compose.yaml), and adjust
 # DEFAULT_USER_ID/APP_HOSTNAME/PUBLIC_API_URL for your deployment.
 podman-compose --profile ledger up -d --build   # or drop --profile ledger — see above
 ```
@@ -121,7 +122,33 @@ the User's UUID" (`sub_mode: user_uuid` in the blueprint), so the OIDC
 `DEFAULT_USER_ID`/ledger-service require today. BACK-02 can consume `sub`
 directly with no transformation.
 
-### One-time setup (still manual — Authentik requires it)
+### One-time setup
+
+**Non-interactive (recommended, no browser needed):** set
+`AUTHENTIK_BOOTSTRAP_PASSWORD` and `AUTHENTIK_BOOTSTRAP_TOKEN` in `.env`
+(see `.env.example` — `openssl rand -base64 24` / `openssl rand -hex 32`)
+before first bringing the stack up. Authentik sets `akadmin`'s password
+and mints an API token from these on first startup only (a no-op once
+that account already has a usable password, so it's safe to leave them
+set permanently). Verify it worked:
+
+```bash
+curl -sk --resolve "auth.${APP_HOSTNAME}:8443:127.0.0.1" \
+  -H "Authorization: Bearer $AUTHENTIK_BOOTSTRAP_TOKEN" \
+  "https://auth.${APP_HOSTNAME}:8443/api/v3/core/users/me/"
+```
+
+(routes through Caddy's already-published 8443 via `--resolve`, the same
+trick `deploy/e2e-test.sh` uses — no `/etc/hosts` entry or real DNS
+needed, works unmodified on a CI runner.) A 200 with `"username":
+"akadmin"` means the admin account and its API token are both live.
+From there, `deploy/scripts/bootstrap-authentik-users.sh` uses the same
+token to create test users via the Admin API — see its own header
+comment for usage; it's idempotent, so rerunning it against a stack
+whose data persists is safe.
+
+**Manual (browser), if you'd rather click through it or don't have the
+bootstrap vars set:**
 
 1. Bring the stack up (`podman-compose --profile ledger up -d --build`)
    and wait for `authentik-server`/`authentik-worker` to report healthy:
@@ -142,13 +169,14 @@ directly with no transformation.
    explicit-consent`, Subject mode **Based on the User's UUID**, redirect
    URI matching `PUBLIC_OIDC_REDIRECT_URI` from `.env`), then
    **Applications → Applications → Create**, linking to that provider.
-4. `compose.yaml` already wires the values BACK-02/FRONT-04 need into both
-   the `financial-tracker` and `web` services from `.env` — nothing to set
-   by hand here:
-   - `OIDC_ISSUER_URL` (API) / `PUBLIC_OIDC_ISSUER` (web) =
-     `https://auth.${APP_HOSTNAME}:8443/application/o/financial-tracker/`
-   - `PUBLIC_OIDC_CLIENT_ID` = the same `.env` value the blueprint used
-     (default `financial-tracker`)
+
+Either path (non-interactive or manual): `compose.yaml` already wires the
+values BACK-02/FRONT-04 need into both the `financial-tracker` and `web`
+services from `.env` — nothing to set by hand here:
+- `OIDC_ISSUER_URL` (API) / `PUBLIC_OIDC_ISSUER` (web) =
+  `https://auth.${APP_HOSTNAME}:8443/application/o/financial-tracker/`
+- `PUBLIC_OIDC_CLIENT_ID` = the same `.env` value the blueprint used
+  (default `financial-tracker`)
 
 ## Rootless-Podman / SELinux notes
 

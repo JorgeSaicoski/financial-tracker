@@ -107,6 +107,14 @@ services:
       AUTHENTIK_POSTGRESQL__NAME: ${AUTHENTIK_POSTGRES_DB}
       AUTHENTIK_POSTGRESQL__USER: ${AUTHENTIK_POSTGRES_USER}
       AUTHENTIK_POSTGRESQL__PASSWORD: ${AUTHENTIK_POSTGRES_PASSWORD}
+      # Non-interactive first-boot admin setup (no browser/`/if/flow/
+      # initial-setup/` click-through needed) — Authentik sets akadmin's
+      # password and mints an API token from these on first startup only;
+      # a no-op once that account already has a usable password. See
+      # deploy/scripts/bootstrap-authentik-users.sh, which uses the token.
+      AUTHENTIK_BOOTSTRAP_PASSWORD: ${AUTHENTIK_BOOTSTRAP_PASSWORD}
+      AUTHENTIK_BOOTSTRAP_TOKEN: ${AUTHENTIK_BOOTSTRAP_TOKEN}
+      AUTHENTIK_BOOTSTRAP_EMAIL: ${AUTHENTIK_BOOTSTRAP_EMAIL:-akadmin@financial-tracker.local}
       # Consumed by deploy/authentik/blueprints/financial-tracker.yaml's
       # !Env tags — must match what BACK-02/FRONT-04 are given as
       # PUBLIC_OIDC_CLIENT_ID / the frontend's OIDC redirect URI.
