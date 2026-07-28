@@ -93,6 +93,17 @@ func (f *fakeSettingsRepo) SetCloudStorageEntitled(_ context.Context, userID str
 	return s, nil
 }
 
+func (f *fakeSettingsRepo) SetDefaultCategory(_ context.Context, userID string, categoryID *string) (*dto.UserSettingsDTO, error) {
+	s, ok := f.byUserID[userID]
+	if !ok {
+		now := time.Now().UTC()
+		s = dto.DefaultUserSettings(userID, now)
+		f.byUserID[userID] = s
+	}
+	s.DefaultCategoryID = categoryID
+	return s, nil
+}
+
 // TestRunPassLapsesEntitlementPastGracePeriod is BACK-19's grace-period
 // acceptance criterion at the sweep level: cancelling flips entitlement
 // back after the grace period, not immediately.

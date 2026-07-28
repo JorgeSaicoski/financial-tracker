@@ -15,6 +15,10 @@ import "time"
 // UserSettings (BACK-13), not here — that's a separate entity precisely
 // because it distinguishes entitlement (operator-controlled) from
 // preference (user-controlled), which a plain bool on User can't express.
+// Same reasoning for DefaultCategoryID (BACK-14 follow-up): it lives on
+// UserSettings too, not here — a single indexed FK lookup, no need to
+// carry this user's whole category list around to answer "which one is
+// the default."
 type User struct {
 	ID          string
 	Provider    string

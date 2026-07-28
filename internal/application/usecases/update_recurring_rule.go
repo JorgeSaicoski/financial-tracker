@@ -11,14 +11,15 @@ import (
 )
 
 type updateRecurringRuleUseCase struct {
-	rules    repositories.RecurringRuleRepository
-	accounts repositories.AccountRepository
-	methods  repositories.PaymentMethodRepository
+	rules      repositories.RecurringRuleRepository
+	accounts   repositories.AccountRepository
+	methods    repositories.PaymentMethodRepository
+	categories repositories.CategoryRepository
 }
 
 // NewUpdateRecurringRule returns interface type for dependency injection.
-func NewUpdateRecurringRule(rules repositories.RecurringRuleRepository, accounts repositories.AccountRepository, methods repositories.PaymentMethodRepository) UpdateRecurringRuleUseCase {
-	return &updateRecurringRuleUseCase{rules: rules, accounts: accounts, methods: methods}
+func NewUpdateRecurringRule(rules repositories.RecurringRuleRepository, accounts repositories.AccountRepository, methods repositories.PaymentMethodRepository, categories repositories.CategoryRepository) UpdateRecurringRuleUseCase {
+	return &updateRecurringRuleUseCase{rules: rules, accounts: accounts, methods: methods, categories: categories}
 }
 
 func (uc *updateRecurringRuleUseCase) Execute(ctx context.Context, userID, id string, input UpdateRecurringRuleInput) (*dto.RecurringRuleDTO, error) {
@@ -39,12 +40,17 @@ func (uc *updateRecurringRuleUseCase) Execute(ctx context.Context, userID, id st
 	if input.Description != nil {
 		description = *input.Description
 	}
-	category := existing.Category
-	if input.Category != nil {
-		if !entities.Category(*input.Category).IsValid() {
-			return nil, fmt.Errorf("%w: unknown category %q", apperrors.ErrInvalidInput, *input.Category)
+	categoryIDInput := existing.CategoryID
+	if input.CategoryID != nil {
+		if *input.CategoryID == "" {
+			categoryIDInput = nil
+		} else {
+			categoryIDInput = input.CategoryID
 		}
-		category = *input.Category
+	}
+	categoryID, err := resolveCategoryID(ctx, uc.categories, categoryIDInput)
+	if err != nil {
+		return nil, err
 	}
 	paymentMethod := existing.PaymentMethod
 	if input.PaymentMethod != nil {
@@ -116,7 +122,7 @@ func (uc *updateRecurringRuleUseCase) Execute(ctx context.Context, userID, id st
 		active = *input.Active
 	}
 
-	if err := uc.rules.UpdateMetadata(ctx, id, description, category, paymentMethod, accountID); err != nil {
+	if err := uc.rules.UpdateMetadata(ctx, id, description, categoryID, paymentMethod, accountID); err != nil {
 		return nil, err
 	}
 	if err := uc.rules.UpdateFinancial(ctx, id, amount, currency); err != nil {

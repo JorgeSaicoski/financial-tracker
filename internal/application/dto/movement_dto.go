@@ -24,8 +24,23 @@ type MovementDTO struct {
 	Amount        int64
 	Currency      string
 	Description   string
-	Category      string
 	PaymentMethod string
+
+	// CategoryID is the actual foreign key (BACK-14 follow-up) — set
+	// this to create/update a movement's category. Category is a
+	// read-only display name resolved by the repository via a join on
+	// read (see infrastructure/{sqlite,postgresql}/movement_repository.go);
+	// it is never read on write and never round-trips through
+	// ToEntity/MovementFromEntity, since the domain entity carries only
+	// CategoryID (see entities.Movement's own comment on why no display
+	// name lives there either).
+	CategoryID *string
+	Category   string
+
+	// AvoidabilityOverridePercent (0-100, BACK-14) wins over the
+	// movement's category's avoidability_percent when set — see
+	// application/usecases' effective-avoidability resolution helper.
+	AvoidabilityOverridePercent *int
 
 	AccountID  *string
 	TransferID *string
@@ -62,32 +77,33 @@ func MovementFromEntity(m *entities.Movement) *MovementDTO {
 		return nil
 	}
 	return &MovementDTO{
-		ID:                   m.ID,
-		UserID:               m.UserID,
-		Amount:               m.Amount,
-		Currency:             m.Currency,
-		Description:          m.Description,
-		Category:             string(m.Category),
-		PaymentMethod:        string(m.PaymentMethod),
-		AccountID:            m.AccountID,
-		TransferID:           m.TransferID,
-		PlanID:               m.PlanID,
-		CreditCardPurchaseID: m.CreditCardPurchaseID,
-		InstallmentNumber:    m.InstallmentNumber,
-		RecurringRuleID:      m.RecurringRuleID,
-		CardID:               m.CardID,
-		CardPaymentForCardID: m.CardPaymentForCardID,
-		Status:               string(m.Status),
-		CancelsMovementID:    m.CancelsMovementID,
-		ReversedByMovementID: m.ReversedByMovementID,
-		Timestamp:            m.Timestamp,
-		SyncStatus:           string(m.SyncStatus),
-		LedgerTransactionID:  m.LedgerTransactionID,
-		SyncAttempts:         m.SyncAttempts,
-		LastSyncError:        m.LastSyncError,
-		LastSyncAttemptAt:    m.LastSyncAttemptAt,
-		SyncedAt:             m.SyncedAt,
-		CreatedAt:            m.CreatedAt,
+		ID:                          m.ID,
+		UserID:                      m.UserID,
+		Amount:                      m.Amount,
+		Currency:                    m.Currency,
+		Description:                 m.Description,
+		CategoryID:                  m.CategoryID,
+		PaymentMethod:               m.PaymentMethod,
+		AvoidabilityOverridePercent: m.AvoidabilityOverridePercent,
+		AccountID:                   m.AccountID,
+		TransferID:                  m.TransferID,
+		PlanID:                      m.PlanID,
+		CreditCardPurchaseID:        m.CreditCardPurchaseID,
+		InstallmentNumber:           m.InstallmentNumber,
+		RecurringRuleID:             m.RecurringRuleID,
+		CardID:                      m.CardID,
+		CardPaymentForCardID:        m.CardPaymentForCardID,
+		Status:                      string(m.Status),
+		CancelsMovementID:           m.CancelsMovementID,
+		ReversedByMovementID:        m.ReversedByMovementID,
+		Timestamp:                   m.Timestamp,
+		SyncStatus:                  string(m.SyncStatus),
+		LedgerTransactionID:         m.LedgerTransactionID,
+		SyncAttempts:                m.SyncAttempts,
+		LastSyncError:               m.LastSyncError,
+		LastSyncAttemptAt:           m.LastSyncAttemptAt,
+		SyncedAt:                    m.SyncedAt,
+		CreatedAt:                   m.CreatedAt,
 	}
 }
 
@@ -108,31 +124,32 @@ func (m *MovementDTO) ToEntity() *entities.Movement {
 		return nil
 	}
 	return &entities.Movement{
-		ID:                   m.ID,
-		UserID:               m.UserID,
-		Amount:               m.Amount,
-		Currency:             m.Currency,
-		Description:          m.Description,
-		Category:             entities.Category(m.Category),
-		PaymentMethod:        m.PaymentMethod,
-		AccountID:            m.AccountID,
-		TransferID:           m.TransferID,
-		PlanID:               m.PlanID,
-		CreditCardPurchaseID: m.CreditCardPurchaseID,
-		InstallmentNumber:    m.InstallmentNumber,
-		RecurringRuleID:      m.RecurringRuleID,
-		CardID:               m.CardID,
-		CardPaymentForCardID: m.CardPaymentForCardID,
-		Status:               entities.MovementStatus(m.Status),
-		CancelsMovementID:    m.CancelsMovementID,
-		ReversedByMovementID: m.ReversedByMovementID,
-		Timestamp:            m.Timestamp,
-		SyncStatus:           entities.SyncStatus(m.SyncStatus),
-		LedgerTransactionID:  m.LedgerTransactionID,
-		SyncAttempts:         m.SyncAttempts,
-		LastSyncError:        m.LastSyncError,
-		LastSyncAttemptAt:    m.LastSyncAttemptAt,
-		SyncedAt:             m.SyncedAt,
-		CreatedAt:            m.CreatedAt,
+		ID:                          m.ID,
+		UserID:                      m.UserID,
+		Amount:                      m.Amount,
+		Currency:                    m.Currency,
+		Description:                 m.Description,
+		CategoryID:                  m.CategoryID,
+		PaymentMethod:               m.PaymentMethod,
+		AvoidabilityOverridePercent: m.AvoidabilityOverridePercent,
+		AccountID:                   m.AccountID,
+		TransferID:                  m.TransferID,
+		PlanID:                      m.PlanID,
+		CreditCardPurchaseID:        m.CreditCardPurchaseID,
+		InstallmentNumber:           m.InstallmentNumber,
+		RecurringRuleID:             m.RecurringRuleID,
+		CardID:                      m.CardID,
+		CardPaymentForCardID:        m.CardPaymentForCardID,
+		Status:                      entities.MovementStatus(m.Status),
+		CancelsMovementID:           m.CancelsMovementID,
+		ReversedByMovementID:        m.ReversedByMovementID,
+		Timestamp:                   m.Timestamp,
+		SyncStatus:                  entities.SyncStatus(m.SyncStatus),
+		LedgerTransactionID:         m.LedgerTransactionID,
+		SyncAttempts:                m.SyncAttempts,
+		LastSyncError:               m.LastSyncError,
+		LastSyncAttemptAt:           m.LastSyncAttemptAt,
+		SyncedAt:                    m.SyncedAt,
+		CreatedAt:                   m.CreatedAt,
 	}
 }

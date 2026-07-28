@@ -10,8 +10,13 @@ import "time"
 // fails with 400 rather than being silently ignored, satisfying BACK-13's
 // "PATCH cannot modify entitlement fields" acceptance criterion at the
 // decode boundary instead of needing the usecase to police it.
+// default_category_id (BACK-14 follow-up) is this user's own preference
+// too, alongside ledger_sync_enabled — an explicit "" clears it back to
+// the global "other" fallback; absent leaves it unchanged, same
+// convention as every other PATCH body in this API.
 type PatchSettingsRequest struct {
-	LedgerSyncEnabled *bool `json:"ledger_sync_enabled"`
+	LedgerSyncEnabled *bool   `json:"ledger_sync_enabled"`
+	DefaultCategoryID *string `json:"default_category_id"`
 }
 
 // SettingsResponse is a user's settings: entitlement (operator-controlled,
@@ -25,6 +30,7 @@ type SettingsResponse struct {
 	LedgerSyncEntitled   bool      `json:"ledger_sync_entitled"`
 	LedgerSyncEnabled    bool      `json:"ledger_sync_enabled"`
 	CloudStorageEntitled bool      `json:"cloud_storage_entitled"`
+	DefaultCategoryID    string    `json:"default_category_id,omitempty"`
 	CreatedAt            time.Time `json:"created_at"`
 	UpdatedAt            time.Time `json:"updated_at"`
 

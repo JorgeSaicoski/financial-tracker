@@ -20,8 +20,9 @@ movement carries a `sync_status` so the UI can show what's still pending.
 
 Movements carry a payment method — a user-extendable, per-user registry
 (BACK-17; see below), not a fixed list — a free-text description, and a
-category from a fixed list (`GET /categories`). Credit-card purchases can
-be split into monthly installments; installments only sync to
+category from the shared, globally-visible registry (`GET /categories`)
+— see "Categories & avoidability" below. Credit-card purchases can be
+split into monthly installments; installments only sync to
 ledger-service once their date arrives. Movements can be cancelled: one
 that never reached ledger-service
 is just voided locally, while one that already synced gets a compensating
@@ -93,7 +94,7 @@ application/dto              MovementDTO, AccountDTO, CreditCardPurchaseDTO, Exc
                              boundary
 application/repositories     MovementRepository, CreditCardPurchaseRepository,
                              AccountRepository, CardRepository, CurrencyRepository,
-                             ExchangeRateRepository
+                             ExchangeRateRepository, CategoryRepository
                              interfaces, expressed in application/dto types — the swap points
 application/services         LedgerGateway, SyncTrigger, SyncRunner — service contracts the
                              application defines; sync/infrastructure implement them
@@ -107,7 +108,8 @@ application/usecases         every use-case interface + Input/Result/View type c
                              ListCurrencies, AddCurrency, TransferBetweenAccounts,
                              CancelTransfer, SetExchangeRate, ListExchangeRates,
                              DeleteExchangeRate, ToUSD, CreateCard, ListCards, GetCard,
-                             UpdateCard, DeleteCard
+                             UpdateCard, DeleteCard, CreateCategory, ListCategories,
+                             UpdateCategory, DeleteCategory
 application/sync             SyncService: pushes pending movements to ledger-service via the
                              LedgerGateway port (background ticker + manual trigger)
 infrastructure/sqlite        implements the repositories on the local SQLite DB (source of truth,
@@ -417,6 +419,51 @@ does and doesn't protect against" above.
   into this same subscription, sold separately, or stays permanently free
   is not decided by this ticket — `ProcessBillingWebhookUseCase` only
   ever touches `cloud_storage_entitled` today.
+## Categories & avoidability (`categories` table)
+
+Categories are a **shared, globally-visible registry**
+(`GET/POST/PATCH/DELETE /categories`), referenced everywhere by
+`category_id` — not a fixed enum, and not per-user (BACK-14's original
+per-user registry became shared in its own follow-up: "I will create
+restaurant category with 80% and offer it for whoever wants to get it —
+if someone doesn't agree they can just create a new one"). Two different
+users independently creating "restaurant" each get their own row and
+their own id; there's no name uniqueness or per-user ownership. Each
+category carries an `avoidability_percent` (0-100): how easy that kind of
+spend is to skip (a restaurant category might be 80% avoidable; groceries
+might be 20%).
+
+`category_maintainers` is the only place edit rights live: a category's
+creator is its sole contributor at creation time (`is_contributor` on the
+API response tells the frontend whether to show edit controls).
+`PATCH /categories/{id}` (rename, change `avoidability_percent`) requires
+the caller be a contributor; anyone may still use any category on their
+own movements regardless of who created it. `transfer`, `income`, and
+`other` are the three **system categories**, seeded once with fixed ids
+(`entities.CategoryTransferID`/`CategoryIncomeID`/`CategoryOtherID`) so
+every environment agrees on them — not spend, so `avoidability_percent`
+stays `NULL`, and no one can create, rename, or remove them through the
+API regardless of contributor status. A per-user cap
+(`max_categories_per_user`, operator-configurable via the `limits` table,
+default 10) limits how many categories one user may create/contribute to.
+
+`DELETE /categories/{id}` doesn't delete the row (others may still be
+using it) — it removes the category from the caller's own list
+(`user_hidden_categories`); `?reassign_existing=true` additionally moves
+the caller's own movements/purchases off it onto their resolved default
+category first (`user_settings.default_category_id`, falling back to the
+global `other` category), scoped strictly to the caller's own rows even
+though the category itself is shared.
+
+For a genuine one-off spend that doesn't deserve its own category (went
+karting once — 100% avoidable, never happening again), movements carry
+their own optional `avoidability_percent` override
+(`POST`/`PATCH /movements`), independent of `category_id`. A movement's
+**effective avoidability** — used by BACK-12's purchasing-power report —
+resolves in this order: the movement's own override if set; else its
+category's stored `avoidability_percent`; else no value (excluded from
+any avoidability-weighted aggregate, same exclusion `transfer` already
+gets from cashflow totals).
 
 ## API
 
@@ -428,14 +475,17 @@ does and doesn't protect against" above.
 | `GET` | `/config` | Unauthenticated. `{standalone, auth_enabled}` — what the frontend reads before deciding whether to show the login guard. |
 | `GET` | `/settings?user_id=` | The caller's own settings — entitlement (operator-controlled, read-only here) and preference. Defaults to all-`true` if the user has never touched them (no row needed). |
 | `PATCH` | `/settings?user_id=` | Body: `{ledger_sync_enabled}` — the only field a user may change. Any attempt to set `ledger_sync_entitled`/`cloud_storage_entitled` (or any other key) is rejected with 400. Re-enabling reclassifies movements created while sync was off (`sync_status: "local"`) back to `"pending"`, so the next `/sync` pass pushes exactly that backlog. |
-| `POST` | `/movements` | Create a movement. Body: `{amount, currency?, user_id?, description?, category?, payment_method?, installments?, account_id?, card_id?, card_payment_for_card_id?, plan_id?}`. With `payment_method="credit_card"` and `installments > 1`, splits into monthly installments and returns the purchase + its movements (no `account_id` allowed in that case); pass `card_id` there too to date them on the card's real due days. `card_id` (single-movement charges) requires `payment_method="credit_card"` and dates the movement on the card's due day instead of "now". `card_payment_for_card_id` marks a payment settling that card's statement — see "Cards" above. An `account_id`'s currency (and a `card_id`/`card_payment_for_card_id`'s) must match the movement's. `plan_id` (BACK-10) tags the movement as funding a savings plan — the plan must exist, belong to the caller, be `active`, be a savings (not stress-test) plan, and share the movement's currency, or the request is rejected (400). |
+| `POST` | `/movements` | Create a movement. Body: `{amount, currency?, user_id?, description?, category_id?, payment_method?, installments?, account_id?, card_id?, card_payment_for_card_id?, plan_id?, avoidability_percent?}`. With `payment_method="credit_card"` and `installments > 1`, splits into monthly installments and returns the purchase + its movements (no `account_id` allowed in that case); pass `card_id` there too to date them on the card's real due days. `card_id` (single-movement charges) requires `payment_method="credit_card"` and dates the movement on the card's due day instead of "now". `card_payment_for_card_id` marks a payment settling that card's statement — see "Cards" above. An `account_id`'s currency (and a `card_id`/`card_payment_for_card_id`'s) must match the movement's. `category_id` (BACK-14 follow-up) must reference an existing category — any category, since they're globally shared — or the request is rejected (400); omitted leaves the movement uncategorized. `avoidability_percent` (0-100) is this movement's own ad-hoc override, independent of `category_id` — see "Categories & avoidability" above. `plan_id` (BACK-10) tags the movement as funding a savings plan — the plan must exist, belong to the caller, be `active`, be a savings (not stress-test) plan, and share the movement's currency, or the request is rejected (400). |
 | `GET` | `/movements?id={uuid}` | Fetch one movement. |
 | `GET` | `/movements?user_id={uuid}&currency=&from=&to=&limit=&offset=` | List movements + computed `balance` (voided rows excluded from the balance). `from`/`to` take `YYYY-MM-DD` or RFC 3339 (`to` is inclusive when date-only). Each row carries `status` and `sync_status`. |
-| `PATCH` | `/movements/{id}` | Edit one movement. Body: any subset of `{description, category, payment_method, account_id, plan_id, amount, currency, timestamp}`. `description`/`category`/`payment_method`/`account_id`/`plan_id` are local-only metadata and always editable (`account_id: ""`/`plan_id: ""` clears it; `plan_id` set to a non-empty value is validated the same way as on create). `amount`/`currency`/`timestamp` edit in place if the movement hasn't synced yet; on an already-synced movement they instead produce a reversal + a replacement (both returned, original left untouched). Rejects voided/reversed movements, reversals themselves, and financial edits on a single credit-card installment or transfer leg (409 in all cases). |
+| `PATCH` | `/movements/{id}` | Edit one movement. Body: any subset of `{description, category_id, payment_method, account_id, plan_id, amount, currency, timestamp, avoidability_percent}`. `description`/`category_id`/`payment_method`/`account_id`/`plan_id`/`avoidability_percent` are local-only metadata and always editable (`account_id: ""`/`plan_id: ""`/`category_id: ""` clears it; a non-empty `category_id`/`plan_id` is validated the same way as on create). `amount`/`currency`/`timestamp` edit in place if the movement hasn't synced yet; on an already-synced movement they instead produce a reversal + a replacement (both returned, original left untouched). Rejects voided/reversed movements, reversals themselves, and financial edits on a single credit-card installment or transfer leg (409 in all cases). |
 | `POST` | `/movements/{id}/cancel` | Cancel one movement (void or reversal — see semantics above). Returns the movement and, if created, the reversal. |
 | `POST` | `/credit-card-purchases/{id}/cancel` | Cancel a whole installment purchase. Returns which installments were voided vs reversed. |
 | `POST` | `/sync` | Run one sync pass against ledger-service now. Returns `{synced, failed}`. |
-| `GET` | `/categories` | The fixed category list plus the caller's own payment-method registry (BACK-17 — `payment_methods` is `[{id, name}]`, system/default entries lazily ensured first). |
+| `GET` | `/categories` | The shared category registry (`{id, name, avoidability_percent, is_contributor}[]`, `is_contributor` relative to the caller) plus the caller's own payment-method registry (BACK-17 — `payment_methods` is `[{id, name}]`, system/default entries lazily ensured first). |
+| `POST` | `/categories` | Create a category. Body: `{name, avoidability_percent?}` (0-100; omitted defaults to 50). Caller becomes its sole contributor. 400 on reserved names (`transfer`/`income`/`other`) or once the caller has reached `max_categories_per_user`. |
+| `PATCH` | `/categories/{id}` | Rename and/or change `avoidability_percent`. 400 outside 0-100, on a system category, or if the caller isn't a contributor. |
+| `DELETE` | `/categories/{id}?reassign_existing=` | Remove the category from the caller's own list (the row itself isn't deleted — others may still use it). 400 on a system category. `reassign_existing=true` additionally moves the caller's own movements/purchases off it onto their resolved default category first. |
 | `POST` | `/payment-methods` | Register a payment method: `{name}`. Reserved system names (`credit_card`, `bank_transfer`) and case-insensitive duplicates are rejected (409). |
 | `PATCH` | `/payment-methods/{id}` | Rename a payment method: `{name}`. Rejected on system entries (400). |
 | `DELETE` | `/payment-methods/{id}` | Remove a payment method. Rejected on system entries (400); one still referenced by movements is fine — it's a label, not an FK. |
@@ -457,8 +507,8 @@ does and doesn't protect against" above.
 | `POST` | `/exchange-rates` | Set/backfill a currency's rate against USD. Body: `{currency, units_per_usd, user_id?, effective_from?}` (`units_per_usd` a decimal string; `effective_from` defaults to today, normalized to midnight UTC). Posting the same `(currency, effective_from)` again replaces that row instead of duplicating it. |
 | `DELETE` | `/exchange-rates/{id}` | Remove a rate row the user owns. |
 | `GET` | `/recurring-rules?user_id=` | The user's recurring rules (rent, salary, subscriptions) that generate ordinary movements on schedule. |
-| `POST` | `/recurring-rules` | Create a rule. Body: `{amount, currency?, user_id?, description?, category?, payment_method?, account_id?, day_of_month, starts_at?, ends_at?}`. `day_of_month` is `"1"`-`"28"` or `"last"` (never 29-31, so a fixed day never drifts across months of different lengths); `starts_at` defaults to now. |
-| `PATCH` | `/recurring-rules/{id}` | Edit a rule / deactivate it (`{active: false}`) — any edit affects future generations only, movements already generated are never touched. Any subset of `{description, category, payment_method, account_id, amount, currency, day_of_month, ends_at, active}`; `account_id: ""` clears it. There's no way to clear an already-set `ends_at` back to "no end date" through this endpoint. |
+| `POST` | `/recurring-rules` | Create a rule. Body: `{amount, currency?, user_id?, description?, category_id?, payment_method?, account_id?, day_of_month, starts_at?, ends_at?}`. `category_id` (BACK-14 follow-up) must reference an existing category, omitted leaves it uncategorized. `day_of_month` is `"1"`-`"28"` or `"last"` (never 29-31, so a fixed day never drifts across months of different lengths); `starts_at` defaults to now. |
+| `PATCH` | `/recurring-rules/{id}` | Edit a rule / deactivate it (`{active: false}`) — any edit affects future generations only, movements already generated are never touched. Any subset of `{description, category_id, payment_method, account_id, amount, currency, day_of_month, ends_at, active}`; `account_id: ""`/`category_id: ""` clears it. There's no way to clear an already-set `ends_at` back to "no end date" through this endpoint. |
 | `GET` | `/settings/local-archive?user_id=` | The user's `local_archive_enabled` toggle (BACK-15's "no cloud" tier; defaults to `false`). |
 | `PUT` | `/settings/local-archive` | Set the toggle: `{local_archive_enabled, user_id?}`. Independent of any cloud-storage setting — never deletes or stops writing anything server-side by itself. |
 | `GET` | `/export/archive?user_id=` | The user's full restorable state — accounts, movements, credit-card purchases — as plaintext JSON. The frontend's "Local backup" panel encrypts this client-side (AES-256-GCM, PBKDF2-SHA256-derived key) before it's ever saved to a file; this endpoint itself has no encryption of its own. |

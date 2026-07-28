@@ -47,7 +47,7 @@ func (s *service) RunPass(ctx context.Context) Summary {
 				Amount:          rule.Amount,
 				Currency:        rule.Currency,
 				Description:     rule.Description,
-				Category:        entities.Category(rule.Category),
+				CategoryID:      rule.CategoryID,
 				PaymentMethod:   rule.PaymentMethod,
 				AccountID:       rule.AccountID,
 				RecurringRuleID: &rule.ID,

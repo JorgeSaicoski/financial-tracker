@@ -13,8 +13,15 @@ type RecurringRule struct {
 	Amount        int64
 	Currency      string
 	Description   string
-	Category      Category
 	PaymentMethod string
+
+	// CategoryID references the shared categories registry (BACK-14
+	// follow-up) — nil means genuinely uncategorized. Copied directly
+	// onto each movement the generator creates (see
+	// internal/application/recurring/service.go); no name resolution
+	// happens at generation time anymore, so this must already be a
+	// valid id by the time the rule is created.
+	CategoryID *string
 
 	// AccountID mirrors Movement's own field: which account the
 	// generated movements move money in/out of, nil when unassigned.

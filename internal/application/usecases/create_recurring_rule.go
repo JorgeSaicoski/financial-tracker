@@ -12,14 +12,15 @@ import (
 )
 
 type createRecurringRuleUseCase struct {
-	rules    repositories.RecurringRuleRepository
-	accounts repositories.AccountRepository
-	methods  repositories.PaymentMethodRepository
+	rules      repositories.RecurringRuleRepository
+	accounts   repositories.AccountRepository
+	methods    repositories.PaymentMethodRepository
+	categories repositories.CategoryRepository
 }
 
 // NewCreateRecurringRule returns interface type for dependency injection.
-func NewCreateRecurringRule(rules repositories.RecurringRuleRepository, accounts repositories.AccountRepository, methods repositories.PaymentMethodRepository) CreateRecurringRuleUseCase {
-	return &createRecurringRuleUseCase{rules: rules, accounts: accounts, methods: methods}
+func NewCreateRecurringRule(rules repositories.RecurringRuleRepository, accounts repositories.AccountRepository, methods repositories.PaymentMethodRepository, categories repositories.CategoryRepository) CreateRecurringRuleUseCase {
+	return &createRecurringRuleUseCase{rules: rules, accounts: accounts, methods: methods, categories: categories}
 }
 
 func (uc *createRecurringRuleUseCase) Execute(ctx context.Context, input CreateRecurringRuleInput) (*dto.RecurringRuleDTO, error) {
@@ -30,11 +31,11 @@ func (uc *createRecurringRuleUseCase) Execute(ctx context.Context, input CreateR
 		return nil, fmt.Errorf(`%w: day_of_month must be "1"-"28" or "last"`, apperrors.ErrInvalidInput)
 	}
 
-	category, err := normalizeCategory(input.Category)
+	paymentMethod, err := resolvePaymentMethod(ctx, uc.methods, input.UserID, input.PaymentMethod)
 	if err != nil {
 		return nil, err
 	}
-	paymentMethod, err := resolvePaymentMethod(ctx, uc.methods, input.UserID, input.PaymentMethod)
+	categoryID, err := resolveCategoryID(ctx, uc.categories, input.CategoryID)
 	if err != nil {
 		return nil, err
 	}
@@ -82,7 +83,7 @@ func (uc *createRecurringRuleUseCase) Execute(ctx context.Context, input CreateR
 		Amount:        input.Amount,
 		Currency:      input.Currency,
 		Description:   input.Description,
-		Category:      category,
+		CategoryID:    categoryID,
 		PaymentMethod: paymentMethod,
 		AccountID:     input.AccountID,
 		DayOfMonth:    input.DayOfMonth,

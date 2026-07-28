@@ -11,7 +11,13 @@ func newImportFixtures() (*importMovementsUseCase, *fakeMovementRepo, *fakeAccou
 	movements := newFakeMovementRepo()
 	accounts := newFakeAccountRepo()
 	currencies := newFakeCurrencyRepo("usd", "brl")
-	uc := &importMovementsUseCase{movements: movements, accounts: accounts, currencies: currencies, methods: newFakePaymentMethodRepo()}
+	categories := newFakeCategoryRepo()
+	for _, name := range []string{"food", "income"} {
+		if _, err := categories.Create(context.Background(), &dto.CategoryDTO{Name: name}); err != nil {
+			panic(err)
+		}
+	}
+	uc := &importMovementsUseCase{movements: movements, accounts: accounts, currencies: currencies, methods: newFakePaymentMethodRepo(), categories: categories}
 	return uc, movements, accounts, currencies
 }
 

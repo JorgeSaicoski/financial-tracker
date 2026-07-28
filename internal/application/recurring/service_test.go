@@ -24,6 +24,8 @@ func newFakeRecurringRuleRepo() *fakeRecurringRuleRepo {
 	return &fakeRecurringRuleRepo{rules: map[string]*dto.RecurringRuleDTO{}}
 }
 
+func strPtr(s string) *string { return &s }
+
 func (f *fakeRecurringRuleRepo) add(r *dto.RecurringRuleDTO) *dto.RecurringRuleDTO {
 	if r.ID == "" {
 		f.nextID++
@@ -69,12 +71,12 @@ func (f *fakeRecurringRuleRepo) ListActive(_ context.Context) ([]*dto.RecurringR
 	return out, nil
 }
 
-func (f *fakeRecurringRuleRepo) UpdateMetadata(_ context.Context, id, description, category, paymentMethod string, accountID *string) error {
+func (f *fakeRecurringRuleRepo) UpdateMetadata(_ context.Context, id, description string, categoryID *string, paymentMethod string, accountID *string) error {
 	r, ok := f.rules[id]
 	if !ok {
 		return apperrors.ErrNotFound
 	}
-	r.Description, r.Category, r.PaymentMethod, r.AccountID = description, category, paymentMethod, accountID
+	r.Description, r.CategoryID, r.PaymentMethod, r.AccountID = description, categoryID, paymentMethod, accountID
 	return nil
 }
 
@@ -130,7 +132,7 @@ var _ logger.Logger = discardLogger{}
 func TestServiceGeneratesDueMovementsAndAdvancesWatermark(t *testing.T) {
 	repo := newFakeRecurringRuleRepo()
 	repo.add(&dto.RecurringRuleDTO{
-		UserID: "user-1", Amount: -5000, Currency: "usd", Category: "housing", PaymentMethod: "bank_transfer",
+		UserID: "user-1", Amount: -5000, Currency: "usd", CategoryID: strPtr("housing"), PaymentMethod: "bank_transfer",
 		DayOfMonth: "1", StartsAt: mustDate("2026-01-01"), Active: true,
 	})
 	svc := NewService(repo, discardLogger{})
@@ -165,7 +167,7 @@ func TestServiceGeneratesDueMovementsAndAdvancesWatermark(t *testing.T) {
 func TestServiceSkipsDeactivatedRules(t *testing.T) {
 	repo := newFakeRecurringRuleRepo()
 	repo.add(&dto.RecurringRuleDTO{
-		UserID: "user-1", Amount: -1000, Currency: "usd", Category: "other", PaymentMethod: "other",
+		UserID: "user-1", Amount: -1000, Currency: "usd", CategoryID: strPtr("other"), PaymentMethod: "other",
 		DayOfMonth: "1", StartsAt: mustDate("2026-01-01"), Active: false,
 	})
 	svc := NewService(repo, discardLogger{})
@@ -183,7 +185,7 @@ func TestServiceSkipsDeactivatedRules(t *testing.T) {
 func TestServiceCatchesUpMultipleMissedPeriodsInOnePass(t *testing.T) {
 	repo := newFakeRecurringRuleRepo()
 	repo.add(&dto.RecurringRuleDTO{
-		UserID: "user-1", Amount: 300000, Currency: "usd", Category: "income", PaymentMethod: "bank_transfer",
+		UserID: "user-1", Amount: 300000, Currency: "usd", CategoryID: strPtr("income"), PaymentMethod: "bank_transfer",
 		DayOfMonth: "1", StartsAt: mustDate("2026-01-01"), Active: true,
 	})
 	svc := NewService(repo, discardLogger{})

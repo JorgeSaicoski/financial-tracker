@@ -16,11 +16,12 @@ import (
 	"github.com/JorgeSaicoski/financial-tracker/internal/pkg/id"
 )
 
-// excludedUserIDsClause builds a "AND user_id NOT IN ($3, $4, ...)" SQL
-// fragment for ListPendingSync (BACK-13's per-user ledger sync toggle),
-// numbering placeholders from paramOffset+1 so callers can append it
-// after their own positional params. Empty when there's nothing to
-// exclude, so callers don't need an empty-IN-list special case.
+// excludedUserIDsClause builds a "AND movements.user_id NOT IN ($3, $4,
+// ...)" SQL fragment for ListPendingSync (BACK-13's per-user ledger sync
+// toggle), numbering placeholders from paramOffset+1 so callers can
+// append it after their own positional params. Empty when there's
+// nothing to exclude, so callers don't need an empty-IN-list special
+// case.
 func excludedUserIDsClause(excludedUserIDs []string, paramOffset int) (string, []any) {
 	if len(excludedUserIDs) == 0 {
 		return "", nil
@@ -31,7 +32,7 @@ func excludedUserIDsClause(excludedUserIDs []string, paramOffset int) (string, [
 		placeholders[i] = "$" + strconv.Itoa(paramOffset+i+1)
 		args[i] = uid
 	}
-	return " AND user_id NOT IN (" + strings.Join(placeholders, ", ") + ")", args
+	return " AND movements.user_id NOT IN (" + strings.Join(placeholders, ", ") + ")", args
 }
 
 type movementRepository struct {
@@ -44,10 +45,34 @@ func NewMovementRepository(db *sql.DB) repositories.MovementRepository {
 	return &movementRepository{db: db}
 }
 
-const movementColumns = `id, user_id, amount, currency, description, category, payment_method,
+// movementInsertColumns is the column list an INSERT into movements
+// targets — category_id (BACK-14 follow-up), not category: the DTO's
+// Category name is resolved to an id at write time (see
+// resolveCategoryID) rather than stored directly.
+const movementInsertColumns = `id, user_id, amount, currency, description, category_id, payment_method,
 	credit_card_purchase_id, installment_number, status, cancels_movement_id, reversed_by_movement_id,
 	timestamp, sync_status, ledger_transaction_id, sync_attempts, last_sync_error, last_sync_attempt_at,
-	synced_at, created_at, account_id, transfer_id, recurring_rule_id, card_id, card_payment_for_card_id, plan_id`
+	synced_at, created_at, account_id, transfer_id, avoidability_override_percent, recurring_rule_id,
+	card_id, card_payment_for_card_id, plan_id`
+
+// movementSelectColumns is what every read query selects — a LEFT JOIN
+// against categories resolves category_id back to a name (COALESCE to
+// "" when NULL, matching the old column's always-a-string contract), so
+// dto.MovementDTO.Category keeps behaving exactly as it did when
+// category was a plain string column. Every column is qualified with
+// "movements." since categories also has id/user_id/created_at and an
+// unqualified reference would be ambiguous once joined.
+const movementSelectColumns = `movements.id, movements.user_id, movements.amount, movements.currency, movements.description,
+	COALESCE(categories.name, '') AS category, movements.category_id, movements.payment_method,
+	movements.credit_card_purchase_id, movements.installment_number, movements.status,
+	movements.cancels_movement_id, movements.reversed_by_movement_id, movements.timestamp,
+	movements.sync_status, movements.ledger_transaction_id, movements.sync_attempts,
+	movements.last_sync_error, movements.last_sync_attempt_at, movements.synced_at,
+	movements.created_at, movements.account_id, movements.transfer_id,
+	movements.avoidability_override_percent, movements.recurring_rule_id,
+	movements.card_id, movements.card_payment_for_card_id, movements.plan_id`
+
+const movementFromClause = `movements LEFT JOIN categories ON movements.category_id = categories.id`
 
 func (r *movementRepository) Create(ctx context.Context, movement *dto.MovementDTO) (*dto.MovementDTO, error) {
 	if movement.ID == "" {
@@ -82,7 +107,8 @@ func (r *movementRepository) CreateBatch(ctx context.Context, movements []*dto.M
 }
 
 func (r *movementRepository) GetByID(ctx context.Context, movementID string) (*dto.MovementDTO, error) {
-	row := r.db.QueryRowContext(ctx, `SELECT `+movementColumns+` FROM movements WHERE id = $1`, movementID)
+	row := r.db.QueryRowContext(ctx,
+		`SELECT `+movementSelectColumns+` FROM `+movementFromClause+` WHERE movements.id = $1`, movementID)
 	m, err := scanMovement(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, apperrors.ErrNotFound
@@ -91,19 +117,19 @@ func (r *movementRepository) GetByID(ctx context.Context, movementID string) (*d
 }
 
 func (r *movementRepository) ListByUser(ctx context.Context, userID string, currency *string, from, to *time.Time, limit, offset int) ([]*dto.MovementDTO, error) {
-	query := `SELECT ` + movementColumns + ` FROM movements WHERE user_id = $1`
+	query := `SELECT ` + movementSelectColumns + ` FROM ` + movementFromClause + ` WHERE movements.user_id = $1`
 	args := []any{userID}
 	if currency != nil {
 		args = append(args, *currency)
-		query += fmt.Sprintf(` AND currency = $%d`, len(args))
+		query += fmt.Sprintf(` AND movements.currency = $%d`, len(args))
 	}
 	if from != nil {
 		args = append(args, *from)
-		query += fmt.Sprintf(` AND timestamp >= $%d`, len(args))
+		query += fmt.Sprintf(` AND movements.timestamp >= $%d`, len(args))
 	}
 	if to != nil {
 		args = append(args, *to)
-		query += fmt.Sprintf(` AND timestamp < $%d`, len(args))
+		query += fmt.Sprintf(` AND movements.timestamp < $%d`, len(args))
 	}
 	if limit <= 0 {
 		limit = -1 // sentinel for "no limit", matching SQLite's convention
@@ -111,7 +137,7 @@ func (r *movementRepository) ListByUser(ctx context.Context, userID string, curr
 	args = append(args, limit)
 	// Unlike SQLite, Postgres has no "-1 means unlimited" LIMIT behavior, so
 	// the sentinel is converted to NULL (Postgres's actual "no limit" spelling).
-	query += fmt.Sprintf(` ORDER BY timestamp DESC, created_at DESC LIMIT NULLIF($%d, -1)`, len(args))
+	query += fmt.Sprintf(` ORDER BY movements.timestamp DESC, movements.created_at DESC LIMIT NULLIF($%d, -1)`, len(args))
 	args = append(args, offset)
 	query += fmt.Sprintf(` OFFSET $%d`, len(args))
 
@@ -120,25 +146,25 @@ func (r *movementRepository) ListByUser(ctx context.Context, userID string, curr
 
 func (r *movementRepository) ListByCreditCardPurchase(ctx context.Context, purchaseID string) ([]*dto.MovementDTO, error) {
 	return r.queryMovements(ctx,
-		`SELECT `+movementColumns+` FROM movements WHERE credit_card_purchase_id = $1 ORDER BY installment_number ASC`,
+		`SELECT `+movementSelectColumns+` FROM `+movementFromClause+` WHERE movements.credit_card_purchase_id = $1 ORDER BY movements.installment_number ASC`,
 		purchaseID)
 }
 
 func (r *movementRepository) ListByCard(ctx context.Context, cardID string) ([]*dto.MovementDTO, error) {
 	return r.queryMovements(ctx,
-		`SELECT `+movementColumns+` FROM movements WHERE card_id = $1 ORDER BY timestamp ASC`,
+		`SELECT `+movementSelectColumns+` FROM `+movementFromClause+` WHERE movements.card_id = $1 ORDER BY movements.timestamp ASC`,
 		cardID)
 }
 
 func (r *movementRepository) ListCardPayments(ctx context.Context, cardID string) ([]*dto.MovementDTO, error) {
 	return r.queryMovements(ctx,
-		`SELECT `+movementColumns+` FROM movements WHERE card_payment_for_card_id = $1 ORDER BY timestamp ASC`,
+		`SELECT `+movementSelectColumns+` FROM `+movementFromClause+` WHERE movements.card_payment_for_card_id = $1 ORDER BY movements.timestamp ASC`,
 		cardID)
 }
 
 func (r *movementRepository) ListByTransferID(ctx context.Context, transferID string) ([]*dto.MovementDTO, error) {
 	return r.queryMovements(ctx,
-		`SELECT `+movementColumns+` FROM movements WHERE transfer_id = $1 ORDER BY amount ASC`,
+		`SELECT `+movementSelectColumns+` FROM `+movementFromClause+` WHERE movements.transfer_id = $1 ORDER BY movements.amount ASC`,
 		transferID)
 }
 
@@ -188,11 +214,11 @@ func (r *movementRepository) ListPendingSync(ctx context.Context, now time.Time,
 	args := []any{now, now.Add(-retryCooldown)}
 	args = append(args, excludeArgs...)
 	return r.queryMovements(ctx,
-		`SELECT `+movementColumns+` FROM movements
-		 WHERE status = 'active' AND sync_status IN ('pending', 'failed')
-		   AND timestamp <= $1
-		   AND (last_sync_attempt_at IS NULL OR last_sync_attempt_at <= $2)`+clause+`
-		 ORDER BY timestamp ASC`,
+		`SELECT `+movementSelectColumns+` FROM `+movementFromClause+`
+		 WHERE movements.status = 'active' AND movements.sync_status IN ('pending', 'failed')
+		   AND movements.timestamp <= $1
+		   AND (movements.last_sync_attempt_at IS NULL OR movements.last_sync_attempt_at <= $2)`+clause+`
+		 ORDER BY movements.timestamp ASC`,
 		args...)
 }
 
@@ -227,10 +253,16 @@ func (r *movementRepository) MarkSyncFailed(ctx context.Context, movementID, syn
 		syncErr, at, movementID)
 }
 
-func (r *movementRepository) UpdateMetadata(ctx context.Context, movementID, description, category, paymentMethod string, accountID, planID *string) error {
+func (r *movementRepository) UpdateMetadata(ctx context.Context, movementID, description string, categoryID *string, paymentMethod string, accountID, planID *string) error {
 	return execOnRow(ctx, r.db,
-		`UPDATE movements SET description = $1, category = $2, payment_method = $3, account_id = $4, plan_id = $5 WHERE id = $6`,
-		nullString(description), category, paymentMethod, strOrNil(accountID), strOrNil(planID), movementID)
+		`UPDATE movements SET description = $1, category_id = $2, payment_method = $3, account_id = $4, plan_id = $5 WHERE id = $6`,
+		nullString(description), strOrNil(categoryID), paymentMethod, strOrNil(accountID), strOrNil(planID), movementID)
+}
+
+func (r *movementRepository) UpdateAvoidabilityOverride(ctx context.Context, movementID string, avoidabilityOverridePercent *int) error {
+	return execOnRow(ctx, r.db,
+		`UPDATE movements SET avoidability_override_percent = $1 WHERE id = $2`,
+		intOrNil(avoidabilityOverridePercent), movementID)
 }
 
 func (r *movementRepository) UpdateFinancial(ctx context.Context, movementID string, amount int64, currency string, timestamp time.Time) error {
@@ -374,7 +406,8 @@ func (r *movementRepositoryTx) CreateBatch(ctx context.Context, movements []*dto
 }
 
 func (r *movementRepositoryTx) GetByID(ctx context.Context, movementID string) (*dto.MovementDTO, error) {
-	row := r.tx.QueryRowContext(ctx, `SELECT `+movementColumns+` FROM movements WHERE id = $1`, movementID)
+	row := r.tx.QueryRowContext(ctx,
+		`SELECT `+movementSelectColumns+` FROM `+movementFromClause+` WHERE movements.id = $1`, movementID)
 	m, err := scanMovement(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, apperrors.ErrNotFound
@@ -383,25 +416,25 @@ func (r *movementRepositoryTx) GetByID(ctx context.Context, movementID string) (
 }
 
 func (r *movementRepositoryTx) ListByUser(ctx context.Context, userID string, currency *string, from, to *time.Time, limit, offset int) ([]*dto.MovementDTO, error) {
-	query := `SELECT ` + movementColumns + ` FROM movements WHERE user_id = $1`
+	query := `SELECT ` + movementSelectColumns + ` FROM ` + movementFromClause + ` WHERE movements.user_id = $1`
 	args := []any{userID}
 	if currency != nil {
 		args = append(args, *currency)
-		query += fmt.Sprintf(` AND currency = $%d`, len(args))
+		query += fmt.Sprintf(` AND movements.currency = $%d`, len(args))
 	}
 	if from != nil {
 		args = append(args, *from)
-		query += fmt.Sprintf(` AND timestamp >= $%d`, len(args))
+		query += fmt.Sprintf(` AND movements.timestamp >= $%d`, len(args))
 	}
 	if to != nil {
 		args = append(args, *to)
-		query += fmt.Sprintf(` AND timestamp < $%d`, len(args))
+		query += fmt.Sprintf(` AND movements.timestamp < $%d`, len(args))
 	}
 	if limit <= 0 {
 		limit = -1
 	}
 	args = append(args, limit)
-	query += fmt.Sprintf(` ORDER BY timestamp DESC, created_at DESC LIMIT NULLIF($%d, -1)`, len(args))
+	query += fmt.Sprintf(` ORDER BY movements.timestamp DESC, movements.created_at DESC LIMIT NULLIF($%d, -1)`, len(args))
 	args = append(args, offset)
 	query += fmt.Sprintf(` OFFSET $%d`, len(args))
 
@@ -410,25 +443,25 @@ func (r *movementRepositoryTx) ListByUser(ctx context.Context, userID string, cu
 
 func (r *movementRepositoryTx) ListByCreditCardPurchase(ctx context.Context, purchaseID string) ([]*dto.MovementDTO, error) {
 	return queryMovements(ctx, r.tx,
-		`SELECT `+movementColumns+` FROM movements WHERE credit_card_purchase_id = $1 ORDER BY installment_number ASC`,
+		`SELECT `+movementSelectColumns+` FROM `+movementFromClause+` WHERE movements.credit_card_purchase_id = $1 ORDER BY movements.installment_number ASC`,
 		purchaseID)
 }
 
 func (r *movementRepositoryTx) ListByCard(ctx context.Context, cardID string) ([]*dto.MovementDTO, error) {
 	return queryMovements(ctx, r.tx,
-		`SELECT `+movementColumns+` FROM movements WHERE card_id = $1 ORDER BY timestamp ASC`,
+		`SELECT `+movementSelectColumns+` FROM `+movementFromClause+` WHERE movements.card_id = $1 ORDER BY movements.timestamp ASC`,
 		cardID)
 }
 
 func (r *movementRepositoryTx) ListCardPayments(ctx context.Context, cardID string) ([]*dto.MovementDTO, error) {
 	return queryMovements(ctx, r.tx,
-		`SELECT `+movementColumns+` FROM movements WHERE card_payment_for_card_id = $1 ORDER BY timestamp ASC`,
+		`SELECT `+movementSelectColumns+` FROM `+movementFromClause+` WHERE movements.card_payment_for_card_id = $1 ORDER BY movements.timestamp ASC`,
 		cardID)
 }
 
 func (r *movementRepositoryTx) ListByTransferID(ctx context.Context, transferID string) ([]*dto.MovementDTO, error) {
 	return queryMovements(ctx, r.tx,
-		`SELECT `+movementColumns+` FROM movements WHERE transfer_id = $1 ORDER BY amount ASC`,
+		`SELECT `+movementSelectColumns+` FROM `+movementFromClause+` WHERE movements.transfer_id = $1 ORDER BY movements.amount ASC`,
 		transferID)
 }
 
@@ -473,11 +506,11 @@ func (r *movementRepositoryTx) ListPendingSync(ctx context.Context, now time.Tim
 	args := []any{now, now.Add(-retryCooldown)}
 	args = append(args, excludeArgs...)
 	return queryMovements(ctx, r.tx,
-		`SELECT `+movementColumns+` FROM movements
-		 WHERE status = 'active' AND sync_status IN ('pending', 'failed')
-		   AND timestamp <= $1
-		   AND (last_sync_attempt_at IS NULL OR last_sync_attempt_at <= $2)`+clause+`
-		 ORDER BY timestamp ASC`,
+		`SELECT `+movementSelectColumns+` FROM `+movementFromClause+`
+		 WHERE movements.status = 'active' AND movements.sync_status IN ('pending', 'failed')
+		   AND movements.timestamp <= $1
+		   AND (movements.last_sync_attempt_at IS NULL OR movements.last_sync_attempt_at <= $2)`+clause+`
+		 ORDER BY movements.timestamp ASC`,
 		args...)
 }
 
@@ -508,10 +541,16 @@ func (r *movementRepositoryTx) MarkSyncFailed(ctx context.Context, movementID, s
 		syncErr, at, movementID)
 }
 
-func (r *movementRepositoryTx) UpdateMetadata(ctx context.Context, movementID, description, category, paymentMethod string, accountID, planID *string) error {
+func (r *movementRepositoryTx) UpdateMetadata(ctx context.Context, movementID, description string, categoryID *string, paymentMethod string, accountID, planID *string) error {
 	return execOnRow(ctx, r.tx,
-		`UPDATE movements SET description = $1, category = $2, payment_method = $3, account_id = $4, plan_id = $5 WHERE id = $6`,
-		nullString(description), category, paymentMethod, strOrNil(accountID), strOrNil(planID), movementID)
+		`UPDATE movements SET description = $1, category_id = $2, payment_method = $3, account_id = $4, plan_id = $5 WHERE id = $6`,
+		nullString(description), strOrNil(categoryID), paymentMethod, strOrNil(accountID), strOrNil(planID), movementID)
+}
+
+func (r *movementRepositoryTx) UpdateAvoidabilityOverride(ctx context.Context, movementID string, avoidabilityOverridePercent *int) error {
+	return execOnRow(ctx, r.tx,
+		`UPDATE movements SET avoidability_override_percent = $1 WHERE id = $2`,
+		intOrNil(avoidabilityOverridePercent), movementID)
 }
 
 func (r *movementRepositoryTx) UpdateFinancial(ctx context.Context, movementID string, amount int64, currency string, timestamp time.Time) error {
@@ -589,16 +628,17 @@ func queryMovements(ctx context.Context, q queryer, query string, args ...any) (
 
 func insertMovement(ctx context.Context, ex execer, m *dto.MovementDTO) error {
 	_, err := ex.ExecContext(ctx,
-		`INSERT INTO movements (`+movementColumns+`)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)`,
+		`INSERT INTO movements (`+movementInsertColumns+`)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)`,
 		m.ID, m.UserID, m.Amount, m.Currency,
-		nullString(m.Description), m.Category, m.PaymentMethod,
+		nullString(m.Description), strOrNil(m.CategoryID), m.PaymentMethod,
 		strOrNil(m.CreditCardPurchaseID), intOrNil(m.InstallmentNumber),
 		m.Status, strOrNil(m.CancelsMovementID), strOrNil(m.ReversedByMovementID),
 		m.Timestamp, m.SyncStatus, strOrNil(m.LedgerTransactionID),
 		m.SyncAttempts, strOrNil(m.LastSyncError), timeOrNil(m.LastSyncAttemptAt),
 		timeOrNil(m.SyncedAt), m.CreatedAt, strOrNil(m.AccountID), strOrNil(m.TransferID),
-		strOrNil(m.RecurringRuleID), strOrNil(m.CardID), strOrNil(m.CardPaymentForCardID), strOrNil(m.PlanID))
+		intOrNil(m.AvoidabilityOverridePercent), strOrNil(m.RecurringRuleID),
+		strOrNil(m.CardID), strOrNil(m.CardPaymentForCardID), strOrNil(m.PlanID))
 	if err != nil {
 		return fmt.Errorf("postgresql: insert movement: %w", err)
 	}
@@ -617,6 +657,7 @@ func scanMovement(row scannable) (*dto.MovementDTO, error) {
 	var (
 		m                                   dto.MovementDTO
 		description, lastSyncError          sql.NullString
+		categoryID                          sql.NullString
 		purchaseID, cancelsID, reversedByID sql.NullString
 		ledgerTxID, accountID, transferID   sql.NullString
 		recurringRuleID                     sql.NullString
@@ -625,22 +666,25 @@ func scanMovement(row scannable) (*dto.MovementDTO, error) {
 		installmentNumber                   sql.NullInt64
 		syncAttempts                        int64
 		lastAttemptAt, syncedAt             sql.NullTime
+		avoidabilityOverride                sql.NullInt64
 	)
 
 	err := row.Scan(
 		&m.ID, &m.UserID, &m.Amount, &m.Currency,
-		&description, &m.Category, &m.PaymentMethod,
+		&description, &m.Category, &categoryID, &m.PaymentMethod,
 		&purchaseID, &installmentNumber,
 		&m.Status, &cancelsID, &reversedByID,
 		&m.Timestamp, &m.SyncStatus, &ledgerTxID,
 		&syncAttempts, &lastSyncError, &lastAttemptAt,
 		&syncedAt, &m.CreatedAt, &accountID, &transferID,
-		&recurringRuleID, &cardID, &cardPaymentForCardID, &planID)
+		&avoidabilityOverride, &recurringRuleID,
+		&cardID, &cardPaymentForCardID, &planID)
 	if err != nil {
 		return nil, err
 	}
 
 	m.Description = description.String
+	m.CategoryID = stringPtr(categoryID)
 	m.SyncAttempts = int(syncAttempts)
 	m.AccountID = stringPtr(accountID)
 	m.TransferID = stringPtr(transferID)
@@ -656,6 +700,10 @@ func scanMovement(row scannable) (*dto.MovementDTO, error) {
 	if installmentNumber.Valid {
 		n := int(installmentNumber.Int64)
 		m.InstallmentNumber = &n
+	}
+	if avoidabilityOverride.Valid {
+		n := int(avoidabilityOverride.Int64)
+		m.AvoidabilityOverridePercent = &n
 	}
 	if lastAttemptAt.Valid {
 		t := lastAttemptAt.Time

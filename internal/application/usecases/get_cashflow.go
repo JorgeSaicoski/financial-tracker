@@ -52,7 +52,7 @@ func (uc *getCashflowUseCase) Execute(ctx context.Context, userID string, from, 
 		// neither income nor expense, so it's excluded from cashflow
 		// entirely (its two legs would otherwise inflate both In and Out
 		// while netting to zero, which is misleading, not neutral).
-		if m.Category == string(entities.CategoryTransfer) {
+		if m.CategoryID != nil && *m.CategoryID == entities.CategoryTransferID {
 			continue
 		}
 

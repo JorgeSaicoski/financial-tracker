@@ -275,7 +275,7 @@ func (f *fakeMovementRepo) MarkSyncFailed(_ context.Context, id, syncErr string,
 	return nil
 }
 
-func (f *fakeMovementRepo) UpdateMetadata(_ context.Context, id, description, category, paymentMethod string, accountID, planID *string) error {
+func (f *fakeMovementRepo) UpdateMetadata(_ context.Context, id, description string, categoryID *string, paymentMethod string, accountID, planID *string) error {
 	if f.updateMetadataErr != nil {
 		return f.updateMetadataErr
 	}
@@ -284,10 +284,19 @@ func (f *fakeMovementRepo) UpdateMetadata(_ context.Context, id, description, ca
 		return apperrors.ErrNotFound
 	}
 	m.Description = description
-	m.Category = category
+	m.CategoryID = categoryID
 	m.PaymentMethod = paymentMethod
 	m.AccountID = accountID
 	m.PlanID = planID
+	return nil
+}
+
+func (f *fakeMovementRepo) UpdateAvoidabilityOverride(_ context.Context, id string, avoidabilityOverridePercent *int) error {
+	m, ok := f.byID[id]
+	if !ok {
+		return apperrors.ErrNotFound
+	}
+	m.AvoidabilityOverridePercent = avoidabilityOverridePercent
 	return nil
 }
 
@@ -596,12 +605,12 @@ func (f *fakeRecurringRuleRepo) ListActive(_ context.Context) ([]*dto.RecurringR
 	return out, nil
 }
 
-func (f *fakeRecurringRuleRepo) UpdateMetadata(_ context.Context, id, description, category, paymentMethod string, accountID *string) error {
+func (f *fakeRecurringRuleRepo) UpdateMetadata(_ context.Context, id, description string, categoryID *string, paymentMethod string, accountID *string) error {
 	r, ok := f.byID[id]
 	if !ok {
 		return apperrors.ErrNotFound
 	}
-	r.Description, r.Category, r.PaymentMethod, r.AccountID = description, category, paymentMethod, accountID
+	r.Description, r.CategoryID, r.PaymentMethod, r.AccountID = description, categoryID, paymentMethod, accountID
 	return nil
 }
 
@@ -706,6 +715,19 @@ func (f *fakeUserSettingsRepo) SetCloudStorageEntitled(_ context.Context, userID
 	return &cp, nil
 }
 
+func (f *fakeUserSettingsRepo) SetDefaultCategory(_ context.Context, userID string, categoryID *string) (*dto.UserSettingsDTO, error) {
+	s, ok := f.byUserID[userID]
+	if !ok {
+		now := time.Now().UTC()
+		s = dto.DefaultUserSettings(userID, now)
+	}
+	s.DefaultCategoryID = categoryID
+	s.UpdatedAt = time.Now().UTC()
+	f.byUserID[userID] = s
+	cp := *s
+	return &cp, nil
+}
+
 func (f *fakeUserSettingsRepo) ListSyncDisabledUserIDs(_ context.Context) ([]string, error) {
 	var out []string
 	for uid, s := range f.byUserID {
@@ -795,6 +817,128 @@ func (f *fakeCardRepo) Delete(_ context.Context, userID, id string) error {
 
 func (f *fakeCardRepo) IsReferenced(_ context.Context, id string) (bool, error) {
 	return f.referenced[id], nil
+}
+
+// fakeCategoryRepo is an in-memory CategoryRepository, mirroring the
+// semantics the SQLite implementation guarantees: categories are global
+// (no user scoping on GetByID/ListAll/Update), ContributorIDs gates
+// edits, hidden tracks each user's own opt-outs.
+type fakeCategoryRepo struct {
+	byID   map[string]*dto.CategoryDTO
+	hidden map[string]map[string]bool // userID -> categoryID -> true
+	nextID int
+}
+
+func newFakeCategoryRepo() *fakeCategoryRepo {
+	return &fakeCategoryRepo{byID: map[string]*dto.CategoryDTO{}, hidden: map[string]map[string]bool{}}
+}
+
+func (f *fakeCategoryRepo) GetByID(_ context.Context, id string) (*dto.CategoryDTO, error) {
+	c, ok := f.byID[id]
+	if !ok {
+		return nil, apperrors.ErrNotFound
+	}
+	cp := *c
+	return &cp, nil
+}
+
+func (f *fakeCategoryRepo) ListAll(_ context.Context) ([]*dto.CategoryDTO, error) {
+	var out []*dto.CategoryDTO
+	for _, c := range f.byID {
+		cp := *c
+		out = append(out, &cp)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+func (f *fakeCategoryRepo) Create(_ context.Context, c *dto.CategoryDTO) (*dto.CategoryDTO, error) {
+	if c.ID == "" {
+		f.nextID++
+		c.ID = fmt.Sprintf("cat-%d", f.nextID)
+	}
+	if c.CreatedAt.IsZero() {
+		c.CreatedAt = time.Now().UTC()
+	}
+	cp := *c
+	f.byID[c.ID] = &cp
+	return c, nil
+}
+
+func (f *fakeCategoryRepo) Update(_ context.Context, id, name string, avoidabilityPercent *int) error {
+	c, ok := f.byID[id]
+	if !ok {
+		return apperrors.ErrNotFound
+	}
+	c.Name = name
+	c.AvoidabilityPercent = avoidabilityPercent
+	return nil
+}
+
+func (f *fakeCategoryRepo) IsContributor(_ context.Context, userID, categoryID string) (bool, error) {
+	c, ok := f.byID[categoryID]
+	if !ok {
+		return false, nil
+	}
+	for _, id := range c.ContributorIDs {
+		if id == userID {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (f *fakeCategoryRepo) CountByContributor(_ context.Context, userID string) (int, error) {
+	n := 0
+	for _, c := range f.byID {
+		for _, id := range c.ContributorIDs {
+			if id == userID {
+				n++
+				break
+			}
+		}
+	}
+	return n, nil
+}
+
+func (f *fakeCategoryRepo) Hide(_ context.Context, userID, categoryID string) error {
+	if _, ok := f.byID[categoryID]; !ok {
+		return apperrors.ErrNotFound
+	}
+	if f.hidden[userID] == nil {
+		f.hidden[userID] = map[string]bool{}
+	}
+	f.hidden[userID][categoryID] = true
+	return nil
+}
+
+// HideAndReassign doesn't actually move fakeMovementRepo/
+// fakeCreditCardPurchaseRepo rows onto defaultCategoryID — the fakes
+// don't share state across each other the way the real repositories
+// share one database, and no usecase-level test here asserts on
+// post-delete movement category ids. That reassignment is exercised for
+// real by the live-DB repository tests instead.
+func (f *fakeCategoryRepo) HideAndReassign(ctx context.Context, userID, categoryID, defaultCategoryID string) error {
+	return f.Hide(ctx, userID, categoryID)
+}
+
+// fakeLimitsRepo is an in-memory LimitsRepository — tests seed whatever
+// values they need via newFakeLimitsRepo, e.g.
+// newFakeLimitsRepo(map[string]int{"max_categories_per_user": 10}).
+type fakeLimitsRepo struct {
+	values map[string]int
+}
+
+func newFakeLimitsRepo(values map[string]int) *fakeLimitsRepo {
+	return &fakeLimitsRepo{values: values}
+}
+
+func (f *fakeLimitsRepo) GetValue(_ context.Context, name string) (int, error) {
+	v, ok := f.values[name]
+	if !ok {
+		return 0, apperrors.ErrNotFound
+	}
+	return v, nil
 }
 
 // fakePaymentMethodRepo is an in-memory PaymentMethodRepository, mirroring
