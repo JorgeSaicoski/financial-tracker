@@ -24,17 +24,32 @@ const maxCategoriesPerUserLimit = "max_categories_per_user"
 
 // resolveCategoryID validates a caller-supplied category_id: nil or ""
 // stays nil (genuinely uncategorized); anything else must reference an
-// existing category — categories are globally visible (BACK-14
-// follow-up), so no ownership check happens here, only existence.
-func resolveCategoryID(ctx context.Context, categories repositories.CategoryRepository, categoryID *string) (*string, error) {
+// existing category the caller currently has (HasForUser) — a category
+// removed from userID's own list can't be selected again going forward,
+// even though it stays valid on whatever already referenced it (Jorge,
+// 2026-07-28: "still restaurant but he can't choose more times
+// restaurant"). The three system categories (transfer/income/other) are
+// always selectable by anyone — no user_categories row is ever seeded
+// for them, since they're not something any one user creates or "gets".
+func resolveCategoryID(ctx context.Context, categories repositories.CategoryRepository, userID string, categoryID *string) (*string, error) {
 	if categoryID == nil || *categoryID == "" {
 		return nil, nil
 	}
-	if _, err := categories.GetByID(ctx, *categoryID); err != nil {
+	cat, err := categories.GetByID(ctx, *categoryID)
+	if err != nil {
 		if apperrors.Is(err, apperrors.ErrNotFound) {
 			return nil, fmt.Errorf("%w: category not found", apperrors.ErrInvalidInput)
 		}
 		return nil, err
+	}
+	if !entities.IsSystemCategoryName(cat.Name) {
+		has, err := categories.HasForUser(ctx, userID, *categoryID)
+		if err != nil {
+			return nil, err
+		}
+		if !has {
+			return nil, fmt.Errorf("%w: you don't have this category in your list", apperrors.ErrInvalidInput)
+		}
 	}
 	return categoryID, nil
 }
@@ -207,14 +222,14 @@ func (uc *deleteCategoryUseCase) Execute(ctx context.Context, userID, id string,
 	}
 
 	if !reassignExisting {
-		return uc.categories.Hide(ctx, userID, id)
+		return uc.categories.Remove(ctx, userID, id)
 	}
 
 	defaultCategoryID, err := resolveEffectiveDefaultCategoryID(ctx, uc.settings, userID)
 	if err != nil {
 		return err
 	}
-	return uc.categories.HideAndReassign(ctx, userID, id, defaultCategoryID)
+	return uc.categories.RemoveAndReassign(ctx, userID, id, defaultCategoryID)
 }
 
 // categoryEntityFromDTO converts a CategoryDTO to the domain entity so

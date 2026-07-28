@@ -18,7 +18,7 @@ func TestUpdateMovementMetadataOnSyncedMovementEditsInPlace(t *testing.T) {
 	trigger := &fakeSyncTrigger{}
 	repo.add(activeMovement("m1", -500, entities.SyncStatusSynced))
 	categories := newFakeCategoryRepo()
-	transport, err := categories.Create(context.Background(), &dto.CategoryDTO{Name: "transport"})
+	transport, err := categories.Create(context.Background(), &dto.CategoryDTO{Name: "transport", ContributorIDs: []string{"u1"}})
 	if err != nil {
 		t.Fatal(err)
 	}

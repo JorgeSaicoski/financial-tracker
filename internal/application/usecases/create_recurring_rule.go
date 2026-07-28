@@ -34,7 +34,7 @@ func (uc *createRecurringRuleUseCase) Execute(ctx context.Context, input CreateR
 	if err != nil {
 		return nil, err
 	}
-	categoryID, err := resolveCategoryID(ctx, uc.categories, input.CategoryID)
+	categoryID, err := resolveCategoryID(ctx, uc.categories, input.UserID, input.CategoryID)
 	if err != nil {
 		return nil, err
 	}

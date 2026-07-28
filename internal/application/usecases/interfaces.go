@@ -486,12 +486,14 @@ type UpdateCategoryUseCase interface {
 // DeleteCategoryUseCase implements DELETE /categories/{id}: there is no
 // real delete once a category may be shared (BACK-14 follow-up) — this
 // removes id from the caller's own category list only (see
-// CategoryRepository.Hide), never touching the row itself or any other
-// user's data. reassignExisting, when true, also moves every movement/
-// purchase the caller owns off id and onto their resolved default
-// category first (CategoryRepository.HideAndReassign) — still scoped
-// strictly to the caller's own rows. Rejects hiding a reserved system
-// category.
+// CategoryRepository.Remove), never touching the row itself or any other
+// user's data. Existing movements/purchases/recurring rules already
+// referencing id keep doing so; only future selection is blocked (see
+// resolveCategoryID). reassignExisting, when true, also moves every
+// movement/purchase/recurring rule the caller owns off id and onto their
+// resolved default category first (CategoryRepository.RemoveAndReassign)
+// — still scoped strictly to the caller's own rows. Rejects removing a
+// reserved system category.
 type DeleteCategoryUseCase interface {
 	Execute(ctx context.Context, userID, id string, reassignExisting bool) error
 }
