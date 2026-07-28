@@ -16,6 +16,7 @@ import (
 	syncapp "github.com/JorgeSaicoski/financial-tracker/internal/application/sync"
 	"github.com/JorgeSaicoski/financial-tracker/internal/application/usecases"
 	"github.com/JorgeSaicoski/financial-tracker/internal/infrastructure/authentik"
+	cryptox "github.com/JorgeSaicoski/financial-tracker/internal/infrastructure/crypto"
 	"github.com/JorgeSaicoski/financial-tracker/internal/infrastructure/ledgerservice"
 	"github.com/JorgeSaicoski/financial-tracker/internal/infrastructure/postgresql"
 	"github.com/JorgeSaicoski/financial-tracker/internal/infrastructure/sqlite"
@@ -100,20 +101,21 @@ func main() {
 	// only reached by the background sync, so requests keep working while
 	// it's down.
 	var (
-		db                *sql.DB
-		err               error
-		movementRepo      repositories.MovementRepository
-		purchaseRepo      repositories.CreditCardPurchaseRepository
-		accountRepo       repositories.AccountRepository
-		cardRepo          repositories.CardRepository
-		currencyRepo      repositories.CurrencyRepository
-		exchangeRateRepo  repositories.ExchangeRateRepository
-		recurringRuleRepo repositories.RecurringRuleRepository
-		localArchiveRepo  repositories.LocalArchiveSettingsRepository
-		paymentMethodRepo repositories.PaymentMethodRepository
-		planRepo          repositories.PlanRepository
-		userRepo          repositories.UserRepository
-		settingsRepo      repositories.UserSettingsRepository
+		db                  *sql.DB
+		err                 error
+		movementRepo        repositories.MovementRepository
+		purchaseRepo        repositories.CreditCardPurchaseRepository
+		accountRepo         repositories.AccountRepository
+		cardRepo            repositories.CardRepository
+		currencyRepo        repositories.CurrencyRepository
+		exchangeRateRepo    repositories.ExchangeRateRepository
+		recurringRuleRepo   repositories.RecurringRuleRepository
+		localArchiveRepo    repositories.LocalArchiveSettingsRepository
+		paymentMethodRepo   repositories.PaymentMethodRepository
+		planRepo            repositories.PlanRepository
+		userRepo            repositories.UserRepository
+		settingsRepo        repositories.UserSettingsRepository
+		ledgerPseudonymRepo repositories.LedgerPseudonymRepository
 	)
 
 	switch dbDriver {
@@ -138,9 +140,27 @@ func main() {
 			log.Error("migrating database failed: %v", err)
 			os.Exit(1)
 		}
-		movementRepo = postgresql.NewMovementRepository(db)
+
+		// BACK-16: field-level envelope encryption for
+		// movements.description/accounts.name — Postgres ("cloud
+		// storage") only, since it's the only backend a stolen disk/DB
+		// dump threat model applies to. Required at startup, not
+		// optional, so a deployment can't silently run without it.
+		masterKeyB64 := os.Getenv("ENCRYPTION_MASTER_KEY")
+		if masterKeyB64 == "" {
+			log.Error("ENCRYPTION_MASTER_KEY is required when DB_DRIVER=postgres (BACK-16: encrypts movements.description/accounts.name at rest). Generate with: openssl rand -base64 32")
+			os.Exit(1)
+		}
+		masterKey, err := cryptox.ParseMasterKey(masterKeyB64)
+		if err != nil {
+			log.Error("ENCRYPTION_MASTER_KEY: %v", err)
+			os.Exit(1)
+		}
+		fieldCryptor := cryptox.NewFieldCryptor(masterKey, postgresql.NewUserDataKeyRepository(db))
+
+		movementRepo = cryptox.NewEncryptingMovementRepository(postgresql.NewMovementRepository(db), fieldCryptor)
 		purchaseRepo = postgresql.NewCreditCardPurchaseRepository(db)
-		accountRepo = postgresql.NewAccountRepository(db)
+		accountRepo = cryptox.NewEncryptingAccountRepository(postgresql.NewAccountRepository(db), fieldCryptor)
 		cardRepo = postgresql.NewCardRepository(db)
 		currencyRepo = postgresql.NewCurrencyRepository(db)
 		exchangeRateRepo = postgresql.NewExchangeRateRepository(db)
@@ -150,6 +170,7 @@ func main() {
 		planRepo = postgresql.NewPlanRepository(db)
 		userRepo = postgresql.NewUserRepository(db)
 		settingsRepo = postgresql.NewUserSettingsRepository(db)
+		ledgerPseudonymRepo = postgresql.NewLedgerPseudonymRepository(db)
 	case "sqlite":
 		db, err = sqlite.Open(dbPath)
 		if err != nil {
@@ -172,14 +193,29 @@ func main() {
 		planRepo = sqlite.NewPlanRepository(db)
 		userRepo = sqlite.NewUserRepository(db)
 		settingsRepo = sqlite.NewUserSettingsRepository(db)
+		ledgerPseudonymRepo = sqlite.NewLedgerPseudonymRepository(db)
 	default:
 		log.Error("unknown DB_DRIVER %q (want sqlite or postgres)", dbDriver)
 		os.Exit(1)
 	}
 	defer db.Close()
 
+	// BACK-16: pseudonymous ledger sync — required for both drivers,
+	// since ledger sync itself is available regardless of DB_DRIVER.
+	ledgerHMACKeyB64 := os.Getenv("LEDGER_HMAC_KEY")
+	if ledgerHMACKeyB64 == "" {
+		log.Error("LEDGER_HMAC_KEY is required (BACK-16: pseudonymizes ledger-service sync). Generate with: openssl rand -base64 32")
+		os.Exit(1)
+	}
+	ledgerHMACKey, err := cryptox.ParseHMACKey(ledgerHMACKeyB64)
+	if err != nil {
+		log.Error("LEDGER_HMAC_KEY: %v", err)
+		os.Exit(1)
+	}
+	ledgerPseudonymizer := cryptox.NewLedgerPseudonymizer(ledgerHMACKey, ledgerPseudonymRepo)
+
 	ledgerClient := ledgerservice.NewClient(ledgerServiceURL)
-	ledgerGateway := ledgerservice.NewLedgerGateway(ledgerClient)
+	ledgerGateway := ledgerservice.NewLedgerGateway(ledgerClient, ledgerPseudonymizer)
 	syncService := syncapp.NewService(movementRepo, settingsRepo, ledgerGateway, log, retryCooldown)
 	recurringService := recurringapp.NewService(recurringRuleRepo, log)
 
