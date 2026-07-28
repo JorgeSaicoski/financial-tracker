@@ -16,6 +16,23 @@ WHERE lower(c.name) = lower(credit_card_purchases.category)
   AND credit_card_purchases.category IS NOT NULL
   AND credit_card_purchases.category != '';
 
+-- Guard against silently losing a category string that didn't match any
+-- row in the categories registry (stale/renamed name) — without this,
+-- the DROP COLUMN below would delete that data with no trace. Not a
+-- DO $$ ... $$ block: this migration runner's splitStatements (db.go)
+-- splits on every top-level ';', which would break a dollar-quoted
+-- block apart into invalid fragments. A CHECK constraint on a
+-- throwaway temp table stands in for an assertion instead — the INSERT
+-- fails (aborting this migration's transaction) if any row is still
+-- unresolved, and every line here stays a single, independently valid
+-- statement.
+CREATE TEMP TABLE assert_credit_card_purchases_category_backfilled (ok BOOLEAN NOT NULL CHECK (ok));
+INSERT INTO assert_credit_card_purchases_category_backfilled (ok)
+SELECT NOT EXISTS (
+    SELECT 1 FROM credit_card_purchases WHERE category IS NOT NULL AND category != '' AND category_id IS NULL
+);
+DROP TABLE assert_credit_card_purchases_category_backfilled;
+
 ALTER TABLE credit_card_purchases DROP COLUMN category;
 
 -- recurring_rules.category still carried BACK-14's *old* fixed-enum
@@ -33,6 +50,13 @@ WHERE lower(c.name) = lower(recurring_rules.category)
   AND recurring_rules.category IS NOT NULL
   AND recurring_rules.category != '';
 
+CREATE TEMP TABLE assert_recurring_rules_category_backfilled (ok BOOLEAN NOT NULL CHECK (ok));
+INSERT INTO assert_recurring_rules_category_backfilled (ok)
+SELECT NOT EXISTS (
+    SELECT 1 FROM recurring_rules WHERE category IS NOT NULL AND category != '' AND category_id IS NULL
+);
+DROP TABLE assert_recurring_rules_category_backfilled;
+
 ALTER TABLE recurring_rules DROP COLUMN category;
 
 ALTER TABLE movements ADD COLUMN category_id TEXT REFERENCES categories(id);
@@ -43,6 +67,13 @@ FROM categories c
 WHERE lower(c.name) = lower(movements.category)
   AND movements.category IS NOT NULL
   AND movements.category != '';
+
+CREATE TEMP TABLE assert_movements_category_backfilled (ok BOOLEAN NOT NULL CHECK (ok));
+INSERT INTO assert_movements_category_backfilled (ok)
+SELECT NOT EXISTS (
+    SELECT 1 FROM movements WHERE category IS NOT NULL AND category != '' AND category_id IS NULL
+);
+DROP TABLE assert_movements_category_backfilled;
 
 ALTER TABLE movements DROP COLUMN category;
 

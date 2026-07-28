@@ -28,6 +28,19 @@ SET category_id = (
 )
 WHERE category IS NOT NULL AND category != '';
 
+-- Guard against silently losing a category string that didn't match any
+-- row in the categories registry (stale/renamed name) — without this,
+-- the DROP COLUMN below would delete that data with no trace. SQLite has
+-- no RAISE outside a trigger, so a CHECK constraint on a throwaway temp
+-- table stands in for an assertion: the INSERT fails (aborting this
+-- migration's transaction) if any row is still unresolved.
+CREATE TEMP TABLE assert_credit_card_purchases_category_backfilled (ok INTEGER NOT NULL CHECK (ok = 1));
+INSERT INTO assert_credit_card_purchases_category_backfilled (ok)
+SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM credit_card_purchases WHERE category IS NOT NULL AND category != '' AND category_id IS NULL
+) THEN 1 ELSE 0 END;
+DROP TABLE assert_credit_card_purchases_category_backfilled;
+
 ALTER TABLE credit_card_purchases DROP COLUMN category;
 
 -- recurring_rules.category still carried BACK-14's *old* fixed-enum
@@ -44,6 +57,13 @@ SET category_id = (
 )
 WHERE category IS NOT NULL AND category != '';
 
+CREATE TEMP TABLE assert_recurring_rules_category_backfilled (ok INTEGER NOT NULL CHECK (ok = 1));
+INSERT INTO assert_recurring_rules_category_backfilled (ok)
+SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM recurring_rules WHERE category IS NOT NULL AND category != '' AND category_id IS NULL
+) THEN 1 ELSE 0 END;
+DROP TABLE assert_recurring_rules_category_backfilled;
+
 ALTER TABLE recurring_rules DROP COLUMN category;
 
 ALTER TABLE movements ADD COLUMN category_id TEXT REFERENCES categories(id);
@@ -53,6 +73,13 @@ SET category_id = (
     SELECT c.id FROM categories c WHERE lower(c.name) = lower(movements.category) LIMIT 1
 )
 WHERE category IS NOT NULL AND category != '';
+
+CREATE TEMP TABLE assert_movements_category_backfilled (ok INTEGER NOT NULL CHECK (ok = 1));
+INSERT INTO assert_movements_category_backfilled (ok)
+SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM movements WHERE category IS NOT NULL AND category != '' AND category_id IS NULL
+) THEN 1 ELSE 0 END;
+DROP TABLE assert_movements_category_backfilled;
 
 ALTER TABLE movements DROP COLUMN category;
 
