@@ -160,6 +160,18 @@ implements.
   self-hosting without a running Authentik instance: every request is then
   attributed to a fixed dev user (`DEFAULT_USER_ID`) and the frontend shows
   no login guard either.
+- **Identity provider is pluggable (BACK-20)**: `cmd/api` selects which
+  `services.IdentityVerifier` to construct via `AUTH_PROVIDER`
+  (`authentik`, the default, or `simple` —
+  `internal/infrastructure/simpleauth`, any other issuer speaking the same
+  OIDC-like `iss`/`sub`/`exp`/`aud` + JWKS contract, config'd via
+  `SIMPLE_AUTH_ISSUER_URL`/`SIMPLE_AUTH_JWKS_URL`/`SIMPLE_AUTH_AUDIENCE` —
+  see `.env.example`). Only `cmd/api/main.go` knows which provider is
+  active; `interfaces/api` and every usecase depend solely on the
+  `services.IdentityVerifier` interface. **Not included**: an actual
+  standalone username/password auth service (BACK-20's other deliverable,
+  a new sibling repo) — this only ships the financial-tracker-side adapter
+  ready to point at one once it exists.
 - **No idempotency key on sync.** If a push to ledger-service succeeds but
   the response is lost, the retry duplicates the transaction there. The
   real fix is idempotency-key support in ledger-service's API (follow-up
