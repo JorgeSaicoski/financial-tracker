@@ -1,0 +1,86 @@
+name: E2E
+
+# Separate from ci.yml's unit tests: boots the full deploy/ stack (Postgres,
+# Authentik, financial-tracker, web, Caddy) and runs deploy/e2e-test.sh's
+# curl-driven CRUD smoke test against it — see claude/checklist.md's
+# "e2e testing" section. Fully self-contained on the runner: no deployed
+# host to point at, no sibling ledger-service checkout needed (ledger is
+# optional — see deploy/compose.yaml's own comment). docker compose is
+# preinstalled on GitHub-hosted ubuntu-latest runners; deploy/compose.yaml's
+# podman-only `:z` SELinux bind-mount labels are harmless no-ops under
+# Docker.
+
+on:
+  push:
+    branches: [main, stg]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: Full stack e2e
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate deploy/.env
+        # Same shape as a human's `cp deploy/.env.example deploy/.env` +
+        # filling CHANGE_ME with real secrets (see deploy/README.md) —
+        # scripted here since there's no human/repo secret to copy from on
+        # a fresh runner. Postgres passwords are hex, not base64: compose.yaml
+        # interpolates them straight into a postgres:// URL with no
+        # URL-encoding, and base64's `+`/`/` characters break that parse.
+        run: |
+          cd deploy
+          cp .env.example .env
+          sed -i \
+            -e "s|^FT_POSTGRES_PASSWORD=.*|FT_POSTGRES_PASSWORD=$(openssl rand -hex 24)|" \
+            -e "s|^LEDGER_POSTGRES_PASSWORD=.*|LEDGER_POSTGRES_PASSWORD=$(openssl rand -hex 24)|" \
+            -e "s|^AUTHENTIK_POSTGRES_PASSWORD=.*|AUTHENTIK_POSTGRES_PASSWORD=$(openssl rand -hex 24)|" \
+            -e "s|^AUTHENTIK_SECRET_KEY=.*|AUTHENTIK_SECRET_KEY=$(openssl rand -base64 60 | tr -d '\n')|" \
+            -e "s|^ENCRYPTION_MASTER_KEY=.*|ENCRYPTION_MASTER_KEY=$(openssl rand -base64 32)|" \
+            -e "s|^LEDGER_HMAC_KEY=.*|LEDGER_HMAC_KEY=$(openssl rand -base64 32)|" \
+            -e "s|^BILLING_WEBHOOK_SECRET=.*|BILLING_WEBHOOK_SECRET=$(openssl rand -base64 32)|" \
+            .env
+          if grep -q CHANGE_ME .env; then
+            echo "::error::deploy/.env.example gained a new CHANGE_ME this workflow doesn't fill in"
+            grep CHANGE_ME .env
+            exit 1
+          fi
+
+      - name: Bring up the stack
+        # AUTH_DISABLED=true: e2e-test.sh is a curl script and can't complete
+        # Authentik's browser PKCE redirect — that flow is verified
+        # separately (Goal 2's own browser-driven pass, not CI). No --profile
+        # ledger: sync tolerates ledger-service being absent entirely, and
+        # core CRUD doesn't need it.
+        run: |
+          cd deploy
+          AUTH_DISABLED=true docker compose up -d --build
+
+      - name: Wait for the API to come up
+        run: |
+          for i in $(seq 1 60); do
+            if curl -sk --resolve financial-tracker.local:8443:127.0.0.1 \
+                 https://financial-tracker.local:8443/api/config >/dev/null; then
+              echo "API is up."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::API never came up within 120s"
+          cd deploy && docker compose logs
+          exit 1
+
+      - name: make e2e-test
+        run: make e2e-test
+
+      - name: Dump logs on failure
+        if: failure()
+        run: cd deploy && docker compose logs
+
+      - name: Tear down
+        if: always()
+        run: cd deploy && docker compose down -v

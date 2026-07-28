@@ -156,13 +156,34 @@ services:
       # retries on a cooldown and never blocks movements (see root README).
       LEDGER_SERVICE_URL: ${LEDGER_SERVICE_URL:-http://ledger-service:8080}
       PORT: 8081
-      # No auth yet (BACK-02/INFRA-02). This fallback identity stays
-      # relevant even after Authentik lands: a self-hosted single-user
-      # deployment can keep using it instead of standing up real accounts.
+      # BACK-02/FRONT-04/INFRA-02 are implemented — wire the API up to
+      # this stack's own Authentik instance. OIDC_ISSUER_URL matches the
+      # blueprint's fixed application slug (see deploy/README.md's
+      # Authentik section); PUBLIC_OIDC_CLIENT_ID must match what the
+      # blueprint and the web service below both use, so tokens' aud
+      # validates against the right client.
+      OIDC_ISSUER_URL: https://auth.${APP_HOSTNAME:-financial-tracker.local}:8443/application/o/financial-tracker/
+      PUBLIC_OIDC_CLIENT_ID: ${PUBLIC_OIDC_CLIENT_ID:-financial-tracker}
+      # This fallback identity stays relevant even with Authentik live: a
+      # self-hosted single-user deployment can still use AUTH_DISABLED=true
+      # instead of standing up real accounts. Unset/false by default —
+      # `make e2e-test` is the one caller that overrides this, since a
+      # curl-driven CRUD smoke test can't complete Authentik's browser PKCE
+      # redirect (see checklist.md's e2e-testing section; the real login
+      # flow is verified separately, through a browser).
+      AUTH_DISABLED: ${AUTH_DISABLED:-false}
       DEFAULT_USER_ID: ${DEFAULT_USER_ID}
       DEFAULT_CURRENCY: ${DEFAULT_CURRENCY}
       SYNC_INTERVAL: ${SYNC_INTERVAL:-30s}
       SYNC_RETRY_COOLDOWN: ${SYNC_RETRY_COOLDOWN:-60s}
+      # BACK-19: paid cloud-storage subscription. BILLING_WEBHOOK_SECRET is
+      # required at startup (authenticates POST /billing/webhook); the rest
+      # have code-level defaults but are still wired through so `.env`'s
+      # values actually take effect instead of silently no-opping.
+      BILLING_WEBHOOK_SECRET: ${BILLING_WEBHOOK_SECRET}
+      BILLING_REFERENCE_PRICE_USD_CENTS: ${BILLING_REFERENCE_PRICE_USD_CENTS:-1000}
+      BILLING_GRACE_PERIOD_DAYS: ${BILLING_GRACE_PERIOD_DAYS:-7}
+      BILLING_SWEEP_INTERVAL: ${BILLING_SWEEP_INTERVAL:-1h}
       # Same-origin end state: caddy fronts both financial-tracker and web
       # under one hostname, so only that origin needs to be allowed.
       CORS_ALLOWED_ORIGIN: https://${APP_HOSTNAME:-financial-tracker.local}:8443
@@ -186,6 +207,11 @@ services:
       # ../Caddyfile) rather than hitting financial-tracker directly —
       # set in deploy/.env to match APP_HOSTNAME.
       PUBLIC_API_URL: ${PUBLIC_API_URL}
+      # Browser-side PKCE login (FRONT-04) — no client secret. Must match
+      # the financial-tracker service's own OIDC_ISSUER_URL /
+      # PUBLIC_OIDC_CLIENT_ID above (see web/.env.example).
+      PUBLIC_OIDC_ISSUER: https://auth.${APP_HOSTNAME:-financial-tracker.local}:8443/application/o/financial-tracker/
+      PUBLIC_OIDC_CLIENT_ID: ${PUBLIC_OIDC_CLIENT_ID:-financial-tracker}
     depends_on:
       - financial-tracker
     restart: unless-stopped

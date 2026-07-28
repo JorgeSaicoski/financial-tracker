@@ -1,4 +1,4 @@
-.PHONY: help up down restart build rebuild logs test clean update ps run remove-db web web-install web-build build-standalone web-build-standalone deploy-up deploy-down deploy-restart deploy-logs deploy-ps deploy-remove-db
+.PHONY: help up down restart build rebuild logs test clean update ps run remove-db web web-install web-build build-standalone web-build-standalone deploy-up deploy-down deploy-restart deploy-logs deploy-ps deploy-remove-db e2e-test
 
 # Version stamp for `go build -ldflags "-X main.version=..."` — INFRA-06's
 # release workflow overrides this with the pushed tag; a local build just
@@ -49,6 +49,7 @@ help:
 	@echo "  make deploy-remove-db - Stop the deploy stack and wipe its volumes"
 	@echo "  make deploy-logs      - View deploy stack logs"
 	@echo "  make deploy-ps        - List deploy stack containers"
+	@echo "  make e2e-test         - curl-driven CRUD smoke test against an already-running deploy stack"
 
 # Start services (assumes ../ledger-service exists as a sibling checkout)
 up:
@@ -169,3 +170,11 @@ deploy-logs:
 
 deploy-ps:
 	cd deploy && $(COMPOSE_CMD) ps
+
+# curl-driven smoke test (accounts/movements/categories CRUD + whatever of
+# auth is curl-reachable) against an already-running deploy/ stack — see
+# deploy/e2e-test.sh's own header comment and claude/checklist.md's
+# "e2e testing" section. Not unit tests (those are `make test`). APP_HOSTNAME
+# must match whatever deploy/.env set (defaults to financial-tracker.local).
+e2e-test:
+	APP_HOSTNAME=$${APP_HOSTNAME:-financial-tracker.local} bash deploy/e2e-test.sh

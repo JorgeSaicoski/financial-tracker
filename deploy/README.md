@@ -142,8 +142,11 @@ directly with no transformation.
    explicit-consent`, Subject mode **Based on the User's UUID**, redirect
    URI matching `PUBLIC_OIDC_REDIRECT_URI` from `.env`), then
    **Applications → Applications → Create**, linking to that provider.
-4. Values BACK-02/FRONT-04 need, once implemented:
-   - `OIDC_ISSUER_URL` = `https://auth.${APP_HOSTNAME}:8443/application/o/financial-tracker/`
+4. `compose.yaml` already wires the values BACK-02/FRONT-04 need into both
+   the `financial-tracker` and `web` services from `.env` — nothing to set
+   by hand here:
+   - `OIDC_ISSUER_URL` (API) / `PUBLIC_OIDC_ISSUER` (web) =
+     `https://auth.${APP_HOSTNAME}:8443/application/o/financial-tracker/`
    - `PUBLIC_OIDC_CLIENT_ID` = the same `.env` value the blueprint used
      (default `financial-tracker`)
 
