@@ -1,6 +1,9 @@
 package entities
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // User is the local identity every account/movement/etc. is scoped to.
 // It is never created directly by a client request — EnsureUserUseCase
@@ -25,7 +28,26 @@ type User struct {
 	ExternalID  string
 	Email       string
 	DisplayName string
+	Categories  []*Category
 
 	CreatedAt time.Time
 	UpdatedAt time.Time
+}
+
+func (u *User) AddCategory(c *Category) error {
+	if len(u.Categories) >= 10 { //change to get it from db
+		return fmt.Errorf("user %s has reached the maximum number of categories", u.ID)
+	}
+	u.Categories = append(u.Categories, c)
+	return nil
+}
+
+func (u *User) RemoveCategory(c *Category) error {
+	for i, cat := range u.Categories {
+		if cat.ID == c.ID {
+			u.Categories = append(u.Categories[:i], u.Categories[i+1:]...)
+			return nil
+		}
+	}
+	return fmt.Errorf("category %s not found for user %s", c.ID, u.ID)
 }

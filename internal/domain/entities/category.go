@@ -79,24 +79,6 @@ func (c *Category) CanBeEditedBy(userID string) bool {
 	return contains(c.ContributorIDs, userID)
 }
 
-// CanBeHidden reports whether any user may remove this category from
-// their own list (see CategoryRepository.Hide) — unlike editing, hiding
-// isn't contributor-gated, anyone may opt out of any non-system
-// category, including one they don't maintain.
-func (c *Category) CanBeHidden() bool {
-	return !c.IsSystem()
-}
-
-// Rename applies a new name, enforcing that only a contributor may do
-// so.
-func (c *Category) Rename(name, userID string) error {
-	if !c.CanBeEditedBy(userID) {
-		return fmt.Errorf("user %s is not a contributor of category %s", userID, c.ID)
-	}
-	c.Name = name
-	return nil
-}
-
 // UpdateAvoidabilityPercent applies a new avoidability value, enforcing
 // that only a contributor may do so.
 func (c *Category) UpdateAvoidabilityPercent(avoidabilityPercent *int, userID string) error {
@@ -114,4 +96,12 @@ func contains(slice []string, item string) bool {
 		}
 	}
 	return false
+}
+
+func AddContributors(category *Category, userIDs ...string) {
+	for _, userID := range userIDs {
+		if !contains(category.ContributorIDs, userID) {
+			category.ContributorIDs = append(category.ContributorIDs, userID)
+		}
+	}
 }
