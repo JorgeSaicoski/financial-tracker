@@ -55,6 +55,9 @@ func (s stubHandlers) ListAccounts(w http.ResponseWriter, r *http.Request) {
 func (s stubHandlers) ReportBalance(w http.ResponseWriter, r *http.Request) {
 	s.reply("ReportBalance")(w, r)
 }
+func (s stubHandlers) ListSnapshots(w http.ResponseWriter, r *http.Request) {
+	s.reply("ListSnapshots")(w, r)
+}
 
 func (s stubHandlers) ListCurrencies(w http.ResponseWriter, r *http.Request) {
 	s.reply("ListCurrencies")(w, r)
