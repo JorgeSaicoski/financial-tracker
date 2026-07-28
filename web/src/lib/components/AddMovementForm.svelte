@@ -104,8 +104,8 @@
 			{/each}
 		</select>
 		<select bind:value={paymentMethodInput} aria-label="Payment method">
-			{#each paymentMethods as method (method)}
-				<option value={method}>{paymentMethodLabels[method] ?? method}</option>
+			{#each paymentMethods as method (method.id)}
+				<option value={method.name}>{paymentMethodLabels[method.name] ?? method.name}</option>
 			{/each}
 		</select>
 		{#if isCreditCard}

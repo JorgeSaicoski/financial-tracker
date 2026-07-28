@@ -98,7 +98,7 @@ func seedSource(t *testing.T, db *sql.DB) {
 		Currency:      "usd",
 		Description:   "synced coffee",
 		Category:      string(entities.CategoryFood),
-		PaymentMethod: string(entities.PaymentMethodCash),
+		PaymentMethod: "cash",
 		AccountID:     &account.ID,
 		Status:        string(entities.MovementStatusActive),
 		SyncStatus:    string(entities.SyncStatusPending),
@@ -118,7 +118,7 @@ func seedSource(t *testing.T, db *sql.DB) {
 		Currency:      "usd",
 		Description:   "pending lunch",
 		Category:      string(entities.CategoryFood),
-		PaymentMethod: string(entities.PaymentMethodDebitCard),
+		PaymentMethod: "debit_card",
 		Status:        string(entities.MovementStatusActive),
 		SyncStatus:    string(entities.SyncStatusPending),
 		Timestamp:     now,
@@ -187,8 +187,8 @@ func seedSource(t *testing.T, db *sql.DB) {
 	// Transfer pair.
 	transferID := "transfer-1"
 	if _, err := movementRepo.CreateBatch(ctx, []*dto.MovementDTO{
-		{UserID: testUserID, Amount: -5000, Currency: "usd", Description: "transfer out", Category: string(entities.CategoryTransfer), PaymentMethod: string(entities.PaymentMethodOther), AccountID: &account.ID, TransferID: &transferID, Status: string(entities.MovementStatusActive), SyncStatus: string(entities.SyncStatusPending), Timestamp: now, CreatedAt: now},
-		{UserID: testUserID, Amount: 5000, Currency: "usd", Description: "transfer in", Category: string(entities.CategoryTransfer), PaymentMethod: string(entities.PaymentMethodOther), TransferID: &transferID, Status: string(entities.MovementStatusActive), SyncStatus: string(entities.SyncStatusPending), Timestamp: now, CreatedAt: now},
+		{UserID: testUserID, Amount: -5000, Currency: "usd", Description: "transfer out", Category: string(entities.CategoryTransfer), PaymentMethod: "other", AccountID: &account.ID, TransferID: &transferID, Status: string(entities.MovementStatusActive), SyncStatus: string(entities.SyncStatusPending), Timestamp: now, CreatedAt: now},
+		{UserID: testUserID, Amount: 5000, Currency: "usd", Description: "transfer in", Category: string(entities.CategoryTransfer), PaymentMethod: "other", TransferID: &transferID, Status: string(entities.MovementStatusActive), SyncStatus: string(entities.SyncStatusPending), Timestamp: now, CreatedAt: now},
 	}); err != nil {
 		t.Fatalf("create transfer pair: %v", err)
 	}

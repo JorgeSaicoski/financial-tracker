@@ -11,7 +11,7 @@ func newImportFixtures() (*importMovementsUseCase, *fakeMovementRepo, *fakeAccou
 	movements := newFakeMovementRepo()
 	accounts := newFakeAccountRepo()
 	currencies := newFakeCurrencyRepo("usd", "brl")
-	uc := &importMovementsUseCase{movements: movements, accounts: accounts, currencies: currencies}
+	uc := &importMovementsUseCase{movements: movements, accounts: accounts, currencies: currencies, methods: newFakePaymentMethodRepo()}
 	return uc, movements, accounts, currencies
 }
 

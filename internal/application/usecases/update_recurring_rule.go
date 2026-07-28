@@ -13,11 +13,12 @@ import (
 type updateRecurringRuleUseCase struct {
 	rules    repositories.RecurringRuleRepository
 	accounts repositories.AccountRepository
+	methods  repositories.PaymentMethodRepository
 }
 
 // NewUpdateRecurringRule returns interface type for dependency injection.
-func NewUpdateRecurringRule(rules repositories.RecurringRuleRepository, accounts repositories.AccountRepository) UpdateRecurringRuleUseCase {
-	return &updateRecurringRuleUseCase{rules: rules, accounts: accounts}
+func NewUpdateRecurringRule(rules repositories.RecurringRuleRepository, accounts repositories.AccountRepository, methods repositories.PaymentMethodRepository) UpdateRecurringRuleUseCase {
+	return &updateRecurringRuleUseCase{rules: rules, accounts: accounts, methods: methods}
 }
 
 func (uc *updateRecurringRuleUseCase) Execute(ctx context.Context, userID, id string, input UpdateRecurringRuleInput) (*dto.RecurringRuleDTO, error) {
@@ -47,10 +48,11 @@ func (uc *updateRecurringRuleUseCase) Execute(ctx context.Context, userID, id st
 	}
 	paymentMethod := existing.PaymentMethod
 	if input.PaymentMethod != nil {
-		if !entities.PaymentMethod(*input.PaymentMethod).IsValid() {
-			return nil, fmt.Errorf("%w: unknown payment method %q", apperrors.ErrInvalidInput, *input.PaymentMethod)
+		resolved, err := resolvePaymentMethod(ctx, uc.methods, existing.UserID, *input.PaymentMethod)
+		if err != nil {
+			return nil, err
 		}
-		paymentMethod = *input.PaymentMethod
+		paymentMethod = resolved
 	}
 	accountID := existing.AccountID
 	if input.AccountID != nil {

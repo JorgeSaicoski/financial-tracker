@@ -75,6 +75,16 @@ func (s stubHandlers) DeleteCard(w http.ResponseWriter, r *http.Request) {
 	s.reply("DeleteCard")(w, r)
 }
 
+func (s stubHandlers) CreatePaymentMethod(w http.ResponseWriter, r *http.Request) {
+	s.reply("CreatePaymentMethod")(w, r)
+}
+func (s stubHandlers) UpdatePaymentMethod(w http.ResponseWriter, r *http.Request) {
+	s.reply("UpdatePaymentMethod")(w, r)
+}
+func (s stubHandlers) DeletePaymentMethod(w http.ResponseWriter, r *http.Request) {
+	s.reply("DeletePaymentMethod")(w, r)
+}
+
 func (s stubHandlers) ListCurrencies(w http.ResponseWriter, r *http.Request) {
 	s.reply("ListCurrencies")(w, r)
 }
@@ -152,7 +162,7 @@ func TestStandaloneRejectsSyncRoute(t *testing.T) {
 		handlers.MovementHandler(s), handlers.AccountHandler(s), handlers.CardHandler(s), handlers.CurrencyHandler(s),
 		handlers.TransferHandler(s), handlers.ExchangeRateHandler(s),
 		handlers.RecurringRuleHandler(s), handlers.ArchiveHandler(s), handlers.ImportHandler(s),
-		handlers.ExportHandler(s), handlers.SettingsHandler(s), handlers.UserHandler(s), handlers.ConfigHandler(s),
+		handlers.ExportHandler(s), handlers.PaymentMethodHandler(s), handlers.SettingsHandler(s), handlers.UserHandler(s), handlers.ConfigHandler(s),
 		AuthMiddleware(noopAuthMiddleware), "*", true, nil,
 	)
 
@@ -171,7 +181,7 @@ func TestNonStandaloneServesSyncRoute(t *testing.T) {
 		handlers.MovementHandler(s), handlers.AccountHandler(s), handlers.CardHandler(s), handlers.CurrencyHandler(s),
 		handlers.TransferHandler(s), handlers.ExchangeRateHandler(s),
 		handlers.RecurringRuleHandler(s), handlers.ArchiveHandler(s), handlers.ImportHandler(s),
-		handlers.ExportHandler(s), handlers.SettingsHandler(s), handlers.UserHandler(s), handlers.ConfigHandler(s),
+		handlers.ExportHandler(s), handlers.PaymentMethodHandler(s), handlers.SettingsHandler(s), handlers.UserHandler(s), handlers.ConfigHandler(s),
 		AuthMiddleware(noopAuthMiddleware), "*", false, nil,
 	)
 
@@ -191,7 +201,7 @@ func TestExportRouteAvailableInEveryMode(t *testing.T) {
 			handlers.MovementHandler(s), handlers.AccountHandler(s), handlers.CardHandler(s), handlers.CurrencyHandler(s),
 			handlers.TransferHandler(s), handlers.ExchangeRateHandler(s),
 			handlers.RecurringRuleHandler(s), handlers.ArchiveHandler(s), handlers.ImportHandler(s),
-			handlers.ExportHandler(s), handlers.SettingsHandler(s), handlers.UserHandler(s), handlers.ConfigHandler(s),
+			handlers.ExportHandler(s), handlers.PaymentMethodHandler(s), handlers.SettingsHandler(s), handlers.UserHandler(s), handlers.ConfigHandler(s),
 			AuthMiddleware(noopAuthMiddleware), "*", standalone, nil,
 		)
 
@@ -215,7 +225,7 @@ func TestStandaloneServesEmbeddedFrontendAsFallback(t *testing.T) {
 		handlers.MovementHandler(s), handlers.AccountHandler(s), handlers.CardHandler(s), handlers.CurrencyHandler(s),
 		handlers.TransferHandler(s), handlers.ExchangeRateHandler(s),
 		handlers.RecurringRuleHandler(s), handlers.ArchiveHandler(s), handlers.ImportHandler(s),
-		handlers.ExportHandler(s), handlers.SettingsHandler(s), handlers.UserHandler(s), handlers.ConfigHandler(s),
+		handlers.ExportHandler(s), handlers.PaymentMethodHandler(s), handlers.SettingsHandler(s), handlers.UserHandler(s), handlers.ConfigHandler(s),
 		AuthMiddleware(noopAuthMiddleware), "*", true, fsys,
 	)
 

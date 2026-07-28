@@ -65,7 +65,7 @@ func (r *RecurringRuleDTO) ToEntity() *entities.RecurringRule {
 		Currency:        r.Currency,
 		Description:     r.Description,
 		Category:        entities.Category(r.Category),
-		PaymentMethod:   entities.PaymentMethod(r.PaymentMethod),
+		PaymentMethod:   r.PaymentMethod,
 		AccountID:       r.AccountID,
 		DayOfMonth:      r.DayOfMonth,
 		StartsAt:        r.StartsAt,

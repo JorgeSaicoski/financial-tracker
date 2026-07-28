@@ -117,9 +117,16 @@ type SyncSummaryResponse struct {
 	Failed int `json:"failed"`
 }
 
+// PaymentMethodResponse is one row of the caller's payment-method
+// registry (BACK-17).
+type PaymentMethodResponse struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
 type CategoriesResponse struct {
-	Categories     []string `json:"categories"`
-	PaymentMethods []string `json:"payment_methods"`
+	Categories     []string                `json:"categories"`
+	PaymentMethods []PaymentMethodResponse `json:"payment_methods"`
 }
 
 type ErrorResponse struct {

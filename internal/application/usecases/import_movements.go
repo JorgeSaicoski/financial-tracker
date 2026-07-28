@@ -16,11 +16,12 @@ type importMovementsUseCase struct {
 	movements  repositories.MovementRepository
 	accounts   repositories.AccountRepository
 	currencies repositories.CurrencyRepository
+	methods    repositories.PaymentMethodRepository
 }
 
 // NewImportMovements returns interface type for dependency injection.
-func NewImportMovements(movements repositories.MovementRepository, accounts repositories.AccountRepository, currencies repositories.CurrencyRepository) ImportMovementsUseCase {
-	return &importMovementsUseCase{movements: movements, accounts: accounts, currencies: currencies}
+func NewImportMovements(movements repositories.MovementRepository, accounts repositories.AccountRepository, currencies repositories.CurrencyRepository, methods repositories.PaymentMethodRepository) ImportMovementsUseCase {
+	return &importMovementsUseCase{movements: movements, accounts: accounts, currencies: currencies, methods: methods}
 }
 
 // validRow is a CSV row that passed every field-level check, ready to
@@ -33,7 +34,7 @@ type validRow struct {
 	currency      string
 	description   string
 	category      entities.Category
-	paymentMethod entities.PaymentMethod
+	paymentMethod string
 	accountID     *string
 	dupKey        string // date|amount|currency|normalized description
 }
@@ -115,6 +116,20 @@ func (uc *importMovementsUseCase) Execute(ctx context.Context, input ImportMovem
 		return result, nil
 	}
 
+	// Register any payment method used in this batch that isn't already in
+	// the caller's registry (BACK-17) — only here, never during the
+	// validate/preview pass above, so a dry run can't mutate the registry.
+	seenMethods := make(map[string]bool, len(toInsert))
+	for _, m := range toInsert {
+		if seenMethods[m.PaymentMethod] {
+			continue
+		}
+		seenMethods[m.PaymentMethod] = true
+		if _, err := uc.methods.EnsureByName(ctx, input.UserID, m.PaymentMethod); err != nil {
+			return ImportMovementsResult{}, err
+		}
+	}
+
 	if _, err := uc.movements.CreateBatch(ctx, toInsert); err != nil {
 		return ImportMovementsResult{}, err
 	}
@@ -146,12 +161,16 @@ func (uc *importMovementsUseCase) currencySet(ctx context.Context) (map[string]b
 }
 
 // validateImportRow applies BACK-03's CSV model rules to one row. It
-// deliberately doesn't call normalizeCategoryAndMethod (used by
-// CreateMovement) because that helper reports one combined error;
+// deliberately doesn't call normalizeCategory/resolvePaymentMethod (used
+// by CreateMovement) because those report one field's error at a time;
 // per-row-per-field reporting is the whole point of an import preview,
-// so category and payment_method are checked separately here even
-// though the underlying rule (blank -> "other", otherwise must be a
-// valid domain value) is identical.
+// so category is checked separately here even though the underlying
+// rule (blank -> "other", otherwise must be a valid domain value) is
+// identical. payment_method has no such check (BACK-17: no longer a
+// fixed enum) — any non-blank value is accepted here and implicitly
+// registered against the caller's registry at actual-insert time
+// (Execute, only outside a dry run — a preview must never mutate the
+// registry).
 func validateImportRow(rowNum int, row ImportRowInput, accountsByName map[string]*dto.AccountDTO, currencySet map[string]bool) (validRow, []ImportRowError) {
 	var errs []ImportRowError
 	addErr := func(field, message string) {
@@ -189,12 +208,9 @@ func validateImportRow(rowNum int, row ImportRowInput, accountsByName map[string
 		addErr("category", "not a recognized category (see GET /categories)")
 	}
 
-	paymentMethod := entities.PaymentMethod(strings.ToLower(strings.TrimSpace(row.PaymentMethod)))
+	paymentMethod := strings.ToLower(strings.TrimSpace(row.PaymentMethod))
 	if paymentMethod == "" {
-		paymentMethod = entities.PaymentMethodOther
-	}
-	if !paymentMethod.IsValid() {
-		addErr("payment_method", "not a recognized payment method (see GET /categories)")
+		paymentMethod = "other"
 	}
 
 	var accountID *string

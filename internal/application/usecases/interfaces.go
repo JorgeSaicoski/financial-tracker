@@ -666,3 +666,43 @@ type CardView struct {
 	BudgetRemaining *int64
 	OverBudget      bool
 }
+
+// CreatePaymentMethodInput carries a POST /payment-methods body (BACK-17).
+type CreatePaymentMethodInput struct {
+	UserID string
+	Name   string
+}
+
+// CreatePaymentMethodUseCase rejects the two reserved system names
+// ("credit_card", "bank_transfer") and duplicate names (case-insensitive).
+type CreatePaymentMethodUseCase interface {
+	Execute(ctx context.Context, input CreatePaymentMethodInput) (*dto.PaymentMethodDTO, error)
+}
+
+// ListPaymentMethodsUseCase lazily ensures the system entries and the
+// first-run defaults exist for userID first (absence-safe, same pattern
+// as user_settings), then returns every payment-method row, name
+// ascending.
+type ListPaymentMethodsUseCase interface {
+	Execute(ctx context.Context, userID string) ([]*dto.PaymentMethodDTO, error)
+}
+
+// UpdatePaymentMethodInput carries a PATCH /payment-methods/{id} body —
+// unlike UpdateMovementInput's nil-means-unchanged fields, Name here is
+// always required: renaming is this endpoint's only capability.
+type UpdatePaymentMethodInput struct {
+	Name string
+}
+
+// UpdatePaymentMethodUseCase rejects edits to the two reserved system
+// names and renaming onto an existing name (case-insensitive).
+type UpdatePaymentMethodUseCase interface {
+	Execute(ctx context.Context, userID, id string, input UpdatePaymentMethodInput) (*dto.PaymentMethodDTO, error)
+}
+
+// DeletePaymentMethodUseCase rejects deleting either reserved system
+// name. Deleting one still referenced by movements is allowed — it's a
+// label, not an FK, same as a deleted category.
+type DeletePaymentMethodUseCase interface {
+	Execute(ctx context.Context, userID, id string) error
+}

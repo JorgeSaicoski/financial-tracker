@@ -11,7 +11,7 @@ import (
 )
 
 func TestCreateRecurringRuleValidatesDayOfMonth(t *testing.T) {
-	uc := NewCreateRecurringRule(newFakeRecurringRuleRepo(), newFakeAccountRepo())
+	uc := NewCreateRecurringRule(newFakeRecurringRuleRepo(), newFakeAccountRepo(), newFakePaymentMethodRepo())
 
 	for _, bad := range []string{"", "0", "29", "31", "last day", "abc"} {
 		_, err := uc.Execute(context.Background(), CreateRecurringRuleInput{
@@ -24,7 +24,7 @@ func TestCreateRecurringRuleValidatesDayOfMonth(t *testing.T) {
 }
 
 func TestCreateRecurringRuleAcceptsValidDayOfMonth(t *testing.T) {
-	uc := NewCreateRecurringRule(newFakeRecurringRuleRepo(), newFakeAccountRepo())
+	uc := NewCreateRecurringRule(newFakeRecurringRuleRepo(), newFakeAccountRepo(), newFakePaymentMethodRepo())
 
 	for _, good := range []string{"1", "28", "15", "last"} {
 		rule, err := uc.Execute(context.Background(), CreateRecurringRuleInput{
@@ -46,7 +46,7 @@ func TestCreateRecurringRuleAcceptsValidDayOfMonth(t *testing.T) {
 func TestCreateRecurringRuleRejectsAccountCurrencyMismatch(t *testing.T) {
 	accounts := newFakeAccountRepo()
 	acc, _ := accounts.Create(context.Background(), &dto.AccountDTO{UserID: "u1", Name: "Checking", Currency: "brl"})
-	uc := NewCreateRecurringRule(newFakeRecurringRuleRepo(), accounts)
+	uc := NewCreateRecurringRule(newFakeRecurringRuleRepo(), accounts, newFakePaymentMethodRepo())
 
 	_, err := uc.Execute(context.Background(), CreateRecurringRuleInput{
 		UserID: "u1", Amount: -100, Currency: "usd", DayOfMonth: "1", AccountID: &acc.ID,
@@ -57,7 +57,7 @@ func TestCreateRecurringRuleRejectsAccountCurrencyMismatch(t *testing.T) {
 }
 
 func TestCreateRecurringRuleRejectsEndsAtBeforeStartsAt(t *testing.T) {
-	uc := NewCreateRecurringRule(newFakeRecurringRuleRepo(), newFakeAccountRepo())
+	uc := NewCreateRecurringRule(newFakeRecurringRuleRepo(), newFakeAccountRepo(), newFakePaymentMethodRepo())
 	starts := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
 	ends := starts.AddDate(0, 0, -1)
 
@@ -70,7 +70,7 @@ func TestCreateRecurringRuleRejectsEndsAtBeforeStartsAt(t *testing.T) {
 }
 
 func TestCreateRecurringRuleAcceptsEndsAtEqualToStartsAt(t *testing.T) {
-	uc := NewCreateRecurringRule(newFakeRecurringRuleRepo(), newFakeAccountRepo())
+	uc := NewCreateRecurringRule(newFakeRecurringRuleRepo(), newFakeAccountRepo(), newFakePaymentMethodRepo())
 	starts := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
 	ends := starts
 
@@ -86,7 +86,7 @@ func TestCreateRecurringRuleAcceptsEndsAtEqualToStartsAt(t *testing.T) {
 }
 
 func TestCreateRecurringRuleValidatesEndsAtAgainstDefaultedStartsAt(t *testing.T) {
-	uc := NewCreateRecurringRule(newFakeRecurringRuleRepo(), newFakeAccountRepo())
+	uc := NewCreateRecurringRule(newFakeRecurringRuleRepo(), newFakeAccountRepo(), newFakePaymentMethodRepo())
 	// starts_at omitted (defaults to today) — ends_at in the past must
 	// still be rejected against the *defaulted* value, not the zero time.
 	yesterday := time.Now().UTC().AddDate(0, 0, -1)
@@ -100,7 +100,7 @@ func TestCreateRecurringRuleValidatesEndsAtAgainstDefaultedStartsAt(t *testing.T
 }
 
 func TestCreateRecurringRuleDefaultsStartsAtToNow(t *testing.T) {
-	uc := NewCreateRecurringRule(newFakeRecurringRuleRepo(), newFakeAccountRepo())
+	uc := NewCreateRecurringRule(newFakeRecurringRuleRepo(), newFakeAccountRepo(), newFakePaymentMethodRepo())
 
 	before := time.Now().UTC()
 	rule, err := uc.Execute(context.Background(), CreateRecurringRuleInput{

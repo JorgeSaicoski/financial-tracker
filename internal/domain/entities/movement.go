@@ -15,7 +15,7 @@ type Movement struct {
 	Currency      string
 	Description   string
 	Category      Category
-	PaymentMethod PaymentMethod
+	PaymentMethod string
 
 	// AccountID links the movement to the account the money moved
 	// in/out of (nil when the user didn't say). Local-only: it is not

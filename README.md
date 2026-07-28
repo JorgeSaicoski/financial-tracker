@@ -18,11 +18,12 @@ A background sync process pushes movements to ledger-service whenever it's
 reachable (every `SYNC_INTERVAL`, or on demand via `POST /sync`); each
 movement carries a `sync_status` so the UI can show what's still pending.
 
-Movements carry a payment method (cash, debit/credit card, pix, bank
-transfer, other), a free-text description, and a category from a fixed
-list (`GET /categories`). Credit-card purchases can be split into monthly
-installments; installments only sync to ledger-service once their date
-arrives. Movements can be cancelled: one that never reached ledger-service
+Movements carry a payment method — a user-extendable, per-user registry
+(BACK-17; see below), not a fixed list — a free-text description, and a
+category from a fixed list (`GET /categories`). Credit-card purchases can
+be split into monthly installments; installments only sync to
+ledger-service once their date arrives. Movements can be cancelled: one
+that never reached ledger-service
 is just voided locally, while one that already synced gets a compensating
 reversal movement (ledger-service never deletes — corrections are new
 transactions), which the sync then pushes.
@@ -32,6 +33,19 @@ Beyond movements, the tracker knows about:
 - **Currencies** — a user-extendable registry (`usd`/`brl` seeded, add
   `btc` or anything else via `POST /currencies`) backing the frontend
   dropdown. Movements store the code as plain text.
+- **Payment methods** (BACK-17) — a user-extendable registry, same shape
+  as currencies, replacing the old hardcoded enum (which baked in `pix`,
+  Brazil's instant-payment rail, as if it applied everywhere). A fresh
+  user gets `cash`, `debit_card`, `credit_card`, `bank_transfer`, `other`
+  seeded automatically — never `pix`; a user who wants it (or any other
+  country's rail) adds it themselves via `POST /payment-methods`, exactly
+  like adding a currency code. `credit_card` and `bank_transfer` are
+  system entries (installment validation and transfer legs both branch on
+  them by name) and can't be renamed or deleted. A brand-new name used on
+  a movement is implicitly registered at no extra cost — no separate
+  create call required. Returned as part of `GET /categories`'s
+  `payment_methods` field, now `{id, name}` rows instead of plain
+  strings.
 - **Accounts** — the places money sits (bank, investment, crypto wallet,
   cash, other), each holding exactly one currency. Movements can be
   assigned to an account. The user periodically *reports* what an account
@@ -69,8 +83,10 @@ repository interfaces, service ports, and use-case interfaces:
 
 ```
 domain/entities              Movement, CreditCardPurchase, Account (+snapshots),
-                             fixed Category/PaymentMethod/AccountType lists; single-entity
-                             rules live here too (e.g. Account.Send()/Receive() for transfers)
+                             fixed Category/AccountType lists (payment methods are a
+                             per-user registry instead, see application/repositories);
+                             single-entity rules live here too (e.g. Account.Send()/
+                             Receive() for transfers)
 application/dto              MovementDTO, AccountDTO, CreditCardPurchaseDTO, ExchangeRateDTO
                              — what repositories/services/usecases actually pass to each
                              other, converted from domain entities at the infrastructure
@@ -257,7 +273,10 @@ intended for. Revisit only if it turns out to matter in practice.
 | `POST` | `/movements/{id}/cancel` | Cancel one movement (void or reversal — see semantics above). Returns the movement and, if created, the reversal. |
 | `POST` | `/credit-card-purchases/{id}/cancel` | Cancel a whole installment purchase. Returns which installments were voided vs reversed. |
 | `POST` | `/sync` | Run one sync pass against ledger-service now. Returns `{synced, failed}`. |
-| `GET` | `/categories` | The fixed category and payment-method lists. |
+| `GET` | `/categories` | The fixed category list plus the caller's own payment-method registry (BACK-17 — `payment_methods` is `[{id, name}]`, system/default entries lazily ensured first). |
+| `POST` | `/payment-methods` | Register a payment method: `{name}`. Reserved system names (`credit_card`, `bank_transfer`) and case-insensitive duplicates are rejected (409). |
+| `PATCH` | `/payment-methods/{id}` | Rename a payment method: `{name}`. Rejected on system entries (400). |
+| `DELETE` | `/payment-methods/{id}` | Remove a payment method. Rejected on system entries (400); one still referenced by movements is fine — it's a label, not an FK. |
 | `GET` | `/cashflow?from=&to=&user_id=` | Money in / out / net over the interval, per currency (`totals`) and per account (`by_account`, unassigned movements in their own bucket). `from`/`to` required. Transfers are excluded. |
 | `GET` | `/accounts` | All accounts with `estimated_balance`, latest `reported_balance`/`reported_at`, `movements_since_report` and `last_return` (+ the valid `account_types`). |
 | `POST` | `/accounts` | Create an account. Body: `{name, type?, currency?, user_id?}`. Currency must be registered; duplicate names (case-insensitive) are rejected. |

@@ -25,9 +25,10 @@ const (
 )
 
 type importHandler struct {
-	importMovements usecases.ImportMovementsUseCase
-	listAccounts    usecases.ListAccountsUseCase
-	listCurrencies  usecases.ListCurrenciesUseCase
+	importMovements    usecases.ImportMovementsUseCase
+	listAccounts       usecases.ListAccountsUseCase
+	listCurrencies     usecases.ListCurrenciesUseCase
+	listPaymentMethods usecases.ListPaymentMethodsUseCase
 
 	log logger.Logger
 }
@@ -37,13 +38,15 @@ func NewImportHandler(
 	importMovements usecases.ImportMovementsUseCase,
 	listAccounts usecases.ListAccountsUseCase,
 	listCurrencies usecases.ListCurrenciesUseCase,
+	listPaymentMethods usecases.ListPaymentMethodsUseCase,
 	log logger.Logger,
 ) ImportHandler {
 	return &importHandler{
-		importMovements: importMovements,
-		listAccounts:    listAccounts,
-		listCurrencies:  listCurrencies,
-		log:             log,
+		importMovements:    importMovements,
+		listAccounts:       listAccounts,
+		listCurrencies:     listCurrencies,
+		listPaymentMethods: listPaymentMethods,
+		log:                log,
 	}
 }
 
@@ -78,9 +81,19 @@ func (h *importHandler) GetImportSpec(w http.ResponseWriter, r *http.Request) {
 	for _, c := range entities.Categories() {
 		categories = append(categories, string(c))
 	}
-	paymentMethods := make([]string, 0, len(entities.PaymentMethods()))
-	for _, m := range entities.PaymentMethods() {
-		paymentMethods = append(paymentMethods, string(m))
+	// payment_method is no longer a fixed enum (BACK-17: a per-user
+	// registry) — AllowedValues here is a guide (the caller's own
+	// registered names), not an exhaustive list; any non-blank value is
+	// accepted and implicitly registered on actual import.
+	methodRows, err := h.listPaymentMethods.Execute(r.Context(), userID)
+	if err != nil {
+		h.log.Error("import spec: list payment methods failed: %v", err)
+		writeError(h.log, w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	paymentMethods := make([]string, 0, len(methodRows))
+	for _, m := range methodRows {
+		paymentMethods = append(paymentMethods, m.Name)
 	}
 
 	exampleCurrency := "usd"
