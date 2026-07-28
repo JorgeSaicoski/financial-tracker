@@ -290,6 +290,27 @@ already set in `docker-compose.yml` — without it `npm install` fails with
    `AUTH_DISABLED` in `.env.example`); leave them blank when running with
    `AUTH_DISABLED=true`.
 
+### Download
+
+Prebuilt binaries for every tagged release
+(`v*`) are published as [GitHub Releases](../../releases) — no Go
+toolchain, no Node, nothing to build. Pick the archive for your OS/arch,
+extract it, and run the binary (see "Running locally (standalone)"
+below for what it does). Each release also ships a `.sha256` file per
+archive to verify the download.
+
+- **Linux** (`amd64`/`arm64`): `tar -xzf financial-tracker-standalone-linux-<arch>.tar.gz`,
+  then `STANDALONE=true ./financial-tracker-standalone`.
+- **macOS** (`amd64`/`arm64`): same as Linux. Gatekeeper will block an
+  unsigned binary the first time — either `xattr -d com.apple.quarantine
+  financial-tracker-standalone` after extracting, or right-click → Open
+  once in Finder and confirm. (Code signing/notarization is icebox —
+  see `claude/ideas/`.)
+- **Windows** (`amd64`): unzip
+  `financial-tracker-standalone-windows-amd64.zip`, then run
+  `financial-tracker-standalone.exe` (double-click, or from a terminal
+  with `STANDALONE=true` set first).
+
 ### Running locally (standalone)
 
 BACK-09's "fully local" distribution: one binary, no server, no account,
@@ -297,9 +318,16 @@ no external services — your data lives in a single SQLite file on your
 own machine, exportable to CSV anytime.
 
 ```bash
-make build-standalone           # or: go build -o financial-tracker-standalone ./internal/cmd/api
+make web-build-standalone   # real frontend embedded — see "Download" above for prebuilt releases
 STANDALONE=true ./financial-tracker-standalone   # or: ./financial-tracker-standalone --standalone
 ```
+
+(`make build-standalone` also exists — same binary, but skips the
+frontend build/embed step entirely, so `/` serves a plain "no frontend
+embedded" page instead of the real UI. The API itself
+(`/movements`, `/accounts`, `/import`, `/export`, etc.) works
+identically either way; useful if you only care about the API and don't
+have Node available.)
 
 What this mode changes, all automatic (no other env vars needed):
 - **Storage**: forces `DB_DRIVER=sqlite`. `DB_PATH` defaults to an
@@ -326,22 +354,20 @@ What this mode changes, all automatic (no other env vars needed):
   via `POST /import/movements` round-trips to the same movement list and
   balance.
 
-**Current status of the embedded frontend:** the binary always starts
-and serves the API correctly (verified above); `go:embed` bakes in
-whatever static files exist under `internal/webui/dist/` at compile
-time. That directory ships with only a placeholder in version control
-(see `internal/webui/webui.go`'s doc comment), so today's binary serves
-a plain "no frontend embedded" page at `/` instead of the real UI — the
-API itself (`/movements`, `/accounts`, `/import`, `/export`, etc.) works
-identically either way. Producing a true static SvelteKit build to embed
-needs a static-capable adapter (`web/`'s `svelte.config.js` currently
-only configures `@sveltejs/adapter-node`, which needs a running Node
-server, not just static files); wiring that up is expected to land as
-part of INFRA-06 (cross-platform release binaries), which already owns
-"embeds this binary's frontend" — see `internal/webui/webui.go` and
-`internal/interfaces/api/spa.go` for the embedding mechanism itself,
-which is already in place and tested (`internal/interfaces/api/router_test.go`)
-against a fake filesystem.
+**Embedded frontend:** `go:embed` bakes in whatever static files exist
+under `internal/webui/dist/` at compile time — empty (just a
+placeholder) unless something copied a real build there first.
+`make web-build-standalone` (INFRA-06) does exactly that: it runs
+`web/`'s static-adapter build (`npm run build:static` — `svelte.config.js`'s
+`BUILD_TARGET=static` switches from the deployed stack's `adapter-node`
+to `adapter-static` with an SPA fallback, since there's no Node runtime
+inside the Go binary to run `adapter-node`'s output) and copies the
+result into `internal/webui/dist/` before compiling. Every downloaded
+release binary (see "Download" above) already has this baked in via
+INFRA-06's release workflow; only a from-source `make build-standalone`
+(skipping the frontend step) gets the placeholder page instead. See
+`internal/webui/webui.go` and `internal/interfaces/api/spa.go` for the
+embedding/fallback-routing mechanism itself.
 
 ### Deploying (PostgreSQL, production images)
 

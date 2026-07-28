@@ -24,6 +24,12 @@ import (
 	"github.com/JorgeSaicoski/financial-tracker/internal/webui"
 )
 
+// version is stamped at build time via -ldflags "-X main.version=…"
+// (INFRA-06's release workflow uses the pushed git tag; `make
+// build-standalone`/`web-build-standalone` default it to "dev" — see
+// Makefile's VERSION variable).
+var version = "dev"
+
 func main() {
 	log := applogger.New()
 
@@ -292,9 +298,9 @@ func main() {
 		if err != nil {
 			absPath = dbPath
 		}
-		log.Info("financial-tracker running in STANDALONE mode on %s: no server, no account, no sync — data is one file at %s", addr, absPath)
+		log.Info("financial-tracker %s running in STANDALONE mode on %s: no server, no account, no sync — data is one file at %s", version, addr, absPath)
 	} else {
-		log.Info("financial-tracker API listening on %s (db driver %s at %s, syncing to ledger-service at %s every %s)", addr, dbDriver, dbDescription, ledgerServiceURL, syncInterval)
+		log.Info("financial-tracker %s API listening on %s (db driver %s at %s, syncing to ledger-service at %s every %s)", version, addr, dbDriver, dbDescription, ledgerServiceURL, syncInterval)
 	}
 	log.Info("endpoints: GET /config | GET|PATCH /settings | GET /import/movements/spec | POST /import/movements | GET /export/movements | POST /movements | GET /movements | PATCH /movements/{id} | POST /movements/{id}/cancel | POST /credit-card-purchases/{id}/cancel | POST /sync | GET /categories | GET /cashflow | GET|POST /accounts | POST /accounts/{id}/balance | GET|POST /currencies | POST /transfers | POST /transfers/{id}/cancel | GET|POST /exchange-rates | DELETE /exchange-rates/{id} | GET /me")
 
