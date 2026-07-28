@@ -80,12 +80,14 @@ func (h *settingsHandler) PatchSettings(w http.ResponseWriter, r *http.Request) 
 
 func settingsResponseFromView(s usecases.UserSettingsView) interfacedto.SettingsResponse {
 	return interfacedto.SettingsResponse{
-		UserID:               s.UserID,
-		LedgerSyncEntitled:   s.LedgerSyncEntitled,
-		LedgerSyncEnabled:    s.LedgerSyncEnabled,
-		CloudStorageEntitled: s.CloudStorageEntitled,
-		CreatedAt:            s.CreatedAt,
-		UpdatedAt:            s.UpdatedAt,
+		UserID:                       s.UserID,
+		LedgerSyncEntitled:           s.LedgerSyncEntitled,
+		LedgerSyncEnabled:            s.LedgerSyncEnabled,
+		CloudStorageEntitled:         s.CloudStorageEntitled,
+		CreatedAt:                    s.CreatedAt,
+		UpdatedAt:                    s.UpdatedAt,
+		SubscriptionStatus:           s.SubscriptionStatus,
+		SubscriptionCurrentPeriodEnd: s.SubscriptionCurrentPeriodEnd,
 	}
 }
 

@@ -30,6 +30,7 @@ func NewRouter(
 	settingsHandler handlers.SettingsHandler,
 	userHandler handlers.UserHandler,
 	configHandler handlers.ConfigHandler,
+	billingHandler handlers.BillingHandler,
 	authMiddleware AuthMiddleware,
 	allowedOrigin string,
 	// standalone (BACK-09) rejects /sync (there is no ledger-service to
@@ -117,6 +118,8 @@ func NewRouter(
 
 	protected.HandleFunc("GET /me", userHandler.Me)
 
+	protected.HandleFunc("GET /billing/plan", billingHandler.GetPlan)
+
 	if standalone {
 		// Registered on protected (behind the no-op standalone auth
 		// middleware, not unauthenticated) so it sits below every
@@ -137,6 +140,12 @@ func NewRouter(
 	// it must not go through authMiddleware like everything else does —
 	// mounted on the outer mux instead of protected.
 	mux.HandleFunc("GET /config", configHandler.GetConfig)
+	// Unauthenticated by user token like /config, but for a different
+	// reason (BACK-19): the payment provider calling this has no
+	// financial-tracker session to present a bearer token for.
+	// billingHandler.Webhook checks the request's own signature header
+	// instead — see its doc comment.
+	mux.HandleFunc("POST /billing/webhook", billingHandler.Webhook)
 	// user_id always comes from the verified token (or the AUTH_DISABLED
 	// dev stand-in), never from a request body or query string — see
 	// BACK-02.

@@ -37,7 +37,7 @@ func openTestDB(t *testing.T) *sql.DB {
 	if err := Migrate(db); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	if _, err := db.Exec(`TRUNCATE TABLE account_snapshots, movements, credit_card_purchases, accounts, recurring_rules, user_local_archive_settings, user_settings, cards, payment_methods, plans, user_data_keys, user_ledger_pseudonyms CASCADE`); err != nil {
+	if _, err := db.Exec(`TRUNCATE TABLE account_snapshots, movements, credit_card_purchases, accounts, recurring_rules, user_local_archive_settings, user_settings, cards, payment_methods, plans, user_data_keys, user_ledger_pseudonyms, subscriptions CASCADE`); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
 	return db

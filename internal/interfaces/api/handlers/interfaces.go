@@ -145,3 +145,12 @@ type PlanHandler interface {
 	GetPlan(w http.ResponseWriter, r *http.Request)
 	UpdatePlan(w http.ResponseWriter, r *http.Request)
 }
+
+// BillingHandler exposes BACK-19's paid cloud-storage tier: the
+// provider-signed webhook that drives entitlement (unauthenticated by
+// user token, verified by signature instead — see router.go) and the
+// currency-aware plan price a caller can display before subscribing.
+type BillingHandler interface {
+	Webhook(w http.ResponseWriter, r *http.Request)
+	GetPlan(w http.ResponseWriter, r *http.Request)
+}

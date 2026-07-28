@@ -26,4 +26,12 @@ type UserSettingsRepository interface {
 	// their movements from every pass, even ones already sitting as
 	// "pending" from before they turned sync off.
 	ListSyncDisabledUserIDs(ctx context.Context) ([]string, error)
+	// SetCloudStorageEntitled upserts cloud_storage_entitled — the
+	// operator/billing-only write path BACK-19 drives from a payment
+	// webhook and the grace-period sweep, never from a user-facing
+	// endpoint. Creating the row lazily (like UpdateEnabled) means a
+	// brand-new signup's very first write here is what overrides the
+	// "absence of a row means true" default down to false, without
+	// needing to backfill every existing user's row.
+	SetCloudStorageEntitled(ctx context.Context, userID string, entitled bool) (*dto.UserSettingsDTO, error)
 }

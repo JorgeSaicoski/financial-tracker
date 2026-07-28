@@ -693,6 +693,19 @@ func (f *fakeUserSettingsRepo) UpdateEnabled(_ context.Context, userID string, l
 	return &cp, nil
 }
 
+func (f *fakeUserSettingsRepo) SetCloudStorageEntitled(_ context.Context, userID string, entitled bool) (*dto.UserSettingsDTO, error) {
+	s, ok := f.byUserID[userID]
+	if !ok {
+		now := time.Now().UTC()
+		s = dto.DefaultUserSettings(userID, now)
+	}
+	s.CloudStorageEntitled = entitled
+	s.UpdatedAt = time.Now().UTC()
+	f.byUserID[userID] = s
+	cp := *s
+	return &cp, nil
+}
+
 func (f *fakeUserSettingsRepo) ListSyncDisabledUserIDs(_ context.Context) ([]string, error) {
 	var out []string
 	for uid, s := range f.byUserID {
@@ -917,4 +930,93 @@ func (f *fakePlanRepo) Update(_ context.Context, userID, id, name string, target
 	p.EndDate = endDate
 	p.Status = status
 	return nil
+}
+
+// fakeUserRepo is an in-memory UserRepository.
+type fakeUserRepo struct {
+	byID map[string]*dto.UserDTO
+}
+
+func newFakeUserRepo() *fakeUserRepo {
+	return &fakeUserRepo{byID: map[string]*dto.UserDTO{}}
+}
+
+func (f *fakeUserRepo) Upsert(_ context.Context, user *dto.UserDTO) (*dto.UserDTO, error) {
+	now := time.Now().UTC()
+	existing, ok := f.byID[user.ID]
+	createdAt := now
+	if ok {
+		createdAt = existing.CreatedAt
+	}
+	stored := &dto.UserDTO{
+		ID: user.ID, Provider: user.Provider, ExternalID: user.ExternalID,
+		Email: user.Email, DisplayName: user.DisplayName,
+		CreatedAt: createdAt, UpdatedAt: now,
+	}
+	f.byID[user.ID] = stored
+	cp := *stored
+	return &cp, nil
+}
+
+func (f *fakeUserRepo) GetByID(_ context.Context, id string) (*dto.UserDTO, error) {
+	u, ok := f.byID[id]
+	if !ok {
+		return nil, apperrors.ErrNotFound
+	}
+	cp := *u
+	return &cp, nil
+}
+
+func (f *fakeUserRepo) Exists(_ context.Context, id string) (bool, error) {
+	_, ok := f.byID[id]
+	return ok, nil
+}
+
+// fakeSubscriptionRepo is an in-memory SubscriptionRepository.
+type fakeSubscriptionRepo struct {
+	byUserID map[string]*dto.SubscriptionDTO
+}
+
+func newFakeSubscriptionRepo() *fakeSubscriptionRepo {
+	return &fakeSubscriptionRepo{byUserID: map[string]*dto.SubscriptionDTO{}}
+}
+
+func (f *fakeSubscriptionRepo) Upsert(_ context.Context, sub *dto.SubscriptionDTO) (*dto.SubscriptionDTO, error) {
+	now := time.Now().UTC()
+	createdAt := now
+	if existing, ok := f.byUserID[sub.UserID]; ok {
+		createdAt = existing.CreatedAt
+	}
+	stored := &dto.SubscriptionDTO{
+		UserID: sub.UserID, Provider: sub.Provider, ProviderSubscriptionID: sub.ProviderSubscriptionID,
+		Status: sub.Status, CurrentPeriodEnd: sub.CurrentPeriodEnd,
+		CreatedAt: createdAt, UpdatedAt: now,
+	}
+	f.byUserID[sub.UserID] = stored
+	cp := *stored
+	return &cp, nil
+}
+
+func (f *fakeSubscriptionRepo) GetByUserID(_ context.Context, userID string) (*dto.SubscriptionDTO, error) {
+	s, ok := f.byUserID[userID]
+	if !ok {
+		return nil, apperrors.ErrNotFound
+	}
+	cp := *s
+	return &cp, nil
+}
+
+func (f *fakeSubscriptionRepo) ListLapsable(_ context.Context, asOf time.Time, graceDays int) ([]*dto.SubscriptionDTO, error) {
+	var out []*dto.SubscriptionDTO
+	for _, s := range f.byUserID {
+		if s.Status != dto.SubscriptionStatusPastDue && s.Status != dto.SubscriptionStatusCanceled {
+			continue
+		}
+		if !s.CurrentPeriodEnd.AddDate(0, 0, graceDays).After(asOf) {
+			cp := *s
+			out = append(out, &cp)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].UserID < out[j].UserID })
+	return out, nil
 }

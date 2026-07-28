@@ -17,4 +17,9 @@ type UserRepository interface {
 	// with.
 	Upsert(ctx context.Context, user *dto.UserDTO) (*dto.UserDTO, error)
 	GetByID(ctx context.Context, id string) (*dto.UserDTO, error)
+	// Exists reports whether a user row is already present for id. Used
+	// by EnsureUser (BACK-19) to tell a brand-new signup from a returning
+	// user *before* Upsert creates/refreshes the row — grandfathering
+	// depends on knowing which case this is.
+	Exists(ctx context.Context, id string) (bool, error)
 }

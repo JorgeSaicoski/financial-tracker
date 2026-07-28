@@ -404,14 +404,20 @@ type AddCurrencyUseCase interface {
 // UserSettingsView is what GET/PATCH /settings return (BACK-13).
 // Entitled fields are operator/billing-controlled and read-only through
 // this API; Enabled fields are user preference. Effective capability is
-// Entitled AND Enabled.
+// Entitled AND Enabled. SubscriptionStatus/SubscriptionCurrentPeriodEnd
+// (BACK-19) are the zero value/nil when the caller has never had a
+// subscription row — a free-tier user is not an error case.
 type UserSettingsView struct {
 	UserID               string
 	LedgerSyncEntitled   bool
 	LedgerSyncEnabled    bool
 	CloudStorageEntitled bool
-	CreatedAt            time.Time
-	UpdatedAt            time.Time
+
+	SubscriptionStatus           string
+	SubscriptionCurrentPeriodEnd *time.Time
+
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // GetUserSettingsUseCase returns the caller's own settings, defaulting
@@ -787,4 +793,47 @@ type UpdatePlanInput struct {
 
 type UpdatePlanUseCase interface {
 	Execute(ctx context.Context, userID, id string, input UpdatePlanInput) (*dto.PlanDTO, error)
+}
+
+// ProcessBillingWebhookInput carries what the payment provider's webhook
+// asserts about one subscription (BACK-19), already translated from
+// whatever the provider's own payload shape is (see
+// services.PaymentWebhookVerifier's doc comment) into this
+// provider-agnostic form.
+type ProcessBillingWebhookInput struct {
+	UserID                 string
+	Provider               string
+	ProviderSubscriptionID string
+	Status                 string // dto.SubscriptionStatus*
+	CurrentPeriodEnd       time.Time
+}
+
+// ProcessBillingWebhookUseCase upserts the subscription row and flips
+// cloud_storage_entitled to true immediately for active — gaining access
+// should never wait. Neither canceled nor past_due flips entitlement
+// here at all: BACK-19's acceptance criteria are explicit that even an
+// explicit cancellation "flips it back after the grace period, not
+// immediately." The grace-period sweep (internal/application/billing) is
+// what eventually flips either status to false once its grace period
+// elapses.
+type ProcessBillingWebhookUseCase interface {
+	Execute(ctx context.Context, input ProcessBillingWebhookInput) (*dto.SubscriptionDTO, error)
+}
+
+// BillingPlanView is what GET /billing/plan returns: Currency is the
+// currency Amount is actually expressed in — the caller's requested
+// currency when a BACK-11 rate exists for it, or the reference currency
+// ("usd") as a documented fallback otherwise. Never assume Currency ==
+// what was requested; a client must read it back.
+type BillingPlanView struct {
+	Currency string
+	Amount   int64 // Currency's smallest unit
+}
+
+// GetBillingPlanUseCase converts the fixed USD reference price to the
+// caller's requested currency using their own BACK-11 exchange rate,
+// falling back to the USD reference price when no rate is known for that
+// currency (never a hardcoded USD string presented as universal).
+type GetBillingPlanUseCase interface {
+	Execute(ctx context.Context, userID, currency string) (BillingPlanView, error)
 }
