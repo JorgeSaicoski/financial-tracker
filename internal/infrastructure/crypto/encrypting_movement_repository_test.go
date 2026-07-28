@@ -38,7 +38,7 @@ func testMovement(userID, description string) *dto.MovementDTO {
 		Currency:      "usd",
 		Description:   description,
 		Category:      string(entities.CategoryFood),
-		PaymentMethod: string(entities.PaymentMethodCash),
+		PaymentMethod: "cash",
 		Status:        string(entities.MovementStatusActive),
 		SyncStatus:    string(entities.SyncStatusPending),
 		Timestamp:     now,
@@ -119,7 +119,7 @@ func TestEncryptingMovementRepositoryUpdateMetadataEncrypts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := repo.UpdateMetadata(ctx, created.ID, "renamed description", string(entities.CategoryTransport), string(entities.PaymentMethodPix), nil); err != nil {
+	if err := repo.UpdateMetadata(ctx, created.ID, "renamed description", string(entities.CategoryTransport), "pix", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 
