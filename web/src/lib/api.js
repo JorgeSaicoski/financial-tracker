@@ -147,7 +147,8 @@ export function importMovements(csvText, { dryRun = false, allowPartial = false,
 	if (dryRun) query.set('dry_run', 'true');
 	if (allowPartial) query.set('allow_partial', 'true');
 	if (skipDuplicates) query.set('skip_duplicates', 'true');
-	return request(`/import/movements?${query.toString()}`, {
+	const qs = query.toString();
+	return request(`/import/movements${qs ? `?${qs}` : ''}`, {
 		method: 'POST',
 		headers: { 'Content-Type': 'text/csv' },
 		body: csvText

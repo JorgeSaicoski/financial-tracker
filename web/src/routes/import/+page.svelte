@@ -131,6 +131,7 @@
 		csvText = await file.text();
 		previewResult = null;
 		finalResult = null;
+		event.target.value = '';
 	}
 
 	function handleTextareaInput() {
@@ -598,7 +599,7 @@
 	}
 
 	.duplicate-row {
-		background: #fef3c7;
+		background: var(--color-warning-soft);
 	}
 
 	.row-flag {
@@ -615,12 +616,12 @@
 	}
 
 	.duplicate-flag {
-		background: #fef3c7;
-		color: #92400e;
+		background: var(--color-warning-soft);
+		color: var(--color-warning-text);
 	}
 
 	.ok-flag {
 		background: var(--color-success-soft);
-		color: #166534;
+		color: var(--color-income);
 	}
 </style>

@@ -136,6 +136,11 @@
 		background: var(--color-bg);
 	}
 
+	.nav-links a:focus-visible {
+		outline: none;
+		box-shadow: var(--focus-ring);
+	}
+
 	button[disabled] {
 		display: flex;
 		align-items: center;
