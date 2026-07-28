@@ -61,6 +61,10 @@ type CreateCreditCardPurchaseInput struct {
 	Description  string
 	Category     string
 	Installments int
+	// CardID (BACK-08), when set, dates each installment on the card's
+	// real due days (closing_day/due_day) instead of the flat monthly
+	// offset from the purchase date.
+	CardID *string
 }
 
 type CreateCreditCardPurchaseUseCase interface {
@@ -79,6 +83,15 @@ type CreateMovementInput struct {
 	Category      string
 	PaymentMethod string
 	AccountID     *string
+	// CardID (BACK-08), accepted only when PaymentMethod is
+	// "credit_card", dates this (single, non-installment) charge on the
+	// card's real due day instead of leaving Timestamp as "now".
+	CardID *string
+	// CardPaymentForCardID (BACK-08) marks this movement as a payment
+	// settling the named card's statement — reduces that card's
+	// next_due_total. Independent of CardID: a movement is either a
+	// charge (CardID) or a payment (CardPaymentForCardID), never both.
+	CardPaymentForCardID *string
 }
 
 // ImportRowInput is one CSV data row (BACK-03), still raw strings — the
@@ -581,4 +594,75 @@ type UpdateRecurringRuleInput struct {
 // exists but belongs to someone else — same contract as GetMovementUseCase.
 type UpdateRecurringRuleUseCase interface {
 	Execute(ctx context.Context, userID, id string, input UpdateRecurringRuleInput) (*dto.RecurringRuleDTO, error)
+}
+
+// CreateCardInput carries the caller-supplied fields for a new card
+// profile (BACK-08). ClosingDay/DueDay must be "1"-"28" or "last".
+// CreditLimit/MonthlyBudget are independent and both optional — see
+// entities.Card's doc comment for why.
+type CreateCardInput struct {
+	UserID        string
+	Name          string
+	LastFour      string
+	ClosingDay    string
+	DueDay        string
+	CreditLimit   *int64
+	MonthlyBudget *int64
+	Currency      string
+}
+
+type CreateCardUseCase interface {
+	Execute(ctx context.Context, input CreateCardInput) (*dto.CardDTO, error)
+}
+
+// UpdateCardInput carries a PATCH /cards/{id} partial body — a nil field
+// means "leave unchanged", same convention as UpdateMovementInput.
+// CreditLimit/MonthlyBudget can be set or changed but not cleared back to
+// "not tracked" through this endpoint once set — same documented
+// limitation as PATCH /recurring-rules not being able to clear ends_at.
+type UpdateCardInput struct {
+	Name          *string
+	LastFour      *string
+	ClosingDay    *string
+	DueDay        *string
+	CreditLimit   *int64
+	MonthlyBudget *int64
+}
+
+type UpdateCardUseCase interface {
+	Execute(ctx context.Context, userID, id string, input UpdateCardInput) (*dto.CardDTO, error)
+}
+
+type DeleteCardUseCase interface {
+	Execute(ctx context.Context, userID, id string) error
+}
+
+type GetCardUseCase interface {
+	Execute(ctx context.Context, userID, id string) (CardView, error)
+}
+
+type ListCardsUseCase interface {
+	Execute(ctx context.Context, userID string) ([]CardView, error)
+}
+
+// CardView is a card plus its computed amount-due/limit/budget picture
+// (BACK-08):
+//
+//   - NextDueTotal/NextDueDate: the statement that has already closed
+//     and is waiting to be paid, net of payments already recorded
+//     against this card.
+//   - OpenCycleTotal: purchases made after the last closing day, still
+//     accumulating toward the next statement — not due yet.
+//   - AvailableCredit: CreditLimit minus everything outstanding
+//     (NextDueTotal + OpenCycleTotal), only when CreditLimit is set.
+//   - BudgetRemaining/OverBudget: MonthlyBudget minus OpenCycleTotal,
+//     only when MonthlyBudget is set.
+type CardView struct {
+	Card            *dto.CardDTO
+	NextDueTotal    int64
+	NextDueDate     time.Time
+	OpenCycleTotal  int64
+	AvailableCredit *int64
+	BudgetRemaining *int64
+	OverBudget      bool
 }

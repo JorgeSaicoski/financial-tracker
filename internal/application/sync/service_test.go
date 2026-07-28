@@ -41,6 +41,12 @@ func (f *fakeRepo) ListByUser(context.Context, string, *string, *time.Time, *tim
 func (f *fakeRepo) ListByCreditCardPurchase(context.Context, string) ([]*dto.MovementDTO, error) {
 	panic("not used")
 }
+func (f *fakeRepo) ListByCard(context.Context, string) ([]*dto.MovementDTO, error) {
+	panic("not used")
+}
+func (f *fakeRepo) ListCardPayments(context.Context, string) ([]*dto.MovementDTO, error) {
+	panic("not used")
+}
 func (f *fakeRepo) Void(context.Context, string) error { panic("not used") }
 func (f *fakeRepo) UpdateMetadata(context.Context, string, string, string, string, *string) error {
 	panic("not used")

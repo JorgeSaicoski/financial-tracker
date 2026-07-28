@@ -31,6 +31,14 @@ type MovementRepository interface {
 	// transfer_id, debit (negative amount) first.
 	ListByTransferID(ctx context.Context, transferID string) ([]*dto.MovementDTO, error)
 
+	// ListByCard returns every charge made on cardID (card_id set) —
+	// BACK-08's amount-due computation buckets these by due date
+	// (Timestamp) into next_due_total/open_cycle_total.
+	ListByCard(ctx context.Context, cardID string) ([]*dto.MovementDTO, error)
+	// ListCardPayments returns every payment recorded against cardID
+	// (card_payment_for_card_id set) — nets against next_due_total.
+	ListCardPayments(ctx context.Context, cardID string) ([]*dto.MovementDTO, error)
+
 	// NetByAccount sums active movements of one account over (after,
 	// until] — after exclusive so a snapshot taken at time T doesn't
 	// double-count a movement stamped exactly T. Nil bounds mean open.

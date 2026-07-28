@@ -23,7 +23,7 @@ func NewCreditCardPurchaseRepository(db *sql.DB) repositories.CreditCardPurchase
 }
 
 const purchaseColumns = `id, user_id, description, category, total_amount, currency,
-	installment_count, purchase_date, status, created_at`
+	installment_count, purchase_date, status, created_at, card_id`
 
 func (r *creditCardPurchaseRepository) CreateWithInstallments(ctx context.Context, purchase *dto.CreditCardPurchaseDTO, installments []*dto.MovementDTO) (*dto.CreditCardPurchaseDTO, []*dto.MovementDTO, error) {
 	if purchase.ID == "" {
@@ -38,10 +38,10 @@ func (r *creditCardPurchaseRepository) CreateWithInstallments(ctx context.Contex
 
 	_, err = tx.ExecContext(ctx,
 		`INSERT INTO credit_card_purchases (`+purchaseColumns+`)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		purchase.ID, purchase.UserID, nullString(purchase.Description), purchase.Category,
 		purchase.TotalAmount, purchase.Currency, purchase.InstallmentCount,
-		formatTime(purchase.PurchaseDate), purchase.Status, formatTime(purchase.CreatedAt))
+		formatTime(purchase.PurchaseDate), purchase.Status, formatTime(purchase.CreatedAt), purchase.CardID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("sqlite: insert purchase: %w", err)
 	}
@@ -77,10 +77,11 @@ func scanPurchase(row scannable) (*dto.CreditCardPurchaseDTO, error) {
 	var (
 		p           dto.CreditCardPurchaseDTO
 		description sql.NullString
+		cardID      sql.NullString
 		date, born  string
 	)
 	err := row.Scan(&p.ID, &p.UserID, &description, &p.Category, &p.TotalAmount, &p.Currency,
-		&p.InstallmentCount, &date, &p.Status, &born)
+		&p.InstallmentCount, &date, &p.Status, &born, &cardID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, err
@@ -89,6 +90,7 @@ func scanPurchase(row scannable) (*dto.CreditCardPurchaseDTO, error) {
 	}
 
 	p.Description = description.String
+	p.CardID = stringPtr(cardID)
 	if p.PurchaseDate, err = parseTime(date); err != nil {
 		return nil, fmt.Errorf("sqlite: parse purchase_date: %w", err)
 	}

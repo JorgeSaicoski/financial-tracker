@@ -23,7 +23,7 @@ func NewCreditCardPurchaseRepository(db *sql.DB) repositories.CreditCardPurchase
 }
 
 const purchaseColumns = `id, user_id, description, category, total_amount, currency,
-	installment_count, purchase_date, status, created_at`
+	installment_count, purchase_date, status, created_at, card_id`
 
 func (r *creditCardPurchaseRepository) CreateWithInstallments(ctx context.Context, purchase *dto.CreditCardPurchaseDTO, installments []*dto.MovementDTO) (*dto.CreditCardPurchaseDTO, []*dto.MovementDTO, error) {
 	if purchase.ID == "" {
@@ -38,10 +38,10 @@ func (r *creditCardPurchaseRepository) CreateWithInstallments(ctx context.Contex
 
 	_, err = tx.ExecContext(ctx,
 		`INSERT INTO credit_card_purchases (`+purchaseColumns+`)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 		purchase.ID, purchase.UserID, nullString(purchase.Description), purchase.Category,
 		purchase.TotalAmount, purchase.Currency, purchase.InstallmentCount,
-		purchase.PurchaseDate, purchase.Status, purchase.CreatedAt)
+		purchase.PurchaseDate, purchase.Status, purchase.CreatedAt, strOrNil(purchase.CardID))
 	if err != nil {
 		return nil, nil, fmt.Errorf("postgresql: insert purchase: %w", err)
 	}
@@ -96,9 +96,10 @@ func scanPurchase(row scannable) (*dto.CreditCardPurchaseDTO, error) {
 	var (
 		p           dto.CreditCardPurchaseDTO
 		description sql.NullString
+		cardID      sql.NullString
 	)
 	err := row.Scan(&p.ID, &p.UserID, &description, &p.Category, &p.TotalAmount, &p.Currency,
-		&p.InstallmentCount, &p.PurchaseDate, &p.Status, &p.CreatedAt)
+		&p.InstallmentCount, &p.PurchaseDate, &p.Status, &p.CreatedAt, &cardID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, err
@@ -106,6 +107,7 @@ func scanPurchase(row scannable) (*dto.CreditCardPurchaseDTO, error) {
 		return nil, fmt.Errorf("postgresql: scan purchase: %w", err)
 	}
 	p.Description = description.String
+	p.CardID = stringPtr(cardID)
 	return &p, nil
 }
 
