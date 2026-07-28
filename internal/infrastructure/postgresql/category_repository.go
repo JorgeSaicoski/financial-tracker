@@ -174,14 +174,43 @@ func (r *categoryRepository) IsContributor(ctx context.Context, userID, category
 	return n > 0, nil
 }
 
-func (r *categoryRepository) CountByContributor(ctx context.Context, userID string) (int, error) {
-	var n int
-	if err := r.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM category_maintainers WHERE user_id = $1`, userID,
-	).Scan(&n); err != nil {
-		return 0, fmt.Errorf("postgresql: count categories by contributor: %w", err)
+func (r *categoryRepository) ListForUser(ctx context.Context, userID string) ([]*dto.CategoryDTO, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT `+categoryColumns+` FROM categories c
+		 JOIN category_maintainers cm ON cm.category_id = c.id
+		 WHERE cm.user_id = $1
+		 AND NOT EXISTS (
+		     SELECT 1 FROM user_hidden_categories uhc
+		     WHERE uhc.user_id = cm.user_id AND uhc.category_id = cm.category_id
+		 )
+		 ORDER BY c.name ASC`, userID)
+	if err != nil {
+		return nil, fmt.Errorf("postgresql: query categories for user: %w", err)
 	}
-	return n, nil
+	defer rows.Close()
+
+	out := make([]*dto.CategoryDTO, 0)
+	ids := make([]string, 0)
+	for rows.Next() {
+		c, err := scanCategory(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+		ids = append(ids, c.ID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	contributors, err := r.loadContributors(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range out {
+		c.ContributorIDs = contributors[c.ID]
+	}
+	return out, nil
 }
 
 func (r *categoryRepository) Hide(ctx context.Context, userID, categoryID string) error {

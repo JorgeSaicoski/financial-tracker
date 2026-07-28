@@ -141,7 +141,7 @@ func TestCategoryIsContributor(t *testing.T) {
 	}
 }
 
-func TestCategoryCountByContributor(t *testing.T) {
+func TestCategoryListForUser(t *testing.T) {
 	repo := NewCategoryRepository(openTestDB(t))
 	ctx := context.Background()
 
@@ -155,12 +155,53 @@ func TestCategoryCountByContributor(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	n, err := repo.CountByContributor(ctx, "u1")
+	got, err := repo.ListForUser(ctx, "u1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n != 2 {
-		t.Errorf("count = %d, want 2", n)
+	if len(got) != 2 {
+		t.Errorf("len = %d, want 2, got %+v", len(got), got)
+	}
+}
+
+// TestCategoryListForUserExcludesHidden guards the actual bug fixed here:
+// ListForUser (what the per-user cap is checked against, via
+// entities.User.Categories) must drop a category once the user hides it,
+// even though they're still its contributor — otherwise hiding never
+// frees a slot and a user who creates up to the limit is locked out
+// forever.
+func TestCategoryListForUserExcludesHidden(t *testing.T) {
+	repo := NewCategoryRepository(openTestDB(t))
+	ctx := context.Background()
+
+	a, err := repo.Create(ctx, dtoCategory("a", nil, "u1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.Create(ctx, dtoCategory("b", nil, "u1")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := repo.Hide(ctx, "u1", a.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := repo.ListForUser(ctx, "u1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Name != "b" {
+		t.Errorf("want only %q left after hiding %q, got %+v", "b", "a", got)
+	}
+
+	// u1 is still a contributor on "a" even though it's no longer in
+	// their list — hiding never touches ContributorIDs.
+	is, err := repo.IsContributor(ctx, "u1", a.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !is {
+		t.Error("want u1 to still be a contributor of the hidden category")
 	}
 }
 

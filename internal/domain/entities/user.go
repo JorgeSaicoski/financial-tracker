@@ -34,8 +34,13 @@ type User struct {
 	UpdatedAt time.Time
 }
 
-func (u *User) AddCategory(c *Category) error {
-	if len(u.Categories) >= 10 { //change to get it from db
+// AddCategory adds c to u's own list, enforcing maxCategories (the
+// caller resolves this from LimitsRepository's "max_categories_per_user"
+// row, not a hardcoded value — operator-configurable, per BACK-14
+// follow-up). Contributor rights (Category.ContributorIDs) are a
+// separate, uncapped concern — this only counts what's in u.Categories.
+func (u *User) AddCategory(c *Category, maxCategories int) error {
+	if len(u.Categories) >= maxCategories {
 		return fmt.Errorf("user %s has reached the maximum number of categories", u.ID)
 	}
 	u.Categories = append(u.Categories, c)

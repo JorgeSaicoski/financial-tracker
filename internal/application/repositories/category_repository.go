@@ -52,10 +52,18 @@ type CategoryRepository interface {
 	// when categoryID doesn't exist; callers that need existence
 	// separately already called GetByID.
 	IsContributor(ctx context.Context, userID, categoryID string) (bool, error)
-	// CountByContributor returns how many categories userID currently
-	// contributes to — backs createCategoryUseCase's per-user limit
-	// check (see LimitsRepository, "max_categories_per_user").
-	CountByContributor(ctx context.Context, userID string) (int, error)
+	// ListForUser returns the categories userID currently *has* — the
+	// creator of a category always has it (contributor and "has" are
+	// granted together at creation time); it comes back out of this list
+	// once userID hides it (see Hide/HideAndReassign), even though they
+	// may still be a contributor. Deliberately separate from "how many is
+	// userID a contributor of" (Jorge, review comment on #39: "we don't
+	// care how much categories he is contributor or not, we care how
+	// much does he has — maybe he is contributor on 15 categories but
+	// just have 10"). The usecase layer loads this into
+	// entities.User.Categories and calls AddCategory/RemoveCategory on
+	// it, rather than checking a count directly here.
+	ListForUser(ctx context.Context, userID string) ([]*dto.CategoryDTO, error)
 	// Hide marks categoryID as opted out of userID's own future use —
 	// idempotent, and never touches the category row itself or any
 	// other user's data. This is what DELETE /categories/{id} means now

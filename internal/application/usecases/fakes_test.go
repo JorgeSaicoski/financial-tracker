@@ -766,17 +766,22 @@ func (f *fakeCategoryRepo) IsContributor(_ context.Context, userID, categoryID s
 	return false, nil
 }
 
-func (f *fakeCategoryRepo) CountByContributor(_ context.Context, userID string) (int, error) {
-	n := 0
+func (f *fakeCategoryRepo) ListForUser(_ context.Context, userID string) ([]*dto.CategoryDTO, error) {
+	var out []*dto.CategoryDTO
 	for _, c := range f.byID {
+		if f.hidden[userID][c.ID] {
+			continue
+		}
 		for _, id := range c.ContributorIDs {
 			if id == userID {
-				n++
+				cp := *c
+				out = append(out, &cp)
 				break
 			}
 		}
 	}
-	return n, nil
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
 }
 
 func (f *fakeCategoryRepo) Hide(_ context.Context, userID, categoryID string) error {
