@@ -54,6 +54,13 @@ Beyond movements, the tracker knows about:
   a float. Backing the (not yet built) purchasing-power report; posting
   the same currency + effective date again backfills/corrects that row
   instead of duplicating it.
+- **CSV history import** (BACK-03) — users export/scan their bank
+  statements, hand them to any AI along with `GET /import/movements/spec`'s
+  published model, and upload the result via `POST /import/movements` to
+  backfill history. Every row is validated before anything writes
+  (strict by default: any bad row imports nothing), and rows matching an
+  existing movement or another row in the same file are flagged as
+  duplicates rather than silently re-imported.
 
 Backend layout follows Clean Architecture (see `CleanExampleGo` for the
 reference pattern this was modeled on): the **domain** layer holds pure
@@ -194,6 +201,9 @@ tier to sell).
 
 | Method | Path | Purpose |
 |---|---|---|
+| `GET` | `/import/movements/spec` | BACK-03: the CSV history-import model — columns (with real allowed values: registered currencies, categories, payment methods, the user's own account names) plus a ready-to-copy template. The frontend renders this instead of hardcoding the spec. |
+| `POST` | `/import/movements?dry_run=&allow_partial=&skip_duplicates=` | Import a CSV backfill (multipart `file` field or a raw `text/csv` body; header `date,amount,currency,description,category,payment_method,account`, max 1 MiB / 10k rows). Validates every row first; `dry_run=true` reports without writing. Default **strict**: any row error imports nothing (`allow_partial=true` imports the valid rows and skips the rest). Rows matching an existing movement or an earlier row in the same file on `(date, amount, currency, normalized description)` are flagged in `duplicates[]` but still import by default — `skip_duplicates=true` excludes them. Response: `{imported, skipped, errors[], duplicates[]}`. |
+| `GET` | `/export/movements?include_cancelled=` | BACK-09: the revert direction of `POST /import/movements` — streams the caller's history as CSV in exactly the import model above (see `internal/infrastructure/csv/README.md`), so a file round-tripped through import then export reproduces the same rows. Excludes voided movements and reversal pairs by default; `include_cancelled=true` includes everything with extra `status`/`cancels_movement_id`/`reversed_by_movement_id` columns. Available in every mode, not just standalone. |
 | `GET` | `/config` | Unauthenticated. `{standalone, auth_enabled}` — what the frontend reads before deciding whether to show the login guard. |
 | `GET` | `/settings?user_id=` | The caller's own settings — entitlement (operator-controlled, read-only here) and preference. Defaults to all-`true` if the user has never touched them (no row needed). |
 | `PATCH` | `/settings?user_id=` | Body: `{ledger_sync_enabled}` — the only field a user may change. Any attempt to set `ledger_sync_entitled`/`cloud_storage_entitled` (or any other key) is rejected with 400. Re-enabling reclassifies movements created while sync was off (`sync_status: "local"`) back to `"pending"`, so the next `/sync` pass pushes exactly that backlog. |
@@ -301,6 +311,59 @@ already set in `docker-compose.yml` — without it `npm install` fails with
    only needed when the API enforces auth (the default — see
    `AUTH_DISABLED` in `.env.example`); leave them blank when running with
    `AUTH_DISABLED=true`.
+
+### Running locally (standalone)
+
+BACK-09's "fully local" distribution: one binary, no server, no account,
+no external services — your data lives in a single SQLite file on your
+own machine, exportable to CSV anytime.
+
+```bash
+make build-standalone           # or: go build -o financial-tracker-standalone ./internal/cmd/api
+STANDALONE=true ./financial-tracker-standalone   # or: ./financial-tracker-standalone --standalone
+```
+
+What this mode changes, all automatic (no other env vars needed):
+- **Storage**: forces `DB_DRIVER=sqlite`. `DB_PATH` defaults to an
+  OS-appropriate per-user data directory (`os.UserConfigDir()/financial-tracker/financial-tracker.db`
+  — e.g. `~/.config/financial-tracker/` on Linux) instead of `./data`, so
+  the binary can be run from anywhere, not just its own working
+  directory. Override with `DB_PATH=/wherever/you/want.db` if you'd
+  rather pick the location yourself. **Back up your data by copying that
+  one file.**
+- **No account, no login**: every request is attributed to a single
+  fixed local user — same mechanism as `AUTH_DISABLED=true`, forced on
+  automatically.
+- **No sync**: there is no ledger-service in this mode. Movements are
+  created with `sync_status: "local"` (never "pending forever"), `POST
+  /sync` is explicitly rejected (404 with a clear message), and
+  cancelling a movement always voids it locally — nothing has ever
+  synced, so there's never a reversal to create.
+- **CSV export, anytime**: `GET /export/movements` streams your history
+  in exactly the CSV import model (`date,amount,currency,description,category,payment_method,account`),
+  excluding voided/reversed movements by default
+  (`include_cancelled=true` for the full picture with extra status
+  columns). This endpoint exists in every mode, not just standalone —
+  your data is always portable. Export → wipe the data file → re-import
+  via `POST /import/movements` round-trips to the same movement list and
+  balance.
+
+**Current status of the embedded frontend:** the binary always starts
+and serves the API correctly (verified above); `go:embed` bakes in
+whatever static files exist under `internal/webui/dist/` at compile
+time. That directory ships with only a placeholder in version control
+(see `internal/webui/webui.go`'s doc comment), so today's binary serves
+a plain "no frontend embedded" page at `/` instead of the real UI — the
+API itself (`/movements`, `/accounts`, `/import`, `/export`, etc.) works
+identically either way. Producing a true static SvelteKit build to embed
+needs a static-capable adapter (`web/`'s `svelte.config.js` currently
+only configures `@sveltejs/adapter-node`, which needs a running Node
+server, not just static files); wiring that up is expected to land as
+part of INFRA-06 (cross-platform release binaries), which already owns
+"embeds this binary's frontend" — see `internal/webui/webui.go` and
+`internal/interfaces/api/spa.go` for the embedding mechanism itself,
+which is already in place and tested (`internal/interfaces/api/router_test.go`)
+against a fake filesystem.
 
 ### Deploying (PostgreSQL, production images)
 
