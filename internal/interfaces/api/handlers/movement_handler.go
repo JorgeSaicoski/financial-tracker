@@ -95,6 +95,10 @@ func (h *movementHandler) CreateMovement(w http.ResponseWriter, r *http.Request)
 	if req.CardPaymentForCardID != "" {
 		cardPaymentForCardID = &req.CardPaymentForCardID
 	}
+	var planID *string
+	if req.PlanID != "" {
+		planID = &req.PlanID
+	}
 
 	if req.Installments > 1 {
 		if req.PaymentMethod != entities.PaymentMethodCreditCard {
@@ -135,6 +139,7 @@ func (h *movementHandler) CreateMovement(w http.ResponseWriter, r *http.Request)
 		AccountID:            accountID,
 		CardID:               cardID,
 		CardPaymentForCardID: cardPaymentForCardID,
+		PlanID:               planID,
 	})
 	if err != nil {
 		h.writeUsecaseError(w, "create movement", err)
@@ -242,6 +247,7 @@ func (h *movementHandler) UpdateMovement(w http.ResponseWriter, r *http.Request)
 		Category:      req.Category,
 		PaymentMethod: req.PaymentMethod,
 		AccountID:     req.AccountID,
+		PlanID:        req.PlanID,
 		Amount:        req.Amount,
 		Currency:      req.Currency,
 		Timestamp:     req.Timestamp,
@@ -463,6 +469,9 @@ func toMovementResponse(m *dto.MovementDTO) interfacedto.MovementResponse {
 	}
 	if m.CardPaymentForCardID != nil {
 		resp.CardPaymentForCardID = *m.CardPaymentForCardID
+	}
+	if m.PlanID != nil {
+		resp.PlanID = *m.PlanID
 	}
 	return resp
 }

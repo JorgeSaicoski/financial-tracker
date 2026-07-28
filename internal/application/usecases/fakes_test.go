@@ -165,6 +165,23 @@ func (f *fakeMovementRepo) NetByAccount(_ context.Context, accountID string, aft
 	return net, nil
 }
 
+func (f *fakeMovementRepo) SumByPlan(_ context.Context, planID string, from, to *time.Time) (int64, error) {
+	var sum int64
+	for _, m := range f.byID {
+		if m.PlanID == nil || *m.PlanID != planID || m.Status != string(entities.MovementStatusActive) {
+			continue
+		}
+		if from != nil && m.Timestamp.Before(*from) {
+			continue
+		}
+		if to != nil && m.Timestamp.After(*to) {
+			continue
+		}
+		sum += m.Amount
+	}
+	return sum, nil
+}
+
 func (f *fakeMovementRepo) ListByCreditCardPurchase(_ context.Context, purchaseID string) ([]*dto.MovementDTO, error) {
 	var out []*dto.MovementDTO
 	for _, m := range f.byID {
@@ -258,7 +275,7 @@ func (f *fakeMovementRepo) MarkSyncFailed(_ context.Context, id, syncErr string,
 	return nil
 }
 
-func (f *fakeMovementRepo) UpdateMetadata(_ context.Context, id, description, category, paymentMethod string, accountID *string) error {
+func (f *fakeMovementRepo) UpdateMetadata(_ context.Context, id, description, category, paymentMethod string, accountID, planID *string) error {
 	if f.updateMetadataErr != nil {
 		return f.updateMetadataErr
 	}
@@ -270,6 +287,7 @@ func (f *fakeMovementRepo) UpdateMetadata(_ context.Context, id, description, ca
 	m.Category = category
 	m.PaymentMethod = paymentMethod
 	m.AccountID = accountID
+	m.PlanID = planID
 	return nil
 }
 
@@ -841,5 +859,62 @@ func (f *fakePaymentMethodRepo) Delete(_ context.Context, userID, id string) err
 		return apperrors.ErrNotFound
 	}
 	delete(f.byID, id)
+	return nil
+}
+
+// fakePlanRepo is an in-memory PlanRepository.
+type fakePlanRepo struct {
+	byID   map[string]*dto.PlanDTO
+	nextID int
+}
+
+func newFakePlanRepo() *fakePlanRepo {
+	return &fakePlanRepo{byID: map[string]*dto.PlanDTO{}}
+}
+
+func (f *fakePlanRepo) Create(_ context.Context, p *dto.PlanDTO) (*dto.PlanDTO, error) {
+	if p.ID == "" {
+		f.nextID++
+		p.ID = fmt.Sprintf("plan-%d", f.nextID)
+	}
+	if p.CreatedAt.IsZero() {
+		p.CreatedAt = time.Now().UTC()
+	}
+	cp := *p
+	f.byID[p.ID] = &cp
+	return p, nil
+}
+
+func (f *fakePlanRepo) GetByID(_ context.Context, userID, id string) (*dto.PlanDTO, error) {
+	p, ok := f.byID[id]
+	if !ok || p.UserID != userID {
+		return nil, apperrors.ErrNotFound
+	}
+	cp := *p
+	return &cp, nil
+}
+
+func (f *fakePlanRepo) ListByUser(_ context.Context, userID string) ([]*dto.PlanDTO, error) {
+	var out []*dto.PlanDTO
+	for _, p := range f.byID {
+		if p.UserID == userID {
+			cp := *p
+			out = append(out, &cp)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	return out, nil
+}
+
+func (f *fakePlanRepo) Update(_ context.Context, userID, id, name string, targetAmount *int64, monthlyTargetAmount int64, endDate *time.Time, status string) error {
+	p, ok := f.byID[id]
+	if !ok || p.UserID != userID {
+		return apperrors.ErrNotFound
+	}
+	p.Name = name
+	p.TargetAmount = targetAmount
+	p.MonthlyTargetAmount = monthlyTargetAmount
+	p.EndDate = endDate
+	p.Status = status
 	return nil
 }

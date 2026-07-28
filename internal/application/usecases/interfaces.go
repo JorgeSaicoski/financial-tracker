@@ -92,6 +92,10 @@ type CreateMovementInput struct {
 	// next_due_total. Independent of CardID: a movement is either a
 	// charge (CardID) or a payment (CardPaymentForCardID), never both.
 	CardPaymentForCardID *string
+	// PlanID (BACK-10) tags this movement as funding a savings plan. Must
+	// belong to the user, be an active savings plan, and match the
+	// movement's currency — validated in the usecase.
+	PlanID *string
 }
 
 // ImportRowInput is one CSV data row (BACK-03), still raw strings — the
@@ -216,6 +220,7 @@ type UpdateMovementInput struct {
 	Category      *string
 	PaymentMethod *string
 	AccountID     *string // a pointer to "" clears the account
+	PlanID        *string // a pointer to "" clears the plan link (BACK-10)
 	Amount        *int64
 	Currency      *string
 	Timestamp     *time.Time
@@ -300,6 +305,11 @@ type TransferBetweenAccountsInput struct {
 	Amount        int64
 	Description   string
 	Timestamp     time.Time
+	// PlanID (BACK-10), when set, tags the credit (destination) leg only
+	// — the recommended way to fund a savings plan without inflating
+	// income/expense cashflow. Must belong to the user, be an active
+	// savings plan, and match ToAccountID's currency.
+	PlanID *string
 }
 
 // TransferResult carries both legs of a transfer, linked by TransferID:
@@ -705,4 +715,76 @@ type UpdatePaymentMethodUseCase interface {
 // label, not an FK, same as a deleted category.
 type DeletePaymentMethodUseCase interface {
 	Execute(ctx context.Context, userID, id string) error
+}
+
+// CreatePlanInput carries a POST /plans body (BACK-10). TargetAmount and
+// AccountID are required for a savings plan, and must be absent for a
+// stress-test plan (a hypothetical cost has no real target or funding
+// account). StartDate defaults to now when zero.
+type CreatePlanInput struct {
+	UserID              string
+	Name                string
+	Type                string
+	TargetAmount        *int64
+	Currency            string
+	MonthlyTargetAmount int64
+	AccountID           *string
+	StartDate           time.Time
+	EndDate             *time.Time
+}
+
+type CreatePlanUseCase interface {
+	Execute(ctx context.Context, input CreatePlanInput) (*dto.PlanDTO, error)
+}
+
+// PlanSummary is GET /plans' lightweight per-plan progress: Progress is
+// either a savings plan's all-time SUM(amount) toward TargetAmount, or a
+// stress-test plan's current (not projected) month-to-date surplus —
+// income minus expense minus MonthlyTargetAmount. It deliberately omits
+// the pace checker's forward-looking fields (see PlanDetail) since
+// listing every plan shouldn't pay for N cashflow scans just to render a
+// summary row.
+type PlanSummary struct {
+	Plan          *dto.PlanDTO
+	Progress      int64
+	TargetReached bool
+}
+
+type ListPlansUseCase interface {
+	Execute(ctx context.Context, userID string, at time.Time) ([]PlanSummary, error)
+}
+
+// PlanDetail is GET /plans/{id}'s full response: PlanSummary plus the
+// pace checker. OnTrack: for a stress-test plan, whether the *projected*
+// month-end surplus (month-to-date expense extrapolated linearly to
+// month-end, income never extrapolated — it's lumpy, see the ticket's
+// own v1 heuristic note) stays non-negative; for a savings plan, whether
+// this month's contributions-to-date are at or ahead of linear pace.
+// ProjectedShortfall is savings-only (month's MonthlyTargetAmount minus
+// the projected end-of-month contribution total at the current rate) —
+// nil for a stress-test plan.
+type PlanDetail struct {
+	PlanSummary
+	OnTrack            bool
+	ProjectedShortfall *int64
+}
+
+type GetPlanUseCase interface {
+	Execute(ctx context.Context, userID, id string, at time.Time) (PlanDetail, error)
+}
+
+// UpdatePlanInput carries a PATCH /plans/{id} body — nil means "leave
+// unchanged", same convention as UpdateMovementInput. Type, Currency, and
+// AccountID are not editable after creation (changing them would silently
+// invalidate every movement already tagged with this plan's id).
+type UpdatePlanInput struct {
+	Name                *string
+	TargetAmount        *int64
+	MonthlyTargetAmount *int64
+	EndDate             *time.Time
+	Status              *string
+}
+
+type UpdatePlanUseCase interface {
+	Execute(ctx context.Context, userID, id string, input UpdatePlanInput) (*dto.PlanDTO, error)
 }

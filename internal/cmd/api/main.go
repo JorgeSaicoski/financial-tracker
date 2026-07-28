@@ -111,6 +111,7 @@ func main() {
 		recurringRuleRepo repositories.RecurringRuleRepository
 		localArchiveRepo  repositories.LocalArchiveSettingsRepository
 		paymentMethodRepo repositories.PaymentMethodRepository
+		planRepo          repositories.PlanRepository
 		userRepo          repositories.UserRepository
 		settingsRepo      repositories.UserSettingsRepository
 	)
@@ -146,6 +147,7 @@ func main() {
 		recurringRuleRepo = postgresql.NewRecurringRuleRepository(db)
 		localArchiveRepo = postgresql.NewLocalArchiveSettingsRepository(db)
 		paymentMethodRepo = postgresql.NewPaymentMethodRepository(db)
+		planRepo = postgresql.NewPlanRepository(db)
 		userRepo = postgresql.NewUserRepository(db)
 		settingsRepo = postgresql.NewUserSettingsRepository(db)
 	case "sqlite":
@@ -167,6 +169,7 @@ func main() {
 		recurringRuleRepo = sqlite.NewRecurringRuleRepository(db)
 		localArchiveRepo = sqlite.NewLocalArchiveSettingsRepository(db)
 		paymentMethodRepo = sqlite.NewPaymentMethodRepository(db)
+		planRepo = sqlite.NewPlanRepository(db)
 		userRepo = sqlite.NewUserRepository(db)
 		settingsRepo = sqlite.NewUserSettingsRepository(db)
 	default:
@@ -180,11 +183,11 @@ func main() {
 	syncService := syncapp.NewService(movementRepo, settingsRepo, ledgerGateway, log, retryCooldown)
 	recurringService := recurringapp.NewService(recurringRuleRepo, log)
 
-	createMovement := usecases.NewCreateMovement(movementRepo, accountRepo, cardRepo, paymentMethodRepo, settingsRepo)
+	createMovement := usecases.NewCreateMovement(movementRepo, accountRepo, cardRepo, paymentMethodRepo, planRepo, settingsRepo)
 	createPurchase := usecases.NewCreateCreditCardPurchase(purchaseRepo, cardRepo, settingsRepo)
 	getMovement := usecases.NewGetMovement(movementRepo)
 	listMovements := usecases.NewListMovements(movementRepo)
-	updateMovement := usecases.NewUpdateMovement(movementRepo, accountRepo, paymentMethodRepo, syncService)
+	updateMovement := usecases.NewUpdateMovement(movementRepo, accountRepo, paymentMethodRepo, planRepo, syncService)
 	cancelMovement := usecases.NewCancelMovement(movementRepo, syncService)
 	cancelPurchase := usecases.NewCancelCreditCardPurchase(purchaseRepo, movementRepo, syncService)
 	getCashflow := usecases.NewGetCashflow(movementRepo, accountRepo)
@@ -199,7 +202,7 @@ func main() {
 	deleteCard := usecases.NewDeleteCard(cardRepo)
 	listCurrencies := usecases.NewListCurrencies(currencyRepo)
 	addCurrency := usecases.NewAddCurrency(currencyRepo)
-	transferBetweenAccounts := usecases.NewTransferBetweenAccounts(movementRepo, accountRepo, settingsRepo)
+	transferBetweenAccounts := usecases.NewTransferBetweenAccounts(movementRepo, accountRepo, planRepo, settingsRepo)
 	cancelTransfer := usecases.NewCancelTransfer(movementRepo, syncService)
 	setExchangeRate := usecases.NewSetExchangeRate(exchangeRateRepo, currencyRepo)
 	listExchangeRates := usecases.NewListExchangeRates(exchangeRateRepo)
@@ -215,6 +218,10 @@ func main() {
 	listPaymentMethods := usecases.NewListPaymentMethods(paymentMethodRepo)
 	updatePaymentMethod := usecases.NewUpdatePaymentMethod(paymentMethodRepo)
 	deletePaymentMethod := usecases.NewDeletePaymentMethod(paymentMethodRepo)
+	createPlan := usecases.NewCreatePlan(planRepo, accountRepo)
+	listPlans := usecases.NewListPlans(planRepo, movementRepo)
+	getPlan := usecases.NewGetPlan(planRepo, movementRepo)
+	updatePlan := usecases.NewUpdatePlan(planRepo)
 	ensureUser := usecases.NewEnsureUser(userRepo)
 	getUser := usecases.NewGetUser(userRepo)
 	importMovements := usecases.NewImportMovements(movementRepo, accountRepo, currencyRepo, paymentMethodRepo)
@@ -263,6 +270,7 @@ func main() {
 	importHandler := handlers.NewImportHandler(importMovements, listAccounts, listCurrencies, listPaymentMethods, log)
 	exportHandler := handlers.NewExportHandler(exportMovements, log)
 	paymentMethodHandler := handlers.NewPaymentMethodHandler(createPaymentMethod, updatePaymentMethod, deletePaymentMethod, log)
+	planHandler := handlers.NewPlanHandler(createPlan, listPlans, getPlan, updatePlan, log)
 	settingsHandler := handlers.NewSettingsHandler(getSettings, updateSettings, log)
 	userHandler := handlers.NewUserHandler(getUser, log)
 	configHandler := handlers.NewConfigHandler(standalone, authEnabled, log)
@@ -308,7 +316,7 @@ func main() {
 		}
 	}
 
-	router := api.NewRouter(movementHandler, accountHandler, cardHandler, currencyHandler, transferHandler, exchangeRateHandler, recurringRuleHandler, archiveHandler, importHandler, exportHandler, paymentMethodHandler, settingsHandler, userHandler, configHandler, authMiddleware, corsAllowedOrigin, standalone, frontendFS)
+	router := api.NewRouter(movementHandler, accountHandler, cardHandler, currencyHandler, transferHandler, exchangeRateHandler, recurringRuleHandler, archiveHandler, importHandler, exportHandler, paymentMethodHandler, planHandler, settingsHandler, userHandler, configHandler, authMiddleware, corsAllowedOrigin, standalone, frontendFS)
 
 	if !standalone {
 		// Standalone has no ledger-service to sync to at all — starting
@@ -334,7 +342,7 @@ func main() {
 	} else {
 		log.Info("financial-tracker API listening on %s (db driver %s at %s, syncing to ledger-service at %s every %s)", addr, dbDriver, dbDescription, ledgerServiceURL, syncInterval)
 	}
-	log.Info("endpoints: GET /config | GET|PATCH /settings | GET /import/movements/spec | POST /import/movements | GET /export/movements | POST /movements | GET /movements | PATCH /movements/{id} | POST /movements/{id}/cancel | POST /credit-card-purchases/{id}/cancel | POST /sync | GET /categories | GET /cashflow | GET|POST /accounts | POST /accounts/{id}/balance | GET|POST /cards | GET|PATCH|DELETE /cards/{id} | GET|POST /currencies | POST /transfers | POST /transfers/{id}/cancel | GET|POST /exchange-rates | DELETE /exchange-rates/{id} | GET|POST /recurring-rules | PATCH /recurring-rules/{id} | GET|PUT /settings/local-archive | GET /export/archive | POST /import/archive | POST /payment-methods | PATCH /payment-methods/{id} | DELETE /payment-methods/{id} | GET /me")
+	log.Info("endpoints: GET /config | GET|PATCH /settings | GET /import/movements/spec | POST /import/movements | GET /export/movements | POST /movements | GET /movements | PATCH /movements/{id} | POST /movements/{id}/cancel | POST /credit-card-purchases/{id}/cancel | POST /sync | GET /categories | GET /cashflow | GET|POST /accounts | POST /accounts/{id}/balance | GET|POST /cards | GET|PATCH|DELETE /cards/{id} | GET|POST /currencies | POST /transfers | POST /transfers/{id}/cancel | GET|POST /exchange-rates | DELETE /exchange-rates/{id} | GET|POST /recurring-rules | PATCH /recurring-rules/{id} | GET|PUT /settings/local-archive | GET /export/archive | POST /import/archive | POST /payment-methods | PATCH /payment-methods/{id} | DELETE /payment-methods/{id} | GET|POST /plans | GET|PATCH /plans/{id} | GET /me")
 
 	if err := http.ListenAndServe(addr, router); err != nil {
 		log.Error("server failed: %v", err)

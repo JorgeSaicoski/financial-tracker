@@ -12,7 +12,7 @@ import (
 )
 
 func TestCreateMovementValidation(t *testing.T) {
-	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), newFakeCardRepo(), newFakePaymentMethodRepo(), newFakeUserSettingsRepo())
+	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), newFakeCardRepo(), newFakePaymentMethodRepo(), newFakePlanRepo(), newFakeUserSettingsRepo())
 
 	cases := []struct {
 		name  string
@@ -39,7 +39,7 @@ func TestCreateMovementValidation(t *testing.T) {
 // category or currency.
 func TestCreateMovementImplicitlyRegistersPaymentMethod(t *testing.T) {
 	methods := newFakePaymentMethodRepo()
-	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), newFakeCardRepo(), methods, newFakeUserSettingsRepo())
+	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), newFakeCardRepo(), methods, newFakePlanRepo(), newFakeUserSettingsRepo())
 
 	m, err := uc.Execute(context.Background(), CreateMovementInput{
 		UserID: "u1", Amount: 100, Currency: "usd", PaymentMethod: "iou",
@@ -61,7 +61,7 @@ func TestCreateMovementImplicitlyRegistersPaymentMethod(t *testing.T) {
 
 func TestCreateMovementDefaultsAndState(t *testing.T) {
 	repo := newFakeMovementRepo()
-	uc := NewCreateMovement(repo, newFakeAccountRepo(), newFakeCardRepo(), newFakePaymentMethodRepo(), newFakeUserSettingsRepo())
+	uc := NewCreateMovement(repo, newFakeAccountRepo(), newFakeCardRepo(), newFakePaymentMethodRepo(), newFakePlanRepo(), newFakeUserSettingsRepo())
 
 	m, err := uc.Execute(context.Background(), CreateMovementInput{
 		UserID: "u1", Amount: -500, Currency: "usd",
@@ -88,7 +88,7 @@ func TestCreateMovementDefaultsAndState(t *testing.T) {
 }
 
 func TestCreateMovementKeepsExplicitFields(t *testing.T) {
-	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), newFakeCardRepo(), newFakePaymentMethodRepo(), newFakeUserSettingsRepo())
+	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), newFakeCardRepo(), newFakePaymentMethodRepo(), newFakePlanRepo(), newFakeUserSettingsRepo())
 
 	m, err := uc.Execute(context.Background(), CreateMovementInput{
 		UserID: "u1", Amount: -500, Currency: "usd",
@@ -110,7 +110,7 @@ func TestCreateMovementWithCardIDDatesOnDueDay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), cards, newFakePaymentMethodRepo(), newFakeUserSettingsRepo())
+	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), cards, newFakePaymentMethodRepo(), newFakePlanRepo(), newFakeUserSettingsRepo())
 
 	m, err := uc.Execute(context.Background(), CreateMovementInput{
 		UserID: "u1", Amount: -500, Currency: "usd",
@@ -134,7 +134,7 @@ func TestCreateMovementCardIDRequiresCreditCardPaymentMethod(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), cards, newFakePaymentMethodRepo(), newFakeUserSettingsRepo())
+	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), cards, newFakePaymentMethodRepo(), newFakePlanRepo(), newFakeUserSettingsRepo())
 
 	_, err = uc.Execute(context.Background(), CreateMovementInput{
 		UserID: "u1", Amount: -500, Currency: "usd", CardID: &card.ID,
@@ -150,7 +150,7 @@ func TestCreateMovementCardIDRejectsCurrencyMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), cards, newFakePaymentMethodRepo(), newFakeUserSettingsRepo())
+	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), cards, newFakePaymentMethodRepo(), newFakePlanRepo(), newFakeUserSettingsRepo())
 
 	_, err = uc.Execute(context.Background(), CreateMovementInput{
 		UserID: "u1", Amount: -500, Currency: "brl",
@@ -167,7 +167,7 @@ func TestCreateMovementCardPaymentKeepsNowAsTimestamp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), cards, newFakePaymentMethodRepo(), newFakeUserSettingsRepo())
+	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), cards, newFakePaymentMethodRepo(), newFakePlanRepo(), newFakeUserSettingsRepo())
 
 	before := time.Now().UTC()
 	m, err := uc.Execute(context.Background(), CreateMovementInput{

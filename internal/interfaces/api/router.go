@@ -26,6 +26,7 @@ func NewRouter(
 	importHandler handlers.ImportHandler,
 	exportHandler handlers.ExportHandler,
 	paymentMethodHandler handlers.PaymentMethodHandler,
+	planHandler handlers.PlanHandler,
 	settingsHandler handlers.SettingsHandler,
 	userHandler handlers.UserHandler,
 	configHandler handlers.ConfigHandler,
@@ -108,6 +109,11 @@ func NewRouter(
 	protected.HandleFunc("POST /payment-methods", paymentMethodHandler.CreatePaymentMethod)
 	protected.HandleFunc("PATCH /payment-methods/{id}", paymentMethodHandler.UpdatePaymentMethod)
 	protected.HandleFunc("DELETE /payment-methods/{id}", paymentMethodHandler.DeletePaymentMethod)
+
+	protected.HandleFunc("POST /plans", planHandler.CreatePlan)
+	protected.HandleFunc("GET /plans", planHandler.ListPlans)
+	protected.HandleFunc("GET /plans/{id}", planHandler.GetPlan)
+	protected.HandleFunc("PATCH /plans/{id}", planHandler.UpdatePlan)
 
 	protected.HandleFunc("GET /me", userHandler.Me)
 

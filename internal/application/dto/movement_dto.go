@@ -29,6 +29,7 @@ type MovementDTO struct {
 
 	AccountID  *string
 	TransferID *string
+	PlanID     *string
 
 	CreditCardPurchaseID *string
 	InstallmentNumber    *int // 1-based
@@ -70,6 +71,7 @@ func MovementFromEntity(m *entities.Movement) *MovementDTO {
 		PaymentMethod:        string(m.PaymentMethod),
 		AccountID:            m.AccountID,
 		TransferID:           m.TransferID,
+		PlanID:               m.PlanID,
 		CreditCardPurchaseID: m.CreditCardPurchaseID,
 		InstallmentNumber:    m.InstallmentNumber,
 		RecurringRuleID:      m.RecurringRuleID,
@@ -115,6 +117,7 @@ func (m *MovementDTO) ToEntity() *entities.Movement {
 		PaymentMethod:        m.PaymentMethod,
 		AccountID:            m.AccountID,
 		TransferID:           m.TransferID,
+		PlanID:               m.PlanID,
 		CreditCardPurchaseID: m.CreditCardPurchaseID,
 		InstallmentNumber:    m.InstallmentNumber,
 		RecurringRuleID:      m.RecurringRuleID,

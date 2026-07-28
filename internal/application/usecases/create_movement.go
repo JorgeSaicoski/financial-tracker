@@ -16,12 +16,13 @@ type createMovementUseCase struct {
 	accounts repositories.AccountRepository
 	cards    repositories.CardRepository
 	methods  repositories.PaymentMethodRepository
+	plans    repositories.PlanRepository
 	settings repositories.UserSettingsRepository
 }
 
 // NewCreateMovement returns interface type for dependency injection.
-func NewCreateMovement(repo repositories.MovementRepository, accounts repositories.AccountRepository, cards repositories.CardRepository, methods repositories.PaymentMethodRepository, settings repositories.UserSettingsRepository) CreateMovementUseCase {
-	return &createMovementUseCase{repo: repo, accounts: accounts, cards: cards, methods: methods, settings: settings}
+func NewCreateMovement(repo repositories.MovementRepository, accounts repositories.AccountRepository, cards repositories.CardRepository, methods repositories.PaymentMethodRepository, plans repositories.PlanRepository, settings repositories.UserSettingsRepository) CreateMovementUseCase {
+	return &createMovementUseCase{repo: repo, accounts: accounts, cards: cards, methods: methods, plans: plans, settings: settings}
 }
 
 func (uc *createMovementUseCase) Execute(ctx context.Context, input CreateMovementInput) (*dto.MovementDTO, error) {
@@ -34,6 +35,15 @@ func (uc *createMovementUseCase) Execute(ctx context.Context, input CreateMoveme
 		return nil, err
 	}
 	paymentMethod, err := resolvePaymentMethod(ctx, uc.methods, input.UserID, input.PaymentMethod)
+	if err != nil {
+		return nil, err
+	}
+
+	var planIDInput string
+	if input.PlanID != nil {
+		planIDInput = *input.PlanID
+	}
+	planID, err := resolvePlanForMovement(ctx, uc.plans, input.UserID, planIDInput, input.Currency)
 	if err != nil {
 		return nil, err
 	}
@@ -102,6 +112,7 @@ func (uc *createMovementUseCase) Execute(ctx context.Context, input CreateMoveme
 		AccountID:            input.AccountID,
 		CardID:               input.CardID,
 		CardPaymentForCardID: input.CardPaymentForCardID,
+		PlanID:               planID,
 		Status:               entities.MovementStatusActive,
 		SyncStatus:           syncStatus,
 		Timestamp:            timestamp,

@@ -48,6 +48,10 @@ func (h *transferHandler) CreateTransfer(w http.ResponseWriter, r *http.Request)
 	if req.Timestamp != nil {
 		timestamp = *req.Timestamp
 	}
+	var planID *string
+	if req.PlanID != "" {
+		planID = &req.PlanID
+	}
 
 	result, err := h.createTransfer.Execute(r.Context(), usecases.TransferBetweenAccountsInput{
 		UserID:        userID,
@@ -56,6 +60,7 @@ func (h *transferHandler) CreateTransfer(w http.ResponseWriter, r *http.Request)
 		Amount:        req.Amount,
 		Description:   req.Description,
 		Timestamp:     timestamp,
+		PlanID:        planID,
 	})
 	if err != nil {
 		writeUsecaseError(h.log, w, "create transfer", err)
