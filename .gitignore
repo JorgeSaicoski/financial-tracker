@@ -1,6 +1,15 @@
 .env
 financial-tracker
+financial-tracker-standalone
 /bin/
+/release/
 
 # Local SQLite database (DB_PATH default)
 /data/
+
+# go:embed target for the standalone binary's frontend (BACK-09/INFRA-06)
+# — only the placeholder below is version-controlled; the real static
+# build is produced by `make web-build-standalone` right before `go
+# build`, never committed.
+/internal/webui/dist/*
+!/internal/webui/dist/.gitkeep

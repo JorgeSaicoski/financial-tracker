@@ -30,6 +30,12 @@ import (
 	"github.com/JorgeSaicoski/financial-tracker/internal/webui"
 )
 
+// version is stamped at build time via -ldflags "-X main.version=…"
+// (INFRA-06's release workflow uses the pushed git tag; `make
+// build-standalone`/`web-build-standalone` default it to "dev" — see
+// Makefile's VERSION variable).
+var version = "dev"
+
 func main() {
 	log := applogger.New()
 
@@ -455,9 +461,9 @@ func main() {
 		if err != nil {
 			absPath = dbPath
 		}
-		log.Info("financial-tracker running in STANDALONE mode on %s: no server, no account, no sync — data is one file at %s", addr, absPath)
+		log.Info("financial-tracker %s running in STANDALONE mode on %s: no server, no account, no sync — data is one file at %s", version, addr, absPath)
 	} else {
-		log.Info("financial-tracker API listening on %s (db driver %s at %s, syncing to ledger-service at %s every %s)", addr, dbDriver, dbDescription, ledgerServiceURL, syncInterval)
+		log.Info("financial-tracker %s API listening on %s (db driver %s at %s, syncing to ledger-service at %s every %s)", version, addr, dbDriver, dbDescription, ledgerServiceURL, syncInterval)
 	}
 	log.Info("endpoints: GET /config | GET|PATCH /settings | GET /import/movements/spec | POST /import/movements | GET /export/movements | POST /movements | GET /movements | PATCH /movements/{id} | POST /movements/{id}/cancel | POST /credit-card-purchases/{id}/cancel | POST /sync | GET /categories | POST /categories | PATCH /categories/{id} | DELETE /categories/{id} | GET /cashflow | GET|POST /accounts | POST /accounts/{id}/balance | GET|POST /cards | GET|PATCH|DELETE /cards/{id} | GET|POST /currencies | POST /transfers | POST /transfers/{id}/cancel | GET|POST /exchange-rates | DELETE /exchange-rates/{id} | GET|POST /recurring-rules | PATCH /recurring-rules/{id} | GET|PUT /settings/local-archive | GET /export/archive | POST /import/archive | POST /payment-methods | PATCH /payment-methods/{id} | DELETE /payment-methods/{id} | GET|POST /plans | GET|PATCH /plans/{id} | GET /me | POST /billing/webhook | GET /billing/plan")
 
