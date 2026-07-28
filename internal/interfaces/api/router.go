@@ -76,6 +76,7 @@ func NewRouter(
 	protected.HandleFunc("GET /accounts", accountHandler.ListAccounts)
 	protected.HandleFunc("POST /accounts", accountHandler.CreateAccount)
 	protected.HandleFunc("POST /accounts/{id}/balance", accountHandler.ReportBalance)
+	protected.HandleFunc("GET /accounts/{id}/balance", accountHandler.ListSnapshots)
 
 	protected.HandleFunc("GET /currencies", currencyHandler.ListCurrencies)
 	protected.HandleFunc("POST /currencies", currencyHandler.AddCurrency)

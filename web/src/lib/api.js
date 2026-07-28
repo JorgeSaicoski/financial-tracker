@@ -112,11 +112,19 @@ export function createAccount({ name, type, currency }) {
 }
 
 // balance is in the smallest currency unit, like movement amounts.
-export function reportAccountBalance(id, balance) {
+// timestamp (ISO string) is optional — omitted means "now"; pass one to
+// backfill a report for an earlier date.
+export function reportAccountBalance(id, balance, timestamp) {
 	return request(`/accounts/${id}/balance`, {
 		method: 'POST',
-		body: JSON.stringify({ balance })
+		body: JSON.stringify({ balance, timestamp })
 	});
+}
+
+// The account's full reported-balance history, newest first, each entry
+// paired with its own return.
+export function getAccountSnapshots(id) {
+	return request(`/accounts/${id}/balance`);
 }
 
 // --- Transfers ---

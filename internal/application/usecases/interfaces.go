@@ -334,12 +334,38 @@ type ListAccountsUseCase interface {
 
 // ReportAccountBalanceUseCase records what the account really holds right
 // now (per the bank/broker/wallet), as a snapshot. The returned view then
-// exposes the account's return since the previous report. Requires the
+// exposes the account's return since the previous report. A zero
+// timestamp means "now" — same convention as
+// TransferBetweenAccountsInput.Timestamp — letting a caller backfill a
+// report for an earlier date instead of always today. Requires the
 // caller's userID and returns apperrors.ErrNotFound when accountID
 // belongs to someone else (BACK-02) — same ownership rule as
 // GetMovementUseCase.
 type ReportAccountBalanceUseCase interface {
-	Execute(ctx context.Context, userID, accountID string, balance int64) (AccountView, error)
+	Execute(ctx context.Context, userID, accountID string, balance int64, timestamp time.Time) (AccountView, error)
+}
+
+// AccountSnapshotView is one reported snapshot plus its own computed
+// return: the balance change the movements since the previous snapshot
+// (or, for the earliest snapshot, since the account's implicit zero
+// starting balance) don't explain. Nil Return would only happen if
+// NetByAccount itself failed, which the usecase turns into an error
+// instead — so in practice every entry always carries one.
+type AccountSnapshotView struct {
+	Snapshot   *dto.AccountSnapshotDTO
+	Return     int64
+	ReturnFrom *time.Time // nil for the earliest snapshot (no previous one)
+	ReturnTo   time.Time
+}
+
+// ListAccountSnapshotsUseCase returns one account's full reported-balance
+// history, newest first, each entry paired with its own return — the
+// per-snapshot generalization of AccountView's single LastReturn (which
+// only ever covers the latest two). Requires the caller's userID and
+// returns apperrors.ErrNotFound when accountID belongs to someone else
+// (BACK-02) — same ownership rule as GetMovementUseCase.
+type ListAccountSnapshotsUseCase interface {
+	Execute(ctx context.Context, userID, accountID string) ([]AccountSnapshotView, error)
 }
 
 type ListCurrenciesUseCase interface {

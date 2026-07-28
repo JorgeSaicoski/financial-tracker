@@ -19,7 +19,7 @@ func NewReportAccountBalance(accounts repositories.AccountRepository, movements 
 	return &reportAccountBalanceUseCase{accounts: accounts, movements: movements}
 }
 
-func (uc *reportAccountBalanceUseCase) Execute(ctx context.Context, userID, accountID string, balance int64) (AccountView, error) {
+func (uc *reportAccountBalanceUseCase) Execute(ctx context.Context, userID, accountID string, balance int64, timestamp time.Time) (AccountView, error) {
 	if userID == "" || accountID == "" {
 		return AccountView{}, apperrors.ErrInvalidInput
 	}
@@ -32,12 +32,14 @@ func (uc *reportAccountBalanceUseCase) Execute(ctx context.Context, userID, acco
 		return AccountView{}, apperrors.ErrNotFound
 	}
 
-	now := time.Now().UTC()
+	if timestamp.IsZero() {
+		timestamp = time.Now().UTC()
+	}
 	if _, err := uc.accounts.AddSnapshot(ctx, &dto.AccountSnapshotDTO{
 		AccountID: account.ID,
 		Balance:   balance,
-		Timestamp: now,
-		CreatedAt: now,
+		Timestamp: timestamp,
+		CreatedAt: time.Now().UTC(),
 	}); err != nil {
 		return AccountView{}, err
 	}
