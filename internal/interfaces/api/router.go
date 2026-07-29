@@ -18,10 +18,13 @@ func NewRouter(
 	movementHandler handlers.MovementHandler,
 	accountHandler handlers.AccountHandler,
 	currencyHandler handlers.CurrencyHandler,
+	categoryHandler handlers.CategoryHandler,
 	transferHandler handlers.TransferHandler,
 	exchangeRateHandler handlers.ExchangeRateHandler,
 	importHandler handlers.ImportHandler,
 	exportHandler handlers.ExportHandler,
+	recurringRuleHandler handlers.RecurringRuleHandler,
+	archiveHandler handlers.ArchiveHandler,
 	settingsHandler handlers.SettingsHandler,
 	userHandler handlers.UserHandler,
 	configHandler handlers.ConfigHandler,
@@ -69,6 +72,9 @@ func NewRouter(
 		protected.HandleFunc("POST /sync", movementHandler.Sync)
 	}
 	protected.HandleFunc("GET /categories", movementHandler.ListCategories)
+	protected.HandleFunc("POST /categories", categoryHandler.CreateCategory)
+	protected.HandleFunc("PATCH /categories/{id}", categoryHandler.UpdateCategory)
+	protected.HandleFunc("DELETE /categories/{id}", categoryHandler.DeleteCategory)
 	protected.HandleFunc("GET /cashflow", movementHandler.Cashflow)
 
 	protected.HandleFunc("GET /accounts", accountHandler.ListAccounts)
@@ -84,6 +90,15 @@ func NewRouter(
 	protected.HandleFunc("GET /exchange-rates", exchangeRateHandler.ListExchangeRates)
 	protected.HandleFunc("POST /exchange-rates", exchangeRateHandler.SetExchangeRate)
 	protected.HandleFunc("DELETE /exchange-rates/{id}", exchangeRateHandler.DeleteExchangeRate)
+
+	protected.HandleFunc("GET /recurring-rules", recurringRuleHandler.ListRecurringRules)
+	protected.HandleFunc("POST /recurring-rules", recurringRuleHandler.CreateRecurringRule)
+	protected.HandleFunc("PATCH /recurring-rules/{id}", recurringRuleHandler.UpdateRecurringRule)
+
+	protected.HandleFunc("GET /settings/local-archive", archiveHandler.GetLocalArchiveSetting)
+	protected.HandleFunc("PUT /settings/local-archive", archiveHandler.SetLocalArchiveSetting)
+	protected.HandleFunc("GET /export/archive", archiveHandler.ExportArchive)
+	protected.HandleFunc("POST /import/archive", archiveHandler.ImportArchive)
 
 	protected.HandleFunc("GET /me", userHandler.Me)
 
@@ -128,7 +143,7 @@ func NewRouter(
 func withCORS(next http.Handler, allowedOrigin string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		// Vary: Origin so a cache in front of this API (or the browser's own
 		// HTTP cache) doesn't serve one origin's CORS-allowed response to a

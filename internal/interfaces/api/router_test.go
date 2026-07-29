@@ -44,6 +44,15 @@ func (s stubHandlers) Sync(w http.ResponseWriter, r *http.Request) { s.reply("Sy
 func (s stubHandlers) ListCategories(w http.ResponseWriter, r *http.Request) {
 	s.reply("ListCategories")(w, r)
 }
+func (s stubHandlers) CreateCategory(w http.ResponseWriter, r *http.Request) {
+	s.reply("CreateCategory")(w, r)
+}
+func (s stubHandlers) UpdateCategory(w http.ResponseWriter, r *http.Request) {
+	s.reply("UpdateCategory")(w, r)
+}
+func (s stubHandlers) DeleteCategory(w http.ResponseWriter, r *http.Request) {
+	s.reply("DeleteCategory")(w, r)
+}
 func (s stubHandlers) Cashflow(w http.ResponseWriter, r *http.Request) { s.reply("Cashflow")(w, r) }
 
 func (s stubHandlers) CreateAccount(w http.ResponseWriter, r *http.Request) {
@@ -91,6 +100,29 @@ func (s stubHandlers) ExportMovements(w http.ResponseWriter, r *http.Request) {
 	s.reply("ExportMovements")(w, r)
 }
 
+func (s stubHandlers) CreateRecurringRule(w http.ResponseWriter, r *http.Request) {
+	s.reply("CreateRecurringRule")(w, r)
+}
+func (s stubHandlers) ListRecurringRules(w http.ResponseWriter, r *http.Request) {
+	s.reply("ListRecurringRules")(w, r)
+}
+func (s stubHandlers) UpdateRecurringRule(w http.ResponseWriter, r *http.Request) {
+	s.reply("UpdateRecurringRule")(w, r)
+}
+
+func (s stubHandlers) GetLocalArchiveSetting(w http.ResponseWriter, r *http.Request) {
+	s.reply("GetLocalArchiveSetting")(w, r)
+}
+func (s stubHandlers) SetLocalArchiveSetting(w http.ResponseWriter, r *http.Request) {
+	s.reply("SetLocalArchiveSetting")(w, r)
+}
+func (s stubHandlers) ExportArchive(w http.ResponseWriter, r *http.Request) {
+	s.reply("ExportArchive")(w, r)
+}
+func (s stubHandlers) ImportArchive(w http.ResponseWriter, r *http.Request) {
+	s.reply("ImportArchive")(w, r)
+}
+
 func (s stubHandlers) GetSettings(w http.ResponseWriter, r *http.Request) {
 	s.reply("GetSettings")(w, r)
 }
@@ -107,9 +139,9 @@ func noopAuthMiddleware(next http.Handler) http.Handler { return next }
 func TestStandaloneRejectsSyncRoute(t *testing.T) {
 	s := stubHandlers{}
 	router := NewRouter(
-		handlers.MovementHandler(s), handlers.AccountHandler(s), handlers.CurrencyHandler(s),
+		handlers.MovementHandler(s), handlers.AccountHandler(s), handlers.CurrencyHandler(s), handlers.CategoryHandler(s),
 		handlers.TransferHandler(s), handlers.ExchangeRateHandler(s), handlers.ImportHandler(s),
-		handlers.ExportHandler(s), handlers.SettingsHandler(s), handlers.UserHandler(s), handlers.ConfigHandler(s),
+		handlers.ExportHandler(s), handlers.RecurringRuleHandler(s), handlers.ArchiveHandler(s), handlers.SettingsHandler(s), handlers.UserHandler(s), handlers.ConfigHandler(s),
 		AuthMiddleware(noopAuthMiddleware), "*", true, nil,
 	)
 
@@ -125,9 +157,9 @@ func TestStandaloneRejectsSyncRoute(t *testing.T) {
 func TestNonStandaloneServesSyncRoute(t *testing.T) {
 	s := stubHandlers{}
 	router := NewRouter(
-		handlers.MovementHandler(s), handlers.AccountHandler(s), handlers.CurrencyHandler(s),
+		handlers.MovementHandler(s), handlers.AccountHandler(s), handlers.CurrencyHandler(s), handlers.CategoryHandler(s),
 		handlers.TransferHandler(s), handlers.ExchangeRateHandler(s), handlers.ImportHandler(s),
-		handlers.ExportHandler(s), handlers.SettingsHandler(s), handlers.UserHandler(s), handlers.ConfigHandler(s),
+		handlers.ExportHandler(s), handlers.RecurringRuleHandler(s), handlers.ArchiveHandler(s), handlers.SettingsHandler(s), handlers.UserHandler(s), handlers.ConfigHandler(s),
 		AuthMiddleware(noopAuthMiddleware), "*", false, nil,
 	)
 
@@ -144,9 +176,9 @@ func TestExportRouteAvailableInEveryMode(t *testing.T) {
 	for _, standalone := range []bool{false, true} {
 		s := stubHandlers{}
 		router := NewRouter(
-			handlers.MovementHandler(s), handlers.AccountHandler(s), handlers.CurrencyHandler(s),
+			handlers.MovementHandler(s), handlers.AccountHandler(s), handlers.CurrencyHandler(s), handlers.CategoryHandler(s),
 			handlers.TransferHandler(s), handlers.ExchangeRateHandler(s), handlers.ImportHandler(s),
-			handlers.ExportHandler(s), handlers.SettingsHandler(s), handlers.UserHandler(s), handlers.ConfigHandler(s),
+			handlers.ExportHandler(s), handlers.RecurringRuleHandler(s), handlers.ArchiveHandler(s), handlers.SettingsHandler(s), handlers.UserHandler(s), handlers.ConfigHandler(s),
 			AuthMiddleware(noopAuthMiddleware), "*", standalone, nil,
 		)
 
@@ -167,9 +199,9 @@ func TestStandaloneServesEmbeddedFrontendAsFallback(t *testing.T) {
 	}
 	s := stubHandlers{}
 	router := NewRouter(
-		handlers.MovementHandler(s), handlers.AccountHandler(s), handlers.CurrencyHandler(s),
+		handlers.MovementHandler(s), handlers.AccountHandler(s), handlers.CurrencyHandler(s), handlers.CategoryHandler(s),
 		handlers.TransferHandler(s), handlers.ExchangeRateHandler(s), handlers.ImportHandler(s),
-		handlers.ExportHandler(s), handlers.SettingsHandler(s), handlers.UserHandler(s), handlers.ConfigHandler(s),
+		handlers.ExportHandler(s), handlers.RecurringRuleHandler(s), handlers.ArchiveHandler(s), handlers.SettingsHandler(s), handlers.UserHandler(s), handlers.ConfigHandler(s),
 		AuthMiddleware(noopAuthMiddleware), "*", true, fsys,
 	)
 

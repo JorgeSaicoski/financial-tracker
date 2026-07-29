@@ -28,6 +28,7 @@ type importHandler struct {
 	importMovements usecases.ImportMovementsUseCase
 	listAccounts    usecases.ListAccountsUseCase
 	listCurrencies  usecases.ListCurrenciesUseCase
+	listCategories  usecases.ListCategoriesUseCase
 
 	log logger.Logger
 }
@@ -37,12 +38,14 @@ func NewImportHandler(
 	importMovements usecases.ImportMovementsUseCase,
 	listAccounts usecases.ListAccountsUseCase,
 	listCurrencies usecases.ListCurrenciesUseCase,
+	listCategories usecases.ListCategoriesUseCase,
 	log logger.Logger,
 ) ImportHandler {
 	return &importHandler{
 		importMovements: importMovements,
 		listAccounts:    listAccounts,
 		listCurrencies:  listCurrencies,
+		listCategories:  listCategories,
 		log:             log,
 	}
 }
@@ -74,9 +77,15 @@ func (h *importHandler) GetImportSpec(w http.ResponseWriter, r *http.Request) {
 		accountNames = append(accountNames, a.Account.Name)
 	}
 
-	categories := make([]string, 0, len(entities.Categories()))
-	for _, c := range entities.Categories() {
-		categories = append(categories, string(c))
+	categoryRows, err := h.listCategories.Execute(r.Context())
+	if err != nil {
+		h.log.Error("import spec: list categories failed: %v", err)
+		writeError(h.log, w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	categories := make([]string, 0, len(categoryRows))
+	for _, c := range categoryRows {
+		categories = append(categories, c.Name)
 	}
 	paymentMethods := make([]string, 0, len(entities.PaymentMethods()))
 	for _, m := range entities.PaymentMethods() {

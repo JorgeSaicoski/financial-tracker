@@ -48,9 +48,10 @@ func (h *settingsHandler) GetSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 // PatchSettings handles PATCH /settings. Body:
-// {"ledger_sync_enabled": bool} — the only field a user may change;
-// DisallowUnknownFields rejects an attempt to set either entitlement
-// field (or anything else) with 400, per BACK-13's acceptance criteria.
+// {"ledger_sync_enabled": bool, "default_category_id": string} — either
+// or both fields may be set; DisallowUnknownFields rejects an attempt to
+// set either entitlement field (or anything else) with 400, per BACK-13's
+// acceptance criteria.
 func (h *settingsHandler) PatchSettings(w http.ResponseWriter, r *http.Request) {
 	userID, ok := reqctx.UserID(r.Context())
 	if !ok {
@@ -62,15 +63,18 @@ func (h *settingsHandler) PatchSettings(w http.ResponseWriter, r *http.Request) 
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
-		h.writeError(w, http.StatusBadRequest, "invalid request body (only ledger_sync_enabled may be set)")
+		h.writeError(w, http.StatusBadRequest, "invalid request body (only ledger_sync_enabled/default_category_id may be set)")
 		return
 	}
-	if req.LedgerSyncEnabled == nil {
-		h.writeError(w, http.StatusBadRequest, "ledger_sync_enabled is required")
+	if req.LedgerSyncEnabled == nil && req.DefaultCategoryID == nil {
+		h.writeError(w, http.StatusBadRequest, "ledger_sync_enabled or default_category_id is required")
 		return
 	}
 
-	settings, err := h.updateSettings.Execute(r.Context(), userID, *req.LedgerSyncEnabled)
+	settings, err := h.updateSettings.Execute(r.Context(), userID, usecases.UpdateUserSettingsInput{
+		LedgerSyncEnabled: req.LedgerSyncEnabled,
+		DefaultCategoryID: req.DefaultCategoryID,
+	})
 	if err != nil {
 		h.writeUsecaseError(w, "update settings", err)
 		return
@@ -79,7 +83,7 @@ func (h *settingsHandler) PatchSettings(w http.ResponseWriter, r *http.Request) 
 }
 
 func settingsResponseFromView(s usecases.UserSettingsView) interfacedto.SettingsResponse {
-	return interfacedto.SettingsResponse{
+	resp := interfacedto.SettingsResponse{
 		UserID:               s.UserID,
 		LedgerSyncEntitled:   s.LedgerSyncEntitled,
 		LedgerSyncEnabled:    s.LedgerSyncEnabled,
@@ -87,6 +91,10 @@ func settingsResponseFromView(s usecases.UserSettingsView) interfacedto.Settings
 		CreatedAt:            s.CreatedAt,
 		UpdatedAt:            s.UpdatedAt,
 	}
+	if s.DefaultCategoryID != nil {
+		resp.DefaultCategoryID = *s.DefaultCategoryID
+	}
+	return resp
 }
 
 func (h *settingsHandler) writeJSON(w http.ResponseWriter, status int, data interface{}) {

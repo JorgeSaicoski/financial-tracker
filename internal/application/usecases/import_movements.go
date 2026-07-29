@@ -16,11 +16,12 @@ type importMovementsUseCase struct {
 	movements  repositories.MovementRepository
 	accounts   repositories.AccountRepository
 	currencies repositories.CurrencyRepository
+	categories repositories.CategoryRepository
 }
 
 // NewImportMovements returns interface type for dependency injection.
-func NewImportMovements(movements repositories.MovementRepository, accounts repositories.AccountRepository, currencies repositories.CurrencyRepository) ImportMovementsUseCase {
-	return &importMovementsUseCase{movements: movements, accounts: accounts, currencies: currencies}
+func NewImportMovements(movements repositories.MovementRepository, accounts repositories.AccountRepository, currencies repositories.CurrencyRepository, categories repositories.CategoryRepository) ImportMovementsUseCase {
+	return &importMovementsUseCase{movements: movements, accounts: accounts, currencies: currencies, categories: categories}
 }
 
 // validRow is a CSV row that passed every field-level check, ready to
@@ -32,7 +33,7 @@ type validRow struct {
 	amount        int64
 	currency      string
 	description   string
-	category      entities.Category
+	categoryID    *string
 	paymentMethod entities.PaymentMethod
 	accountID     *string
 	dupKey        string // date|amount|currency|normalized description
@@ -52,11 +53,15 @@ func (uc *importMovementsUseCase) Execute(ctx context.Context, input ImportMovem
 	if err != nil {
 		return result, err
 	}
+	categoriesByName, err := uc.categoriesByLowerName(ctx, input.UserID)
+	if err != nil {
+		return result, err
+	}
 
 	var valid []validRow
 	for i, row := range input.Rows {
 		rowNum := i + 1 // 1-based, counting only data rows
-		vr, rowErrs := validateImportRow(rowNum, row, accountsByName, currencySet)
+		vr, rowErrs := validateImportRow(rowNum, row, accountsByName, currencySet, categoriesByName)
 		if len(rowErrs) > 0 {
 			result.Errors = append(result.Errors, rowErrs...)
 			continue
@@ -98,7 +103,7 @@ func (uc *importMovementsUseCase) Execute(ctx context.Context, input ImportMovem
 			Amount:        vr.amount,
 			Currency:      vr.currency,
 			Description:   vr.description,
-			Category:      vr.category,
+			CategoryID:    vr.categoryID,
 			PaymentMethod: vr.paymentMethod,
 			AccountID:     vr.accountID,
 			Status:        entities.MovementStatusActive,
@@ -145,6 +150,26 @@ func (uc *importMovementsUseCase) currencySet(ctx context.Context) (map[string]b
 	return set, nil
 }
 
+// categoriesByLowerName indexes the categories userID may reference on a
+// new movement — their own list (ListForUser), same scope
+// resolveCategoryID enforces — plus the three system categories, which
+// never appear in ListForUser (no user_categories row is ever seeded for
+// them) but are always selectable, per resolveCategoryID's own exception.
+func (uc *importMovementsUseCase) categoriesByLowerName(ctx context.Context, userID string) (map[string]string, error) {
+	owned, err := uc.categories.ListForUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	byName := make(map[string]string, len(owned)+3)
+	for _, c := range owned {
+		byName[strings.ToLower(c.Name)] = c.ID
+	}
+	byName[entities.CategoryTransfer] = entities.CategoryTransferID
+	byName[entities.CategoryIncome] = entities.CategoryIncomeID
+	byName[entities.CategoryOther] = entities.CategoryOtherID
+	return byName, nil
+}
+
 // validateImportRow applies BACK-03's CSV model rules to one row. It
 // deliberately doesn't call normalizeCategoryAndMethod (used by
 // CreateMovement) because that helper reports one combined error;
@@ -152,7 +177,7 @@ func (uc *importMovementsUseCase) currencySet(ctx context.Context) (map[string]b
 // so category and payment_method are checked separately here even
 // though the underlying rule (blank -> "other", otherwise must be a
 // valid domain value) is identical.
-func validateImportRow(rowNum int, row ImportRowInput, accountsByName map[string]*dto.AccountDTO, currencySet map[string]bool) (validRow, []ImportRowError) {
+func validateImportRow(rowNum int, row ImportRowInput, accountsByName map[string]*dto.AccountDTO, currencySet map[string]bool, categoriesByName map[string]string) (validRow, []ImportRowError) {
 	var errs []ImportRowError
 	addErr := func(field, message string) {
 		errs = append(errs, ImportRowError{Row: rowNum, Field: field, Message: message})
@@ -181,12 +206,14 @@ func validateImportRow(rowNum int, row ImportRowInput, accountsByName map[string
 		addErr("currency", "not a registered currency (POST /currencies first)")
 	}
 
-	category := entities.Category(strings.ToLower(strings.TrimSpace(row.Category)))
-	if category == "" {
-		category = entities.CategoryOther
-	}
-	if !category.IsValid() {
-		addErr("category", "not a recognized category (see GET /categories)")
+	var categoryID *string
+	categoryName := strings.TrimSpace(row.Category)
+	if categoryName != "" {
+		if id, ok := categoriesByName[strings.ToLower(categoryName)]; ok {
+			categoryID = &id
+		} else {
+			addErr("category", "not a recognized category (see GET /categories)")
+		}
 	}
 
 	paymentMethod := entities.PaymentMethod(strings.ToLower(strings.TrimSpace(row.PaymentMethod)))
@@ -223,7 +250,7 @@ func validateImportRow(rowNum int, row ImportRowInput, accountsByName map[string
 		amount:        amount,
 		currency:      currency,
 		description:   description,
-		category:      category,
+		categoryID:    categoryID,
 		paymentMethod: paymentMethod,
 		accountID:     accountID,
 		dupKey:        dupKey,

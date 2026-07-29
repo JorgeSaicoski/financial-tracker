@@ -11,13 +11,16 @@ import (
 	apperrors "github.com/JorgeSaicoski/financial-tracker/internal/pkg/errors"
 )
 
+// activeMovement leaves CategoryID nil (uncategorized) since most callers
+// don't care about it — a test that does care creates a category first
+// via a fakeCategoryRepo and sets .CategoryID explicitly, the same
+// convention the infrastructure repository tests use.
 func activeMovement(id string, amount int64, syncStatus entities.SyncStatus) *dto.MovementDTO {
 	return &dto.MovementDTO{
 		ID:            id,
 		UserID:        "u1",
 		Amount:        amount,
 		Currency:      "usd",
-		Category:      string(entities.CategoryFood),
 		PaymentMethod: string(entities.PaymentMethodPix),
 		Status:        string(entities.MovementStatusActive),
 		SyncStatus:    string(syncStatus),
@@ -90,7 +93,9 @@ func TestCancelSyncedMovementCreatesReversal(t *testing.T) {
 	if rev.SyncStatus != string(entities.SyncStatusPending) || rev.Status != string(entities.MovementStatusActive) {
 		t.Errorf("reversal state = %s/%s, want active/pending", rev.Status, rev.SyncStatus)
 	}
-	if rev.Category != original.Category || rev.PaymentMethod != original.PaymentMethod {
+	if (rev.CategoryID == nil) != (original.CategoryID == nil) ||
+		(rev.CategoryID != nil && *rev.CategoryID != *original.CategoryID) ||
+		rev.PaymentMethod != original.PaymentMethod {
 		t.Error("reversal should copy category and payment method")
 	}
 
