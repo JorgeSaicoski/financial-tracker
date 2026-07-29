@@ -158,7 +158,7 @@ func toArchiveResponse(userID string, bundle usecases.ArchiveBundle) interfacedt
 		resp.Movements = append(resp.Movements, toArchiveMovementDTO(m))
 	}
 	for _, p := range bundle.CreditCardPurchases {
-		resp.CreditCardPurchases = append(resp.CreditCardPurchases, interfacedto.ArchiveCreditCardPurchaseDTO{
+		archiveP := interfacedto.ArchiveCreditCardPurchaseDTO{
 			ID:               p.ID,
 			UserID:           p.UserID,
 			Description:      p.Description,
@@ -169,7 +169,11 @@ func toArchiveResponse(userID string, bundle usecases.ArchiveBundle) interfacedt
 			PurchaseDate:     p.PurchaseDate,
 			Status:           p.Status,
 			CreatedAt:        p.CreatedAt,
-		})
+		}
+		if p.CategoryID != nil {
+			archiveP.CategoryID = *p.CategoryID
+		}
+		resp.CreditCardPurchases = append(resp.CreditCardPurchases, archiveP)
 	}
 	return resp
 }
@@ -190,6 +194,9 @@ func toArchiveMovementDTO(m *dto.MovementDTO) interfacedto.ArchiveMovementDTO {
 		LastSyncAttemptAt: m.LastSyncAttemptAt,
 		SyncedAt:          m.SyncedAt,
 		CreatedAt:         m.CreatedAt,
+	}
+	if m.CategoryID != nil {
+		out.CategoryID = *m.CategoryID
 	}
 	if m.AccountID != nil {
 		out.AccountID = *m.AccountID
@@ -238,7 +245,7 @@ func fromArchiveRequest(req interfacedto.ImportArchiveRequest) usecases.ArchiveB
 		bundle.Movements = append(bundle.Movements, fromArchiveMovementDTO(m))
 	}
 	for _, p := range req.CreditCardPurchases {
-		bundle.CreditCardPurchases = append(bundle.CreditCardPurchases, &dto.CreditCardPurchaseDTO{
+		purchase := &dto.CreditCardPurchaseDTO{
 			ID:               p.ID,
 			UserID:           p.UserID,
 			Description:      p.Description,
@@ -249,7 +256,11 @@ func fromArchiveRequest(req interfacedto.ImportArchiveRequest) usecases.ArchiveB
 			PurchaseDate:     p.PurchaseDate,
 			Status:           p.Status,
 			CreatedAt:        p.CreatedAt,
-		})
+		}
+		if p.CategoryID != "" {
+			purchase.CategoryID = &p.CategoryID
+		}
+		bundle.CreditCardPurchases = append(bundle.CreditCardPurchases, purchase)
 	}
 	return bundle
 }
@@ -270,6 +281,9 @@ func fromArchiveMovementDTO(m interfacedto.ArchiveMovementDTO) *dto.MovementDTO 
 		LastSyncAttemptAt: m.LastSyncAttemptAt,
 		SyncedAt:          m.SyncedAt,
 		CreatedAt:         m.CreatedAt,
+	}
+	if m.CategoryID != "" {
+		out.CategoryID = &m.CategoryID
 	}
 	if m.AccountID != "" {
 		out.AccountID = &m.AccountID

@@ -59,7 +59,7 @@ type CreateCreditCardPurchaseInput struct {
 	TotalAmount  int64
 	Currency     string
 	Description  string
-	Category     string
+	CategoryID   *string
 	Installments int
 }
 
@@ -68,17 +68,23 @@ type CreateCreditCardPurchaseUseCase interface {
 }
 
 // CreateMovementInput carries the caller-supplied fields for a single
-// movement. Category and PaymentMethod default to "other" when empty so
-// pre-existing clients that only send an amount keep working; both are
-// validated against the domain's fixed lists inside the usecase.
+// movement. PaymentMethod defaults to "other" when empty, validated
+// against the domain's fixed list inside the usecase. CategoryID (BACK-14
+// follow-up) is a real foreign key now — nil leaves the movement
+// uncategorized; a non-nil value must reference an existing category
+// (any category, since they're globally shared — no ownership check).
 type CreateMovementInput struct {
 	UserID        string
 	Amount        int64
 	Currency      string
 	Description   string
-	Category      string
+	CategoryID    *string
 	PaymentMethod string
 	AccountID     *string
+	// AvoidabilityOverridePercent (0-100, BACK-14) is this movement's own
+	// ad-hoc avoidability, for a one-off spend that doesn't deserve its
+	// own category. Wins over the resolved category's avoidability_percent.
+	AvoidabilityOverridePercent *int
 }
 
 type CreateMovementUseCase interface {
@@ -105,19 +111,26 @@ type ListMovementsUseCase interface {
 }
 
 // UpdateMovementInput carries a PATCH /movements/{id} partial body — a nil
-// field means "leave unchanged". Description/Category/PaymentMethod/
+// field means "leave unchanged". Description/CategoryID/PaymentMethod/
 // AccountID are metadata: local-only, always editable regardless of sync
 // status. Amount/Currency/Timestamp are financial: editable in place only
 // before the movement syncs; once synced, editing them produces a
 // reversal + a replacement instead (see UpdateMovementResult).
 type UpdateMovementInput struct {
-	Description   *string
-	Category      *string
+	Description *string
+	// CategoryID: nil leaves it unchanged; a pointer to "" clears it
+	// (genuinely uncategorized), same convention as AccountID.
+	CategoryID    *string
 	PaymentMethod *string
 	AccountID     *string // a pointer to "" clears the account
 	Amount        *int64
 	Currency      *string
 	Timestamp     *time.Time
+	// AvoidabilityOverridePercent (0-100, BACK-14), like every other
+	// field here: nil means "leave unchanged". Local-only metadata (same
+	// group as Description/CategoryID/PaymentMethod/AccountID) — editable
+	// regardless of sync status, no reversal/replacement produced.
+	AvoidabilityOverridePercent *int
 }
 
 // UpdateMovementResult reports how the edit was carried out. A
@@ -276,6 +289,10 @@ type UserSettingsView struct {
 	LedgerSyncEnabled    bool
 	CloudStorageEntitled bool
 
+	// DefaultCategoryID (BACK-14 follow-up): nil when the user has never
+	// set one, which resolves to the global "other" category.
+	DefaultCategoryID *string
+
 	SubscriptionStatus           string
 	SubscriptionCurrentPeriodEnd *time.Time
 
@@ -289,14 +306,23 @@ type GetUserSettingsUseCase interface {
 	Execute(ctx context.Context, userID string) (UserSettingsView, error)
 }
 
-// UpdateUserSettingsUseCase changes ledger_sync_enabled — the only field
-// a user (as opposed to an operator) may write; entitlement fields are
-// never accepted here (rejected at the HTTP decode boundary, see
-// interfaces/dto). Toggling sync back on reclassifies the backlog
-// accumulated while it was off (SyncStatusLocal) back to "pending" so
-// the next sync pass picks it up.
+// UpdateUserSettingsInput carries a PATCH /settings partial body — nil
+// means "leave unchanged" for each field independently, same convention
+// as UpdateMovementInput. DefaultCategoryID's pointer-to-"" clears it
+// back to the global "other" fallback.
+type UpdateUserSettingsInput struct {
+	LedgerSyncEnabled *bool
+	DefaultCategoryID *string
+}
+
+// UpdateUserSettingsUseCase changes ledger_sync_enabled and/or
+// default_category_id — the only fields a user (as opposed to an
+// operator) may write; entitlement fields are never accepted here
+// (rejected at the HTTP decode boundary, see interfaces/dto). Toggling
+// sync back on reclassifies the backlog accumulated while it was off
+// (SyncStatusLocal) back to "pending" so the next sync pass picks it up.
 type UpdateUserSettingsUseCase interface {
-	Execute(ctx context.Context, userID string, ledgerSyncEnabled bool) (UserSettingsView, error)
+	Execute(ctx context.Context, userID string, input UpdateUserSettingsInput) (UserSettingsView, error)
 }
 
 // CurrencyFlow aggregates the interval's money in / money out for one
@@ -464,4 +490,115 @@ type BillingPlanView struct {
 // currency (never a hardcoded USD string presented as universal).
 type GetBillingPlanUseCase interface {
 	Execute(ctx context.Context, userID, currency string) (BillingPlanView, error)
+}
+
+// CreateCategoryInput carries a POST /categories body. AvoidabilityPercent
+// nil defaults to a neutral 50 (same default the one-time migration
+// backfill used) — the user edits it afterward. UserID becomes the new
+// category's sole contributor (BACK-14 follow-up: categories are shared/
+// global, not per-user — see entities.Category).
+type CreateCategoryInput struct {
+	UserID              string
+	Name                string
+	AvoidabilityPercent *int
+}
+
+// CreateCategoryUseCase rejects the three reserved system names
+// ("transfer", "income", "other") and enforces the per-user
+// max_categories_per_user limit (see LimitsRepository) — duplicate names
+// are allowed: two different users' "restaurant" are two different rows.
+type CreateCategoryUseCase interface {
+	Execute(ctx context.Context, input CreateCategoryInput) (*dto.CategoryDTO, error)
+}
+
+// ListCategoriesUseCase returns every category in the system (BACK-14
+// follow-up: categories are globally visible, not per-user), name
+// ascending.
+type ListCategoriesUseCase interface {
+	Execute(ctx context.Context) ([]*dto.CategoryDTO, error)
+}
+
+// UpdateCategoryInput carries a PATCH /categories/{id} body — nil means
+// "leave unchanged", same convention as UpdateMovementInput.
+type UpdateCategoryInput struct {
+	Name                *string
+	AvoidabilityPercent *int
+}
+
+// UpdateCategoryUseCase rejects edits to the three reserved system
+// names, an AvoidabilityPercent outside 0-100, and any edit from a
+// caller who isn't one of the category's contributors (see
+// entities.Category.CanBeEditedBy).
+type UpdateCategoryUseCase interface {
+	Execute(ctx context.Context, userID, id string, input UpdateCategoryInput) (*dto.CategoryDTO, error)
+}
+
+// DeleteCategoryUseCase implements DELETE /categories/{id}: there is no
+// real delete once a category may be shared (BACK-14 follow-up) — this
+// removes id from the caller's own category list only (see
+// CategoryRepository.Remove), never touching the row itself or any other
+// user's data. Existing movements/purchases/recurring rules already
+// referencing id keep doing so; only future selection is blocked (see
+// resolveCategoryID). reassignExisting, when true, also moves every
+// movement/purchase/recurring rule the caller owns off id and onto their
+// resolved default category first (CategoryRepository.RemoveAndReassign)
+// — still scoped strictly to the caller's own rows. Rejects removing a
+// reserved system category.
+type DeleteCategoryUseCase interface {
+	Execute(ctx context.Context, userID, id string, reassignExisting bool) error
+}
+
+// CreateRecurringRuleInput carries the caller-supplied fields for a new
+// recurring rule (BACK-07). PaymentMethod defaults to "other" when empty.
+// CategoryID (BACK-14 follow-up) is a real foreign key — nil stays
+// uncategorized, a non-nil value must reference an existing category.
+// DayOfMonth must be "1".."28" or "last". StartsAt zero means "now".
+type CreateRecurringRuleInput struct {
+	UserID        string
+	Amount        int64
+	Currency      string
+	Description   string
+	CategoryID    *string
+	PaymentMethod string
+	AccountID     *string
+	DayOfMonth    string
+	StartsAt      time.Time
+	EndsAt        *time.Time
+}
+
+type CreateRecurringRuleUseCase interface {
+	Execute(ctx context.Context, input CreateRecurringRuleInput) (*dto.RecurringRuleDTO, error)
+}
+
+type ListRecurringRulesUseCase interface {
+	Execute(ctx context.Context, userID string) ([]*dto.RecurringRuleDTO, error)
+}
+
+// UpdateRecurringRuleInput carries a PATCH /recurring-rules/{id} partial
+// body — a nil field means "leave unchanged", mirroring
+// UpdateMovementInput. Editing any field only affects future
+// generations; movements already generated are never retroactively
+// touched. EndsAt has no way to clear an existing end date back to "no
+// end" via this input (nil means "don't change it", not "clear it") — a
+// known, documented limitation rather than an oversight; the common case
+// (setting or changing an end date) works normally.
+type UpdateRecurringRuleInput struct {
+	Description *string
+	// CategoryID: nil leaves it unchanged; a pointer to "" clears it,
+	// same convention as UpdateMovementInput.CategoryID.
+	CategoryID    *string
+	PaymentMethod *string
+	AccountID     *string // a pointer to "" clears the account
+	Amount        *int64
+	Currency      *string
+	DayOfMonth    *string
+	EndsAt        *time.Time
+	Active        *bool
+}
+
+// UpdateRecurringRuleUseCase requires the caller's userID and returns
+// apperrors.ErrNotFound (not a distinguishable "forbidden") when the rule
+// exists but belongs to someone else — same contract as GetMovementUseCase.
+type UpdateRecurringRuleUseCase interface {
+	Execute(ctx context.Context, userID, id string, input UpdateRecurringRuleInput) (*dto.RecurringRuleDTO, error)
 }
