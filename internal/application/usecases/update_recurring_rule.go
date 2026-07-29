@@ -39,13 +39,17 @@ func (uc *updateRecurringRuleUseCase) Execute(ctx context.Context, userID, id st
 	if input.Description != nil {
 		description = *input.Description
 	}
-	category := existing.Category
-	if input.Category != nil {
-		resolved, err := resolveCategory(ctx, uc.categories, userID, *input.Category)
-		if err != nil {
-			return nil, err
+	categoryIDInput := existing.CategoryID
+	if input.CategoryID != nil {
+		if *input.CategoryID == "" {
+			categoryIDInput = nil
+		} else {
+			categoryIDInput = input.CategoryID
 		}
-		category = resolved
+	}
+	categoryID, err := resolveCategoryID(ctx, uc.categories, userID, categoryIDInput)
+	if err != nil {
+		return nil, err
 	}
 	paymentMethod := existing.PaymentMethod
 	if input.PaymentMethod != nil {
@@ -116,7 +120,7 @@ func (uc *updateRecurringRuleUseCase) Execute(ctx context.Context, userID, id st
 		active = *input.Active
 	}
 
-	if err := uc.rules.UpdateMetadata(ctx, id, description, category, paymentMethod, accountID); err != nil {
+	if err := uc.rules.UpdateMetadata(ctx, id, description, categoryID, paymentMethod, accountID); err != nil {
 		return nil, err
 	}
 	if err := uc.rules.UpdateFinancial(ctx, id, amount, currency); err != nil {

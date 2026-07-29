@@ -34,7 +34,7 @@ func (uc *createRecurringRuleUseCase) Execute(ctx context.Context, input CreateR
 	if err != nil {
 		return nil, err
 	}
-	category, err := resolveCategory(ctx, uc.categories, input.UserID, input.Category)
+	categoryID, err := resolveCategoryID(ctx, uc.categories, input.UserID, input.CategoryID)
 	if err != nil {
 		return nil, err
 	}
@@ -82,7 +82,7 @@ func (uc *createRecurringRuleUseCase) Execute(ctx context.Context, input CreateR
 		Amount:        input.Amount,
 		Currency:      input.Currency,
 		Description:   input.Description,
-		Category:      category,
+		CategoryID:    categoryID,
 		PaymentMethod: paymentMethod,
 		AccountID:     input.AccountID,
 		DayOfMonth:    input.DayOfMonth,

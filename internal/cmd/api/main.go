@@ -88,6 +88,7 @@ func main() {
 		localArchiveRepo  repositories.LocalArchiveSettingsRepository
 		userRepo          repositories.UserRepository
 		settingsRepo      repositories.UserSettingsRepository
+		limitsRepo        repositories.LimitsRepository
 	)
 
 	switch dbDriver {
@@ -122,6 +123,7 @@ func main() {
 		localArchiveRepo = postgresql.NewLocalArchiveSettingsRepository(db)
 		userRepo = postgresql.NewUserRepository(db)
 		settingsRepo = postgresql.NewUserSettingsRepository(db)
+		limitsRepo = postgresql.NewLimitsRepository(db)
 	case "sqlite":
 		db, err = sqlite.Open(dbPath)
 		if err != nil {
@@ -142,6 +144,7 @@ func main() {
 		localArchiveRepo = sqlite.NewLocalArchiveSettingsRepository(db)
 		userRepo = sqlite.NewUserRepository(db)
 		settingsRepo = sqlite.NewUserSettingsRepository(db)
+		limitsRepo = sqlite.NewLimitsRepository(db)
 	default:
 		log.Error("unknown DB_DRIVER %q (want sqlite or postgres)", dbDriver)
 		os.Exit(1)
@@ -177,15 +180,15 @@ func main() {
 	getLocalArchiveSetting := usecases.NewGetLocalArchiveSetting(localArchiveRepo)
 	setLocalArchiveSetting := usecases.NewSetLocalArchiveSetting(localArchiveRepo)
 	exportArchive := usecases.NewExportArchive(accountRepo, movementRepo, purchaseRepo)
-	importArchive := usecases.NewImportArchive(accountRepo, movementRepo, purchaseRepo)
+	importArchive := usecases.NewImportArchive(accountRepo, movementRepo, purchaseRepo, categoryRepo)
 	ensureUser := usecases.NewEnsureUser(userRepo)
 	getUser := usecases.NewGetUser(userRepo)
 	getSettings := usecases.NewGetUserSettings(settingsRepo)
-	updateSettings := usecases.NewUpdateUserSettings(settingsRepo, movementRepo)
-	createCategory := usecases.NewCreateCategory(categoryRepo)
+	updateSettings := usecases.NewUpdateUserSettings(settingsRepo, movementRepo, categoryRepo)
+	createCategory := usecases.NewCreateCategory(categoryRepo, limitsRepo)
 	listCategories := usecases.NewListCategories(categoryRepo)
 	updateCategory := usecases.NewUpdateCategory(categoryRepo)
-	deleteCategory := usecases.NewDeleteCategory(categoryRepo)
+	deleteCategory := usecases.NewDeleteCategory(categoryRepo, settingsRepo)
 
 	movementHandler := handlers.NewMovementHandler(
 		createMovement,

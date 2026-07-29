@@ -47,7 +47,7 @@ func openTargetDB(t *testing.T) *sql.DB {
 	if err := postgresql.Migrate(db); err != nil {
 		t.Fatalf("migrate target: %v", err)
 	}
-	if _, err := db.Exec(`TRUNCATE TABLE account_snapshots, movements, credit_card_purchases, accounts, exchange_rates CASCADE`); err != nil {
+	if _, err := db.Exec(`TRUNCATE TABLE account_snapshots, movements, credit_card_purchases, accounts, exchange_rates, categories CASCADE`); err != nil {
 		t.Fatalf("truncate target: %v", err)
 	}
 	return db
@@ -70,6 +70,24 @@ func seedSource(t *testing.T, db *sql.DB) {
 	movementRepo := sqlite.NewMovementRepository(db)
 	purchaseRepo := sqlite.NewCreditCardPurchaseRepository(db)
 	accountRepo := sqlite.NewAccountRepository(db)
+	categoryRepo := sqlite.NewCategoryRepository(db)
+
+	// category_id is a real foreign key (BACK-14 follow-up: categories
+	// are globally shared, not per-user) — every category this seed uses
+	// below must be created first, the same way the account it
+	// references is created first. "transfer" doesn't need creating: the
+	// schema migration already seeds it (and "income"/"other") with a
+	// fixed id every environment agrees on.
+	fifty := 50
+	food, err := categoryRepo.Create(ctx, &dto.CategoryDTO{Name: "food", AvoidabilityPercent: &fifty, ContributorIDs: []string{testUserID}})
+	if err != nil {
+		t.Fatalf("seed category %q: %v", "food", err)
+	}
+	shopping, err := categoryRepo.Create(ctx, &dto.CategoryDTO{Name: "shopping", AvoidabilityPercent: &fifty, ContributorIDs: []string{testUserID}})
+	if err != nil {
+		t.Fatalf("seed category %q: %v", "shopping", err)
+	}
+	transferCategoryID := entities.CategoryTransferID
 
 	account, err := accountRepo.Create(ctx, &dto.AccountDTO{
 		UserID:    testUserID,
@@ -97,7 +115,7 @@ func seedSource(t *testing.T, db *sql.DB) {
 		Amount:        -500,
 		Currency:      "usd",
 		Description:   "synced coffee",
-		Category:      "food",
+		CategoryID:    &food.ID,
 		PaymentMethod: string(entities.PaymentMethodCash),
 		AccountID:     &account.ID,
 		Status:        string(entities.MovementStatusActive),
@@ -117,7 +135,7 @@ func seedSource(t *testing.T, db *sql.DB) {
 		Amount:        -1200,
 		Currency:      "usd",
 		Description:   "pending lunch",
-		Category:      "food",
+		CategoryID:    &food.ID,
 		PaymentMethod: string(entities.PaymentMethodDebitCard),
 		Status:        string(entities.MovementStatusActive),
 		SyncStatus:    string(entities.SyncStatusPending),
@@ -133,7 +151,7 @@ func seedSource(t *testing.T, db *sql.DB) {
 		Amount:        -3000,
 		Currency:      "usd",
 		Description:   "will be reversed",
-		Category:      "shopping",
+		CategoryID:    &shopping.ID,
 		PaymentMethod: string(entities.PaymentMethodCreditCard),
 		Status:        string(entities.MovementStatusActive),
 		SyncStatus:    string(entities.SyncStatusPending),
@@ -151,7 +169,7 @@ func seedSource(t *testing.T, db *sql.DB) {
 		Amount:            3000,
 		Currency:          "usd",
 		Description:       "reversal",
-		Category:          "shopping",
+		CategoryID:        &shopping.ID,
 		PaymentMethod:     string(entities.PaymentMethodCreditCard),
 		Status:            string(entities.MovementStatusActive),
 		CancelsMovementID: &toReverse.ID,
@@ -167,7 +185,7 @@ func seedSource(t *testing.T, db *sql.DB) {
 		&dto.CreditCardPurchaseDTO{
 			UserID:           testUserID,
 			Description:      "new laptop",
-			Category:         "shopping",
+			CategoryID:       &shopping.ID,
 			TotalAmount:      -300000,
 			Currency:         "usd",
 			InstallmentCount: 3,
@@ -176,9 +194,9 @@ func seedSource(t *testing.T, db *sql.DB) {
 			CreatedAt:        now,
 		},
 		[]*dto.MovementDTO{
-			{UserID: testUserID, Amount: -100000, Currency: "usd", Description: "new laptop 1/3", Category: "shopping", PaymentMethod: string(entities.PaymentMethodCreditCard), Status: string(entities.MovementStatusActive), SyncStatus: string(entities.SyncStatusPending), Timestamp: now, CreatedAt: now, InstallmentNumber: intPtr(1)},
-			{UserID: testUserID, Amount: -100000, Currency: "usd", Description: "new laptop 2/3", Category: "shopping", PaymentMethod: string(entities.PaymentMethodCreditCard), Status: string(entities.MovementStatusActive), SyncStatus: string(entities.SyncStatusPending), Timestamp: now.AddDate(0, 1, 0), CreatedAt: now, InstallmentNumber: intPtr(2)},
-			{UserID: testUserID, Amount: -100000, Currency: "usd", Description: "new laptop 3/3", Category: "shopping", PaymentMethod: string(entities.PaymentMethodCreditCard), Status: string(entities.MovementStatusActive), SyncStatus: string(entities.SyncStatusPending), Timestamp: now.AddDate(0, 2, 0), CreatedAt: now, InstallmentNumber: intPtr(3)},
+			{UserID: testUserID, Amount: -100000, Currency: "usd", Description: "new laptop 1/3", CategoryID: &shopping.ID, PaymentMethod: string(entities.PaymentMethodCreditCard), Status: string(entities.MovementStatusActive), SyncStatus: string(entities.SyncStatusPending), Timestamp: now, CreatedAt: now, InstallmentNumber: intPtr(1)},
+			{UserID: testUserID, Amount: -100000, Currency: "usd", Description: "new laptop 2/3", CategoryID: &shopping.ID, PaymentMethod: string(entities.PaymentMethodCreditCard), Status: string(entities.MovementStatusActive), SyncStatus: string(entities.SyncStatusPending), Timestamp: now.AddDate(0, 1, 0), CreatedAt: now, InstallmentNumber: intPtr(2)},
+			{UserID: testUserID, Amount: -100000, Currency: "usd", Description: "new laptop 3/3", CategoryID: &shopping.ID, PaymentMethod: string(entities.PaymentMethodCreditCard), Status: string(entities.MovementStatusActive), SyncStatus: string(entities.SyncStatusPending), Timestamp: now.AddDate(0, 2, 0), CreatedAt: now, InstallmentNumber: intPtr(3)},
 		},
 	); err != nil {
 		t.Fatalf("create installment purchase: %v", err)
@@ -187,8 +205,8 @@ func seedSource(t *testing.T, db *sql.DB) {
 	// Transfer pair.
 	transferID := "transfer-1"
 	if _, err := movementRepo.CreateBatch(ctx, []*dto.MovementDTO{
-		{UserID: testUserID, Amount: -5000, Currency: "usd", Description: "transfer out", Category: string(entities.CategoryTransfer), PaymentMethod: string(entities.PaymentMethodOther), AccountID: &account.ID, TransferID: &transferID, Status: string(entities.MovementStatusActive), SyncStatus: string(entities.SyncStatusPending), Timestamp: now, CreatedAt: now},
-		{UserID: testUserID, Amount: 5000, Currency: "usd", Description: "transfer in", Category: string(entities.CategoryTransfer), PaymentMethod: string(entities.PaymentMethodOther), TransferID: &transferID, Status: string(entities.MovementStatusActive), SyncStatus: string(entities.SyncStatusPending), Timestamp: now, CreatedAt: now},
+		{UserID: testUserID, Amount: -5000, Currency: "usd", Description: "transfer out", CategoryID: &transferCategoryID, PaymentMethod: string(entities.PaymentMethodOther), AccountID: &account.ID, TransferID: &transferID, Status: string(entities.MovementStatusActive), SyncStatus: string(entities.SyncStatusPending), Timestamp: now, CreatedAt: now},
+		{UserID: testUserID, Amount: 5000, Currency: "usd", Description: "transfer in", CategoryID: &transferCategoryID, PaymentMethod: string(entities.PaymentMethodOther), TransferID: &transferID, Status: string(entities.MovementStatusActive), SyncStatus: string(entities.SyncStatusPending), Timestamp: now, CreatedAt: now},
 	}); err != nil {
 		t.Fatalf("create transfer pair: %v", err)
 	}

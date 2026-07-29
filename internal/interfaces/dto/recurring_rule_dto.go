@@ -4,14 +4,16 @@ import "time"
 
 // CreateRecurringRuleRequest is the API request body for
 // POST /recurring-rules. UserID always comes from the caller's verified
-// token (BACK-02), never the body. Category/PaymentMethod default like
-// CreateMovementRequest; DayOfMonth is required ("1"-"28" or "last").
-// StartsAt omitted means "now"; EndsAt omitted means "no end date".
+// token (BACK-02), never the body. PaymentMethod defaults like
+// CreateMovementRequest; category_id (BACK-14 follow-up) is a real
+// foreign key, must reference an existing category, omitted stays
+// uncategorized. DayOfMonth is required ("1"-"28" or "last"). StartsAt
+// omitted means "now"; EndsAt omitted means "no end date".
 type CreateRecurringRuleRequest struct {
 	Amount        int64      `json:"amount"`
 	Currency      string     `json:"currency,omitempty"`
 	Description   string     `json:"description,omitempty"`
-	Category      string     `json:"category,omitempty"`
+	CategoryID    *string    `json:"category_id,omitempty"`
 	PaymentMethod string     `json:"payment_method,omitempty"`
 	AccountID     string     `json:"account_id,omitempty"`
 	DayOfMonth    string     `json:"day_of_month"`
@@ -21,13 +23,13 @@ type CreateRecurringRuleRequest struct {
 
 // UpdateRecurringRuleRequest is the API request body for
 // PATCH /recurring-rules/{id}. A field absent from the JSON body leaves
-// that value unchanged; an explicit "account_id": "" clears the account.
-// There is no way to clear an already-set ends_at back to "no end date"
-// through this endpoint (see the usecase's UpdateRecurringRuleInput
-// comment) — a documented limitation.
+// that value unchanged; an explicit "account_id": "" (or "category_id":
+// "") clears it. There is no way to clear an already-set ends_at back to
+// "no end date" through this endpoint (see the usecase's
+// UpdateRecurringRuleInput comment) — a documented limitation.
 type UpdateRecurringRuleRequest struct {
 	Description   *string    `json:"description,omitempty"`
-	Category      *string    `json:"category,omitempty"`
+	CategoryID    *string    `json:"category_id,omitempty"`
 	PaymentMethod *string    `json:"payment_method,omitempty"`
 	AccountID     *string    `json:"account_id,omitempty"`
 	Amount        *int64     `json:"amount,omitempty"`
@@ -43,6 +45,7 @@ type RecurringRuleResponse struct {
 	Amount          int64      `json:"amount"`
 	Currency        string     `json:"currency"`
 	Description     string     `json:"description,omitempty"`
+	CategoryID      string     `json:"category_id,omitempty"`
 	Category        string     `json:"category"`
 	PaymentMethod   string     `json:"payment_method"`
 	AccountID       string     `json:"account_id,omitempty"`

@@ -58,7 +58,7 @@ func (h *categoryHandler) CreateCategory(w http.ResponseWriter, r *http.Request)
 		h.writeUsecaseError(w, "create category", err)
 		return
 	}
-	writeJSON(h.log, w, http.StatusCreated, toCategoryResponse(category))
+	writeJSON(h.log, w, http.StatusCreated, toCategoryResponse(category, userID))
 }
 
 // UpdateCategory handles PATCH /categories/{id}.
@@ -83,11 +83,16 @@ func (h *categoryHandler) UpdateCategory(w http.ResponseWriter, r *http.Request)
 		h.writeUsecaseError(w, "update category", err)
 		return
 	}
-	writeJSON(h.log, w, http.StatusOK, toCategoryResponse(category))
+	writeJSON(h.log, w, http.StatusOK, toCategoryResponse(category, userID))
 }
 
-// DeleteCategory handles DELETE /categories/{id}. Deleting one still
-// referenced by movements is allowed — it's a label, not an FK.
+// DeleteCategory handles DELETE /categories/{id}?reassign_existing=bool.
+// There is no real delete once a category may be shared (BACK-14
+// follow-up): this only removes id from the caller's own category list
+// (see DeleteCategoryUseCase). reassign_existing=true additionally moves
+// every movement/purchase the caller owns off id onto their resolved
+// default category first — still scoped strictly to the caller's own
+// rows, never another user's data even though the category is shared.
 func (h *categoryHandler) DeleteCategory(w http.ResponseWriter, r *http.Request) {
 	userID, ok := reqctx.UserID(r.Context())
 	if !ok {
@@ -95,18 +100,31 @@ func (h *categoryHandler) DeleteCategory(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if err := h.deleteCategory.Execute(r.Context(), userID, r.PathValue("id")); err != nil {
+	reassignExisting := r.URL.Query().Get("reassign_existing") == "true"
+
+	if err := h.deleteCategory.Execute(r.Context(), userID, r.PathValue("id"), reassignExisting); err != nil {
 		h.writeUsecaseError(w, "delete category", err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func toCategoryResponse(c *dto.CategoryDTO) interfacedto.CategoryResponse {
+// toCategoryResponse converts one category row to its API shape,
+// computing IsContributor relative to userID (the caller) — see
+// CategoryResponse's doc comment.
+func toCategoryResponse(c *dto.CategoryDTO, userID string) interfacedto.CategoryResponse {
+	isContributor := false
+	for _, id := range c.ContributorIDs {
+		if id == userID {
+			isContributor = true
+			break
+		}
+	}
 	return interfacedto.CategoryResponse{
 		ID:                  c.ID,
 		Name:                c.Name,
 		AvoidabilityPercent: c.AvoidabilityPercent,
+		IsContributor:       isContributor,
 	}
 }
 

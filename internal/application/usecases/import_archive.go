@@ -19,14 +19,15 @@ import (
 // movements, since movements can reference either by ID and both tables
 // enforce that with a foreign key.
 type importArchiveUseCase struct {
-	accounts  repositories.AccountRepository
-	movements repositories.MovementRepository
-	purchases repositories.CreditCardPurchaseRepository
+	accounts   repositories.AccountRepository
+	movements  repositories.MovementRepository
+	purchases  repositories.CreditCardPurchaseRepository
+	categories repositories.CategoryRepository
 }
 
 // NewImportArchive returns interface type for dependency injection.
-func NewImportArchive(accounts repositories.AccountRepository, movements repositories.MovementRepository, purchases repositories.CreditCardPurchaseRepository) ImportArchiveUseCase {
-	return &importArchiveUseCase{accounts: accounts, movements: movements, purchases: purchases}
+func NewImportArchive(accounts repositories.AccountRepository, movements repositories.MovementRepository, purchases repositories.CreditCardPurchaseRepository, categories repositories.CategoryRepository) ImportArchiveUseCase {
+	return &importArchiveUseCase{accounts: accounts, movements: movements, purchases: purchases, categories: categories}
 }
 
 func (uc *importArchiveUseCase) Execute(ctx context.Context, userID string, bundle ArchiveBundle) (ImportArchiveResult, error) {
@@ -55,6 +56,45 @@ func (uc *importArchiveUseCase) Execute(ctx context.Context, userID string, bund
 		return ImportArchiveResult{}, err
 	}
 	existingMovementIDs := toIDSet(existingMovements, func(m *dto.MovementDTO) string { return m.ID })
+
+	// category_id is a real foreign key (BACK-14 follow-up), and
+	// categories are globally shared — a restore reuses an id that
+	// already exists in this environment (e.g. the fixed system category
+	// ids, or one this same account created before) as-is; an id this
+	// environment has never seen gets created fresh, preserving the
+	// original id, with the importing user as its sole contributor and
+	// the archive's own denormalized name (see ArchiveMovementDTO.Category)
+	// since the source category itself isn't part of the bundle.
+	categoryIDs := make(map[string]string) // id -> denormalized name from the archive
+	for _, m := range bundle.Movements {
+		if m != nil && m.CategoryID != nil && *m.CategoryID != "" {
+			categoryIDs[*m.CategoryID] = m.Category
+		}
+	}
+	for _, p := range bundle.CreditCardPurchases {
+		if p != nil && p.CategoryID != nil && *p.CategoryID != "" {
+			categoryIDs[*p.CategoryID] = p.Category
+		}
+	}
+	for id, name := range categoryIDs {
+		if _, err := uc.categories.GetByID(ctx, id); err == nil {
+			continue
+		} else if !apperrors.Is(err, apperrors.ErrNotFound) {
+			return ImportArchiveResult{}, err
+		}
+		if name == "" {
+			name = "restored category"
+		}
+		avoidability := defaultCategoryAvoidability
+		if _, err := uc.categories.Create(ctx, &dto.CategoryDTO{
+			ID:                  id,
+			Name:                name,
+			AvoidabilityPercent: &avoidability,
+			ContributorIDs:      []string{userID},
+		}); err != nil {
+			return ImportArchiveResult{}, err
+		}
+	}
 
 	var result ImportArchiveResult
 

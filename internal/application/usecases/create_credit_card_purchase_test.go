@@ -76,7 +76,6 @@ func TestCreatePurchaseInstallmentShape(t *testing.T) {
 	uc, movements := newPurchaseUseCase()
 	purchase, installments, err := uc.Execute(context.Background(), CreateCreditCardPurchaseInput{
 		UserID: "u1", TotalAmount: -900, Currency: "usd", Installments: 3, Description: "tv",
-		Category: "shopping",
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
