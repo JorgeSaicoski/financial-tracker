@@ -42,7 +42,7 @@ func (f *fakeRepo) ListByCreditCardPurchase(context.Context, string) ([]*dto.Mov
 	panic("not used")
 }
 func (f *fakeRepo) Void(context.Context, string) error { panic("not used") }
-func (f *fakeRepo) UpdateMetadata(context.Context, string, string, string, string, *string) error {
+func (f *fakeRepo) UpdateMetadata(context.Context, string, string, *string, string, *string) error {
 	panic("not used")
 }
 func (f *fakeRepo) UpdateAvoidabilityOverride(context.Context, string, *int) error {
@@ -120,6 +120,12 @@ func (f *fakeSettingsRepo) UpdateEnabled(_ context.Context, userID string, enabl
 	f.disabled[userID] = !enabled
 	s := dto.DefaultUserSettings(userID, time.Now().UTC())
 	s.LedgerSyncEnabled = enabled
+	return s, nil
+}
+
+func (f *fakeSettingsRepo) SetDefaultCategory(_ context.Context, userID string, categoryID *string) (*dto.UserSettingsDTO, error) {
+	s := dto.DefaultUserSettings(userID, time.Now().UTC())
+	s.DefaultCategoryID = categoryID
 	return s, nil
 }
 

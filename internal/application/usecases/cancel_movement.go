@@ -89,7 +89,7 @@ func cancelOne(ctx context.Context, repo repositories.MovementRepository, moveme
 		Amount:            -movement.Amount,
 		Currency:          movement.Currency,
 		Description:       fmt.Sprintf("Reversal of %s", originalID),
-		Category:          movement.Category,
+		CategoryID:        movement.CategoryID,
 		PaymentMethod:     movement.PaymentMethod,
 		AccountID:         movement.AccountID, // nets the original out of its account too
 		Status:            entities.MovementStatusActive,

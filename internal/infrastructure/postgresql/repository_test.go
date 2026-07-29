@@ -37,7 +37,7 @@ func openTestDB(t *testing.T) *sql.DB {
 	if err := Migrate(db); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	if _, err := db.Exec(`TRUNCATE TABLE account_snapshots, movements, credit_card_purchases, accounts, user_local_archive_settings, user_settings, categories CASCADE`); err != nil {
+	if _, err := db.Exec(`TRUNCATE TABLE account_snapshots, movements, credit_card_purchases, accounts, recurring_rules, user_local_archive_settings, user_settings, categories CASCADE`); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
 	return db
@@ -51,6 +51,12 @@ func nowTruncated() time.Time {
 	return time.Now().UTC().Truncate(time.Microsecond)
 }
 
+// testMovement leaves CategoryID nil (uncategorized) since most callers
+// don't care about it — category_id is a real foreign key (BACK-14
+// follow-up: categories are globally shared, not per-user), so a test
+// that does care must create the category first via
+// NewCategoryRepository(db).Create and set .CategoryID to its id, the
+// same way callers already create an account before setting .AccountID.
 func testMovement(amount int64) *dto.MovementDTO {
 	now := nowTruncated()
 	return &dto.MovementDTO{
@@ -58,7 +64,6 @@ func testMovement(amount int64) *dto.MovementDTO {
 		Amount:        amount,
 		Currency:      "usd",
 		Description:   "coffee",
-		Category:      "food",
 		PaymentMethod: string(entities.PaymentMethodCash),
 		Status:        string(entities.MovementStatusActive),
 		SyncStatus:    string(entities.SyncStatusPending),
@@ -68,10 +73,17 @@ func testMovement(amount int64) *dto.MovementDTO {
 }
 
 func TestMovementCreateGetRoundtrip(t *testing.T) {
-	repo := NewMovementRepository(openTestDB(t))
+	db := openTestDB(t)
+	repo := NewMovementRepository(db)
 	ctx := context.Background()
 
-	created, err := repo.Create(ctx, testMovement(-450))
+	food, err := NewCategoryRepository(db).Create(ctx, &dto.CategoryDTO{Name: "food", ContributorIDs: []string{"00000000-0000-0000-0000-000000000001"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := testMovement(-450)
+	m.CategoryID = &food.ID
+	created, err := repo.Create(ctx, m)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -351,6 +363,10 @@ func TestMovementUpdateMetadataAndFinancial(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	transport, err := NewCategoryRepository(db).Create(ctx, &dto.CategoryDTO{Name: "transport", ContributorIDs: []string{created.UserID}})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	account, err := NewAccountRepository(db).Create(ctx, &dto.AccountDTO{
 		UserID: created.UserID, Name: "wallet", Type: string(entities.AccountTypeCash),
@@ -360,7 +376,7 @@ func TestMovementUpdateMetadataAndFinancial(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := repo.UpdateMetadata(ctx, created.ID, "renamed", "transport", string(entities.PaymentMethodPix), &account.ID); err != nil {
+	if err := repo.UpdateMetadata(ctx, created.ID, "renamed", &transport.ID, string(entities.PaymentMethodPix), &account.ID); err != nil {
 		t.Fatalf("update metadata: %v", err)
 	}
 	got, err := repo.GetByID(ctx, created.ID)
@@ -390,7 +406,7 @@ func TestMovementUpdateMetadataAndFinancial(t *testing.T) {
 		t.Errorf("metadata must be untouched by UpdateFinancial: %+v", got)
 	}
 
-	if err := repo.UpdateMetadata(ctx, "missing", "x", "other", string(entities.PaymentMethodOther), nil); !errors.Is(err, apperrors.ErrNotFound) {
+	if err := repo.UpdateMetadata(ctx, "missing", "x", nil, string(entities.PaymentMethodOther), nil); !errors.Is(err, apperrors.ErrNotFound) {
 		t.Errorf("update metadata on missing id: want ErrNotFound, got %v", err)
 	}
 	if err := repo.UpdateFinancial(ctx, "missing", -1, "usd", time.Now()); !errors.Is(err, apperrors.ErrNotFound) {
@@ -499,10 +515,15 @@ func TestPurchaseCreateWithInstallments(t *testing.T) {
 	ctx := context.Background()
 	now := nowTruncated()
 
+	shopping, err := NewCategoryRepository(db).Create(ctx, &dto.CategoryDTO{Name: "shopping", ContributorIDs: []string{"00000000-0000-0000-0000-000000000001"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	purchase := &dto.CreditCardPurchaseDTO{
 		UserID:           "00000000-0000-0000-0000-000000000001",
 		Description:      "tv",
-		Category:         "shopping",
+		CategoryID:       &shopping.ID,
 		TotalAmount:      -900,
 		Currency:         "usd",
 		InstallmentCount: 3,
@@ -520,7 +541,7 @@ func TestPurchaseCreateWithInstallments(t *testing.T) {
 		installments = append(installments, m)
 	}
 
-	purchase, _, err := purchases.CreateWithInstallments(ctx, purchase, installments)
+	purchase, _, err = purchases.CreateWithInstallments(ctx, purchase, installments)
 	if err != nil {
 		t.Fatalf("create purchase: %v", err)
 	}
@@ -558,18 +579,194 @@ func TestPurchaseCreateWithInstallments(t *testing.T) {
 	}
 }
 
+// testRecurringRule leaves CategoryID nil (uncategorized), same reasoning
+// as testMovement — a test that cares about category_id creates one
+// first via NewCategoryRepository(db).Create.
+func testRecurringRule(dayOfMonth string) *dto.RecurringRuleDTO {
+	now := nowTruncated()
+	return &dto.RecurringRuleDTO{
+		UserID:        "00000000-0000-0000-0000-000000000001",
+		Amount:        -5000,
+		Currency:      "usd",
+		Description:   "rent",
+		PaymentMethod: string(entities.PaymentMethodBankTransfer),
+		DayOfMonth:    dayOfMonth,
+		StartsAt:      now,
+		Active:        true,
+		CreatedAt:     now,
+	}
+}
+
+func TestRecurringRuleCreateGetRoundtrip(t *testing.T) {
+	repo := NewRecurringRuleRepository(openTestDB(t))
+	ctx := context.Background()
+
+	created, err := repo.Create(ctx, testRecurringRule("1"))
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if created.ID == "" {
+		t.Fatal("no id generated")
+	}
+
+	got, err := repo.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Amount != -5000 || got.Description != "rent" || got.DayOfMonth != "1" || !got.Active {
+		t.Errorf("roundtrip mismatch: %+v", got)
+	}
+	if got.LastGeneratedAt != nil || got.EndsAt != nil || got.AccountID != nil {
+		t.Error("nullable fields should be nil")
+	}
+
+	if _, err := repo.GetByID(ctx, "missing"); !errors.Is(err, apperrors.ErrNotFound) {
+		t.Errorf("missing id: want ErrNotFound, got %v", err)
+	}
+}
+
+func TestRecurringRuleListByUserAndActive(t *testing.T) {
+	repo := NewRecurringRuleRepository(openTestDB(t))
+	ctx := context.Background()
+
+	mine, _ := repo.Create(ctx, testRecurringRule("1"))
+	inactive := testRecurringRule("15")
+	inactive.Active = false
+	inactiveRule, _ := repo.Create(ctx, inactive)
+	someoneElses := testRecurringRule("1")
+	someoneElses.UserID = "00000000-0000-0000-0000-000000000002"
+	repo.Create(ctx, someoneElses)
+
+	byUser, err := repo.ListByUser(ctx, "00000000-0000-0000-0000-000000000001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(byUser) != 2 {
+		t.Fatalf("ListByUser = %d rows, want 2", len(byUser))
+	}
+
+	active, err := repo.ListActive(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range active {
+		if r.ID == inactiveRule.ID {
+			t.Error("ListActive returned a deactivated rule")
+		}
+	}
+	found := false
+	for _, r := range active {
+		if r.ID == mine.ID {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("ListActive did not return the active rule")
+	}
+}
+
+func TestRecurringRuleUpdatesAndSetActive(t *testing.T) {
+	db := openTestDB(t)
+	repo := NewRecurringRuleRepository(db)
+	ctx := context.Background()
+
+	rule, _ := repo.Create(ctx, testRecurringRule("1"))
+	food, err := NewCategoryRepository(db).Create(ctx, &dto.CategoryDTO{Name: "food", ContributorIDs: []string{"00000000-0000-0000-0000-000000000001"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := repo.UpdateMetadata(ctx, rule.ID, "new desc", &food.ID, string(entities.PaymentMethodCash), nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.UpdateFinancial(ctx, rule.ID, -9999, "brl"); err != nil {
+		t.Fatal(err)
+	}
+	ends := nowTruncated().AddDate(1, 0, 0)
+	if err := repo.UpdateSchedule(ctx, rule.ID, "last", &ends); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SetActive(ctx, rule.ID, false); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := repo.GetByID(ctx, rule.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Description != "new desc" || got.Category != "food" ||
+		got.Amount != -9999 || got.Currency != "brl" || got.DayOfMonth != "last" ||
+		got.EndsAt == nil || got.Active {
+		t.Errorf("updates did not apply: %+v", got)
+	}
+
+	if err := repo.SetActive(ctx, "missing", true); !errors.Is(err, apperrors.ErrNotFound) {
+		t.Errorf("update missing rule: want ErrNotFound, got %v", err)
+	}
+}
+
+func TestRecurringRuleGenerateAndAdvance(t *testing.T) {
+	db := openTestDB(t)
+	repo := NewRecurringRuleRepository(db)
+	movements := NewMovementRepository(db)
+	ctx := context.Background()
+
+	rule, _ := repo.Create(ctx, testRecurringRule("1"))
+
+	m := testMovement(-5000)
+	m.RecurringRuleID = &rule.ID
+	watermark := nowTruncated()
+
+	generated, err := repo.GenerateAndAdvance(ctx, rule.ID, []*dto.MovementDTO{m}, watermark)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	if len(generated) != 1 || generated[0].ID == "" {
+		t.Fatalf("generated = %+v, want one movement with an id", generated)
+	}
+
+	stored, err := movements.GetByID(ctx, generated[0].ID)
+	if err != nil {
+		t.Fatalf("movement not persisted: %v", err)
+	}
+	if stored.RecurringRuleID == nil || *stored.RecurringRuleID != rule.ID {
+		t.Errorf("movement missing recurring_rule_id link: %+v", stored)
+	}
+
+	got, err := repo.GetByID(ctx, rule.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LastGeneratedAt == nil || !got.LastGeneratedAt.Equal(watermark) {
+		t.Errorf("watermark not advanced: %+v", got.LastGeneratedAt)
+	}
+
+	if _, err := repo.GenerateAndAdvance(ctx, "missing", nil, watermark); !errors.Is(err, apperrors.ErrNotFound) {
+		t.Errorf("generate for missing rule: want ErrNotFound, got %v", err)
+	}
+}
+
 func TestPurchaseListByUser(t *testing.T) {
 	db := openTestDB(t)
 	purchases := NewCreditCardPurchaseRepository(db)
 	ctx := context.Background()
 	now := nowTruncated()
 
+	categories := NewCategoryRepository(db)
+	shopping, err := categories.Create(ctx, &dto.CategoryDTO{Name: "shopping", ContributorIDs: []string{"00000000-0000-0000-0000-000000000001"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	mine := &dto.CreditCardPurchaseDTO{
-		UserID: "00000000-0000-0000-0000-000000000001", Category: "shopping",
+		UserID: "00000000-0000-0000-0000-000000000001", CategoryID: &shopping.ID,
 		TotalAmount: -900, Currency: "usd", InstallmentCount: 1, PurchaseDate: now, Status: string(entities.CreditCardPurchaseStatusActive), CreatedAt: now,
 	}
 	someoneElses := &dto.CreditCardPurchaseDTO{
-		UserID: "00000000-0000-0000-0000-000000000002", Category: "shopping",
+		// Categories are globally shared (BACK-14 follow-up): a
+		// different user referencing the same category_id is expected,
+		// not an error.
+		UserID: "00000000-0000-0000-0000-000000000002", CategoryID: &shopping.ID,
 		TotalAmount: -100, Currency: "usd", InstallmentCount: 1, PurchaseDate: now, Status: string(entities.CreditCardPurchaseStatusActive), CreatedAt: now,
 	}
 	if _, _, err := purchases.CreateWithInstallments(ctx, mine, nil); err != nil {

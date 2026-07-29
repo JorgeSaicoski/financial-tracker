@@ -3,7 +3,6 @@ package usecases
 import (
 	"context"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/JorgeSaicoski/financial-tracker/internal/application/dto"
@@ -57,11 +56,11 @@ func (uc *getPurchasingPowerUseCase) Execute(ctx context.Context, userID string,
 		return nil, err
 	}
 
-	categoryRows, err := uc.categories.ListByUser(ctx, userID)
+	categoryRows, err := uc.categories.ListForUser(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
-	categoriesByName := CategoriesByName(categoryRows)
+	categoriesByID := CategoriesByID(categoryRows)
 
 	// monthOrder preserves first-seen order (from oldest to newest, since
 	// ListByUser returns newest-first and we walk it below) so the
@@ -72,7 +71,7 @@ func (uc *getPurchasingPowerUseCase) Execute(ctx context.Context, userID string,
 		if m.Status == string(entities.MovementStatusVoided) {
 			continue
 		}
-		if m.Category == string(entities.CategoryTransfer) {
+		if m.CategoryID != nil && *m.CategoryID == entities.CategoryTransferID {
 			// Transfers (including to an investment-type account) are
 			// neither income nor expense — excluding them here also
 			// excludes contributions to investment accounts, satisfying
@@ -98,7 +97,7 @@ func (uc *getPurchasingPowerUseCase) Execute(ctx context.Context, userID string,
 
 	out := make([]PurchasingPowerMonth, 0, len(monthOrder))
 	for _, key := range monthOrder {
-		monthReport, err := uc.buildMonth(ctx, userID, key, byMonth[key], categoriesByName, now)
+		monthReport, err := uc.buildMonth(ctx, userID, key, byMonth[key], categoriesByID, now)
 		if err != nil {
 			return nil, err
 		}
@@ -109,7 +108,7 @@ func (uc *getPurchasingPowerUseCase) Execute(ctx context.Context, userID string,
 
 func (uc *getPurchasingPowerUseCase) buildMonth(
 	ctx context.Context, userID string, key monthKey, byCurrency map[string][]*dto.MovementDTO,
-	categoriesByName map[string]*dto.CategoryDTO, now time.Time,
+	categoriesByID map[string]*dto.CategoryDTO, now time.Time,
 ) (PurchasingPowerMonth, error) {
 	month := PurchasingPowerMonth{Month: time.Date(key.year, key.month, 1, 0, 0, 0, 0, time.UTC)}
 
@@ -121,7 +120,7 @@ func (uc *getPurchasingPowerUseCase) buildMonth(
 
 	var profitUSDAtCurrentRate int64
 	for _, currency := range currencies {
-		view, currentRateSum, err := uc.buildCurrencyView(ctx, userID, currency, byCurrency[currency], categoriesByName, now)
+		view, currentRateSum, err := uc.buildCurrencyView(ctx, userID, currency, byCurrency[currency], categoriesByID, now)
 		if err != nil {
 			return PurchasingPowerMonth{}, err
 		}
@@ -138,7 +137,7 @@ func (uc *getPurchasingPowerUseCase) buildMonth(
 // currency active that month).
 func (uc *getPurchasingPowerUseCase) buildCurrencyView(
 	ctx context.Context, userID, currency string, rows []*dto.MovementDTO,
-	categoriesByName map[string]*dto.CategoryDTO, now time.Time,
+	categoriesByID map[string]*dto.CategoryDTO, now time.Time,
 ) (PurchasingPowerCurrencyView, int64, error) {
 	view := PurchasingPowerCurrencyView{Currency: currency}
 	spendingByCategory := make(map[string]*PurchasingPowerCategorySpending)
@@ -154,16 +153,21 @@ func (uc *getPurchasingPowerUseCase) buildCurrencyView(
 			expense := -m.Amount
 			view.TotalExpenses += expense
 
-			view.PotentialSavings += entities.PotentialSaving(expense, EffectiveAvoidability(m, categoriesByName))
+			view.PotentialSavings += entities.PotentialSaving(expense, EffectiveAvoidability(m, categoriesByID))
 
-			categoryKey := m.Category
+			categoryKey := ""
+			if m.CategoryID != nil {
+				categoryKey = *m.CategoryID
+			}
 			spending, ok := spendingByCategory[categoryKey]
 			if !ok {
 				var avoidabilityPercent *int
-				if c, ok := categoriesByName[strings.ToLower(categoryKey)]; ok {
+				var categoryName string
+				if c, ok := categoriesByID[categoryKey]; ok {
 					avoidabilityPercent = c.AvoidabilityPercent
+					categoryName = c.Name
 				}
-				spending = &PurchasingPowerCategorySpending{Category: categoryKey, AvoidabilityPercent: avoidabilityPercent}
+				spending = &PurchasingPowerCategorySpending{Category: categoryName, AvoidabilityPercent: avoidabilityPercent}
 				spendingByCategory[categoryKey] = spending
 				categoryOrder = append(categoryOrder, categoryKey)
 			}
@@ -182,7 +186,7 @@ func (uc *getPurchasingPowerUseCase) buildCurrencyView(
 				view.IncomeUSD += usdAmount
 			} else {
 				view.TotalExpensesUSD += -usdAmount
-				view.PotentialSavingsUSD += entities.PotentialSaving(-usdAmount, EffectiveAvoidability(m, categoriesByName))
+				view.PotentialSavingsUSD += entities.PotentialSaving(-usdAmount, EffectiveAvoidability(m, categoriesByID))
 			}
 		}
 
@@ -199,8 +203,8 @@ func (uc *getPurchasingPowerUseCase) buildCurrencyView(
 	}
 
 	sort.Strings(categoryOrder)
-	for _, name := range categoryOrder {
-		view.SpendingByCategory = append(view.SpendingByCategory, *spendingByCategory[name])
+	for _, id := range categoryOrder {
+		view.SpendingByCategory = append(view.SpendingByCategory, *spendingByCategory[id])
 	}
 	view.Profit = view.Income - view.TotalExpenses
 	view.ProfitUSD = view.IncomeUSD - view.TotalExpensesUSD
