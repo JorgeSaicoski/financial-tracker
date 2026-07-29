@@ -30,6 +30,17 @@ type CurrencyHandler interface {
 	AddCurrency(w http.ResponseWriter, r *http.Request)
 }
 
+// CategoryHandler exposes the write side of BACK-14's per-user category
+// registry (create/rename/set avoidability/delete). The read side
+// (GET /categories, combined with the still-fixed payment-method list)
+// stays on MovementHandler.ListCategories — see that method's doc
+// comment for why.
+type CategoryHandler interface {
+	CreateCategory(w http.ResponseWriter, r *http.Request)
+	UpdateCategory(w http.ResponseWriter, r *http.Request)
+	DeleteCategory(w http.ResponseWriter, r *http.Request)
+}
+
 // ExchangeRateHandler exposes user-managed, historical exchange rates
 // against USD (BACK-11) — reference data the user maintains themselves,
 // no external rate API involved.
@@ -60,6 +71,15 @@ type MovementHandler interface {
 	Sync(w http.ResponseWriter, r *http.Request)
 	ListCategories(w http.ResponseWriter, r *http.Request)
 	Cashflow(w http.ResponseWriter, r *http.Request)
+}
+
+// RecurringRuleHandler exposes recurring movement rules (BACK-07) — rent,
+// salary, subscriptions and the like, generated on schedule by
+// application/recurring rather than re-entered every month.
+type RecurringRuleHandler interface {
+	CreateRecurringRule(w http.ResponseWriter, r *http.Request)
+	ListRecurringRules(w http.ResponseWriter, r *http.Request)
+	UpdateRecurringRule(w http.ResponseWriter, r *http.Request)
 }
 
 // ArchiveHandler exposes BACK-15's "no cloud" local archive tier: the

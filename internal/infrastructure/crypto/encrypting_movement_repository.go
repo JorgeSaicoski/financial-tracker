@@ -114,7 +114,7 @@ func (r *encryptingMovementRepository) MarkLocalPending(ctx context.Context, use
 // UpdateMetadata's own signature (unlike Create/CreateReversal) doesn't
 // carry the movement's user id, so encrypting the incoming description
 // under the right per-user key needs one extra lookup first.
-func (r *encryptingMovementRepository) UpdateMetadata(ctx context.Context, id, description, category, paymentMethod string, accountID *string) error {
+func (r *encryptingMovementRepository) UpdateMetadata(ctx context.Context, id, description string, categoryID *string, paymentMethod string, accountID *string) error {
 	existing, err := r.inner.GetByID(ctx, id)
 	if err != nil {
 		return err
@@ -123,7 +123,11 @@ func (r *encryptingMovementRepository) UpdateMetadata(ctx context.Context, id, d
 	if err != nil {
 		return fmt.Errorf("crypto: encrypt movement description: %w", err)
 	}
-	return r.inner.UpdateMetadata(ctx, id, ciphertext, category, paymentMethod, accountID)
+	return r.inner.UpdateMetadata(ctx, id, ciphertext, categoryID, paymentMethod, accountID)
+}
+
+func (r *encryptingMovementRepository) UpdateAvoidabilityOverride(ctx context.Context, id string, avoidabilityOverridePercent *int) error {
+	return r.inner.UpdateAvoidabilityOverride(ctx, id, avoidabilityOverridePercent)
 }
 
 func (r *encryptingMovementRepository) UpdateFinancial(ctx context.Context, id string, amount int64, currency string, timestamp time.Time) error {
