@@ -11,14 +11,16 @@ import (
 
 // ppFixture builds the standard test rig: brl + usd registered (2
 // decimals each), a category repo seeded with food/rent/entertainment at
-// their fixture avoidability percentages, and a movements repo ready for
-// seeding.
+// their fixture avoidability percentages (each granted to "u1", the
+// current global-category/ContributorIDs shape — see fakeCategoryRepo),
+// and a movements repo ready for seeding.
 type ppFixture struct {
 	movements  *fakeMovementRepo
 	categories *fakeCategoryRepo
 	rates      *fakeExchangeRateRepo
 	currencies *fakeCurrencyRepo
 	uc         GetPurchasingPowerUseCase
+	categoryID map[string]string // name -> id, for seedMonth/tests to reference
 }
 
 func newPPFixture(t *testing.T) *ppFixture {
@@ -29,28 +31,33 @@ func newPPFixture(t *testing.T) *ppFixture {
 	currencies := newFakeCurrencyRepo("usd", "brl")
 
 	ctx := context.Background()
+	categoryID := make(map[string]string)
 	for name, avoidability := range map[string]int{"food": 20, "rent": 10, "entertainment": 80} {
 		a := avoidability
-		if _, err := categories.Create(ctx, &dto.CategoryDTO{UserID: "u1", Name: name, AvoidabilityPercent: &a}); err != nil {
+		c, err := categories.Create(ctx, &dto.CategoryDTO{Name: name, AvoidabilityPercent: &a, ContributorIDs: []string{"u1"}})
+		if err != nil {
 			t.Fatal(err)
 		}
+		categoryID[name] = c.ID
 	}
 
 	toUSD := NewToUSD(rates, currencies)
 	return &ppFixture{
 		movements: movements, categories: categories, rates: rates, currencies: currencies,
-		uc: NewGetPurchasingPower(movements, categories, toUSD),
+		uc:         NewGetPurchasingPower(movements, categories, toUSD),
+		categoryID: categoryID,
 	}
 }
 
 func (f *ppFixture) seedMonth(t *testing.T, monthStart time.Time) {
 	t.Helper()
 	day := monthStart.AddDate(0, 0, 4) // the 5th
+	food, rent, entertainment := f.categoryID["food"], f.categoryID["rent"], f.categoryID["entertainment"]
 	rows := []*dto.MovementDTO{
-		{UserID: "u1", Amount: 10000, Currency: "brl", Category: "income", Timestamp: day, CreatedAt: day, Status: string(entities.MovementStatusActive)},
-		{UserID: "u1", Amount: -2000, Currency: "brl", Category: "food", Timestamp: day, CreatedAt: day, Status: string(entities.MovementStatusActive)},
-		{UserID: "u1", Amount: -3000, Currency: "brl", Category: "rent", Timestamp: day, CreatedAt: day, Status: string(entities.MovementStatusActive)},
-		{UserID: "u1", Amount: -1500, Currency: "brl", Category: "entertainment", Timestamp: day, CreatedAt: day, Status: string(entities.MovementStatusActive)},
+		{UserID: "u1", Amount: 10000, Currency: "brl", CategoryID: strPtrAv(entities.CategoryIncomeID), Timestamp: day, CreatedAt: day, Status: string(entities.MovementStatusActive)},
+		{UserID: "u1", Amount: -2000, Currency: "brl", CategoryID: &food, Timestamp: day, CreatedAt: day, Status: string(entities.MovementStatusActive)},
+		{UserID: "u1", Amount: -3000, Currency: "brl", CategoryID: &rent, Timestamp: day, CreatedAt: day, Status: string(entities.MovementStatusActive)},
+		{UserID: "u1", Amount: -1500, Currency: "brl", CategoryID: &entertainment, Timestamp: day, CreatedAt: day, Status: string(entities.MovementStatusActive)},
 	}
 	for _, m := range rows {
 		f.movements.add(m)
@@ -134,16 +141,17 @@ func TestGetPurchasingPowerExcludesTransfersAndCancelled(t *testing.T) {
 	day := monthStart.AddDate(0, 0, 4)
 	f.setRate(t, "brl", monthStart, "5")
 
+	food := f.categoryID["food"]
 	f.movements.add(&dto.MovementDTO{
-		UserID: "u1", Amount: -1000, Currency: "brl", Category: string(entities.CategoryTransfer),
+		UserID: "u1", Amount: -1000, Currency: "brl", CategoryID: strPtrAv(entities.CategoryTransferID),
 		Timestamp: day, CreatedAt: day, Status: string(entities.MovementStatusActive),
 	})
 	f.movements.add(&dto.MovementDTO{
-		UserID: "u1", Amount: -500, Currency: "brl", Category: "food",
+		UserID: "u1", Amount: -500, Currency: "brl", CategoryID: &food,
 		Timestamp: day, CreatedAt: day, Status: string(entities.MovementStatusVoided),
 	})
 	f.movements.add(&dto.MovementDTO{
-		UserID: "u1", Amount: -200, Currency: "brl", Category: "food",
+		UserID: "u1", Amount: -200, Currency: "brl", CategoryID: &food,
 		Timestamp: day, CreatedAt: day, Status: string(entities.MovementStatusActive),
 	})
 
@@ -168,7 +176,7 @@ func TestGetPurchasingPowerUncategorizedContributesZeroSavings(t *testing.T) {
 	f.setRate(t, "brl", monthStart, "5")
 
 	f.movements.add(&dto.MovementDTO{
-		UserID: "u1", Amount: -800, Currency: "brl", Category: "",
+		UserID: "u1", Amount: -800, Currency: "brl",
 		Timestamp: day, CreatedAt: day, Status: string(entities.MovementStatusActive),
 	})
 
@@ -192,8 +200,9 @@ func TestGetPurchasingPowerMissingRateMarksIncomplete(t *testing.T) {
 	day := monthStart.AddDate(0, 0, 4)
 	// No rate registered for brl at all.
 
+	food := f.categoryID["food"]
 	f.movements.add(&dto.MovementDTO{
-		UserID: "u1", Amount: -800, Currency: "brl", Category: "food",
+		UserID: "u1", Amount: -800, Currency: "brl", CategoryID: &food,
 		Timestamp: day, CreatedAt: day, Status: string(entities.MovementStatusActive),
 	})
 
@@ -251,8 +260,9 @@ func TestGetPurchasingPowerHonorsPerMovementOverride(t *testing.T) {
 	// A food-category expense whose override (5%) should win over the
 	// category's own stored 20%.
 	overrideLow := 5
+	food := f.categoryID["food"]
 	f.movements.add(&dto.MovementDTO{
-		UserID: "u1", Amount: -400, Currency: "brl", Category: "food", AvoidabilityOverridePercent: &overrideLow,
+		UserID: "u1", Amount: -400, Currency: "brl", CategoryID: &food, AvoidabilityOverridePercent: &overrideLow,
 		Timestamp: day, CreatedAt: day, Status: string(entities.MovementStatusActive),
 	})
 

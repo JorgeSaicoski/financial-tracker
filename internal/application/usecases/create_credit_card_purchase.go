@@ -29,7 +29,7 @@ func (uc *createCreditCardPurchaseUseCase) Execute(ctx context.Context, input Cr
 		return nil, nil, apperrors.ErrInvalidInput
 	}
 
-	category, err := resolveCategory(ctx, uc.categories, input.UserID, input.Category)
+	categoryID, err := resolveCategoryID(ctx, uc.categories, input.UserID, input.CategoryID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -54,7 +54,7 @@ func (uc *createCreditCardPurchaseUseCase) Execute(ctx context.Context, input Cr
 	purchase := &entities.CreditCardPurchase{
 		UserID:           input.UserID,
 		Description:      input.Description,
-		Category:         category,
+		CategoryID:       categoryID,
 		TotalAmount:      input.TotalAmount,
 		Currency:         input.Currency,
 		InstallmentCount: input.Installments,
@@ -75,7 +75,7 @@ func (uc *createCreditCardPurchaseUseCase) Execute(ctx context.Context, input Cr
 			Amount:            amount,
 			Currency:          input.Currency,
 			Description:       input.Description,
-			Category:          category,
+			CategoryID:        categoryID,
 			PaymentMethod:     entities.PaymentMethodCreditCard,
 			InstallmentNumber: &number,
 			Status:            entities.MovementStatusActive,

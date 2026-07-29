@@ -105,7 +105,7 @@ func (h *movementHandler) CreateMovement(w http.ResponseWriter, r *http.Request)
 			TotalAmount:  req.Amount,
 			Currency:     currency,
 			Description:  req.Description,
-			Category:     req.Category,
+			CategoryID:   req.CategoryID,
 			Installments: req.Installments,
 		})
 		if err != nil {
@@ -121,7 +121,7 @@ func (h *movementHandler) CreateMovement(w http.ResponseWriter, r *http.Request)
 		Amount:                      req.Amount,
 		Currency:                    currency,
 		Description:                 req.Description,
-		Category:                    req.Category,
+		CategoryID:                  req.CategoryID,
 		PaymentMethod:               req.PaymentMethod,
 		AccountID:                   accountID,
 		AvoidabilityOverridePercent: req.AvoidabilityOverridePercent,
@@ -229,7 +229,7 @@ func (h *movementHandler) UpdateMovement(w http.ResponseWriter, r *http.Request)
 
 	input := usecases.UpdateMovementInput{
 		Description:                 req.Description,
-		Category:                    req.Category,
+		CategoryID:                  req.CategoryID,
 		PaymentMethod:               req.PaymentMethod,
 		AccountID:                   req.AccountID,
 		Amount:                      req.Amount,
@@ -359,9 +359,9 @@ func (h *movementHandler) Cashflow(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusOK, resp)
 }
 
-// ListCategories handles GET /categories: the caller's own category
-// registry (BACK-14 — id, name, avoidability_percent; system rows
-// "transfer"/"income" lazily ensured first) plus the still-fixed
+// ListCategories handles GET /categories: the full global category
+// registry (BACK-14 follow-up — id, name, avoidability_percent,
+// is_contributor relative to the caller) plus the still-fixed
 // payment-method list (BACK-17's job to turn into its own registry).
 func (h *movementHandler) ListCategories(w http.ResponseWriter, r *http.Request) {
 	userID, ok := reqctx.UserID(r.Context())
@@ -370,14 +370,14 @@ func (h *movementHandler) ListCategories(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	categoryRows, err := h.listCategories.Execute(r.Context(), userID)
+	categoryRows, err := h.listCategories.Execute(r.Context())
 	if err != nil {
 		h.writeUsecaseError(w, "list categories", err)
 		return
 	}
 	categories := make([]interfacedto.CategoryResponse, 0, len(categoryRows))
 	for _, c := range categoryRows {
-		categories = append(categories, toCategoryResponse(c))
+		categories = append(categories, toCategoryResponse(c, userID))
 	}
 
 	methods := make([]string, 0)
@@ -418,6 +418,9 @@ func toMovementResponse(m *dto.MovementDTO) interfacedto.MovementResponse {
 		SyncStatus:                  m.SyncStatus,
 		Timestamp:                   m.Timestamp,
 	}
+	if m.CategoryID != nil {
+		resp.CategoryID = *m.CategoryID
+	}
 	if m.AccountID != nil {
 		resp.AccountID = *m.AccountID
 	}
@@ -438,6 +441,9 @@ func toMovementResponse(m *dto.MovementDTO) interfacedto.MovementResponse {
 	}
 	if m.TransferID != nil {
 		resp.TransferID = *m.TransferID
+	}
+	if m.RecurringRuleID != nil {
+		resp.RecurringRuleID = *m.RecurringRuleID
 	}
 	return resp
 }
@@ -465,6 +471,9 @@ func toPurchaseResponse(p *dto.CreditCardPurchaseDTO, movements []*dto.MovementD
 		InstallmentCount: p.InstallmentCount,
 		PurchaseDate:     p.PurchaseDate,
 		Status:           p.Status,
+	}
+	if p.CategoryID != nil {
+		resp.CategoryID = *p.CategoryID
 	}
 	for _, m := range movements {
 		resp.Movements = append(resp.Movements, toMovementResponse(m))

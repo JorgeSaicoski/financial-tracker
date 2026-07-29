@@ -14,8 +14,9 @@
 -- leave that FK pointing at a table about to be dropped and recreated.
 -- Every column each table has picked up since 001/002 (009's 'local'
 -- sync_status + account_id/transfer_id carryover, 012's
--- avoidability_override_percent) is carried over here too, since this
--- rebuilds the *whole* table, not just the category column.
+-- avoidability_override_percent, 008_create_recurring_rules_table.sql's
+-- recurring_rule_id) is carried over here too, since this rebuilds the
+-- *whole* table, not just the category column.
 CREATE TABLE credit_card_purchases_new (
     id                TEXT PRIMARY KEY,
     user_id           TEXT    NOT NULL,
@@ -69,7 +70,8 @@ CREATE TABLE movements_new (
     created_at                    TEXT    NOT NULL,
     account_id                    TEXT    REFERENCES accounts(id),
     transfer_id                   TEXT,
-    avoidability_override_percent INTEGER
+    avoidability_override_percent INTEGER,
+    recurring_rule_id             TEXT    REFERENCES recurring_rules(id)
 );
 
 INSERT INTO movements_new (
@@ -78,7 +80,7 @@ INSERT INTO movements_new (
     cancels_movement_id, reversed_by_movement_id, timestamp, sync_status,
     ledger_transaction_id, sync_attempts, last_sync_error,
     last_sync_attempt_at, synced_at, created_at, account_id, transfer_id,
-    avoidability_override_percent
+    avoidability_override_percent, recurring_rule_id
 )
 SELECT
     id, user_id, amount, currency, description, category, payment_method,
@@ -86,7 +88,7 @@ SELECT
     cancels_movement_id, reversed_by_movement_id, timestamp, sync_status,
     ledger_transaction_id, sync_attempts, last_sync_error,
     last_sync_attempt_at, synced_at, created_at, account_id, transfer_id,
-    avoidability_override_percent
+    avoidability_override_percent, recurring_rule_id
 FROM movements;
 
 DROP TABLE movements;
@@ -103,3 +105,5 @@ CREATE INDEX IF NOT EXISTS idx_movements_transfer
     ON movements (transfer_id) WHERE transfer_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_movements_account
     ON movements (account_id) WHERE account_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_movements_recurring_rule
+    ON movements (recurring_rule_id) WHERE recurring_rule_id IS NOT NULL;

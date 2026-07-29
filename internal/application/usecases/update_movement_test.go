@@ -17,13 +17,17 @@ func TestUpdateMovementMetadataOnSyncedMovementEditsInPlace(t *testing.T) {
 	repo := newFakeMovementRepo()
 	trigger := &fakeSyncTrigger{}
 	repo.add(activeMovement("m1", -500, entities.SyncStatusSynced))
+	categories := newFakeCategoryRepo()
+	transport, err := categories.Create(context.Background(), &dto.CategoryDTO{Name: "transport", ContributorIDs: []string{"u1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	uc := NewUpdateMovement(repo, newFakeAccountRepo(), newFakeCategoryRepo(), trigger)
+	uc := NewUpdateMovement(repo, newFakeAccountRepo(), categories, trigger)
 	newDescription := "corrected description"
-	newCategory := "transport"
 	result, err := uc.Execute(context.Background(), "u1", "m1", UpdateMovementInput{
 		Description: &newDescription,
-		Category:    &newCategory,
+		CategoryID:  &transport.ID,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -31,7 +35,7 @@ func TestUpdateMovementMetadataOnSyncedMovementEditsInPlace(t *testing.T) {
 	if result.Reversal != nil || result.Replacement != nil {
 		t.Errorf("metadata-only edit must not reverse/recreate: %+v", result)
 	}
-	if result.Movement.Description != newDescription || result.Movement.Category != newCategory {
+	if result.Movement.Description != newDescription || result.Movement.CategoryID == nil || *result.Movement.CategoryID != transport.ID {
 		t.Errorf("metadata not applied: %+v", result.Movement)
 	}
 	if result.Movement.Amount != -500 {
@@ -42,7 +46,7 @@ func TestUpdateMovementMetadataOnSyncedMovementEditsInPlace(t *testing.T) {
 	}
 
 	stored, _ := repo.GetByID(context.Background(), "m1")
-	if stored.Description != newDescription || stored.Category != newCategory {
+	if stored.Description != newDescription || stored.CategoryID == nil || *stored.CategoryID != transport.ID {
 		t.Errorf("metadata not persisted: %+v", stored)
 	}
 }
@@ -207,18 +211,26 @@ func TestUpdateMovementPostSyncRollsBackReversalWhenReplacementCreationFails(t *
 // metadata must stay exactly as it was — it's a historical record now.
 func TestUpdateMovementPostSyncCombinedAmountAndMetadataEdit(t *testing.T) {
 	repo := newFakeMovementRepo()
+	categories := newFakeCategoryRepo()
+	other, err := categories.Create(context.Background(), &dto.CategoryDTO{ID: entities.CategoryOtherID, Name: entities.CategoryOther})
+	if err != nil {
+		t.Fatal(err)
+	}
+	income, err := categories.Create(context.Background(), &dto.CategoryDTO{ID: entities.CategoryIncomeID, Name: entities.CategoryIncome})
+	if err != nil {
+		t.Fatal(err)
+	}
 	m := activeMovement("m1", 10000, entities.SyncStatusSynced)
 	m.Description = "old description"
-	m.Category = "other"
+	m.CategoryID = &other.ID
 	repo.add(m)
 
-	uc := NewUpdateMovement(repo, newFakeAccountRepo(), newFakeCategoryRepo(), &fakeSyncTrigger{})
+	uc := NewUpdateMovement(repo, newFakeAccountRepo(), categories, &fakeSyncTrigger{})
 	newDescription := "salary, corrected"
-	newCategory := string(entities.CategoryIncome)
 	result, err := uc.Execute(context.Background(), "u1", "m1", UpdateMovementInput{
 		Amount:      int64Ptr(20000),
 		Description: &newDescription,
-		Category:    &newCategory,
+		CategoryID:  &income.ID,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -226,12 +238,13 @@ func TestUpdateMovementPostSyncCombinedAmountAndMetadataEdit(t *testing.T) {
 	if result.Replacement == nil {
 		t.Fatal("expected a replacement")
 	}
-	if result.Replacement.Amount != 20000 || result.Replacement.Description != newDescription || result.Replacement.Category != newCategory {
+	if result.Replacement.Amount != 20000 || result.Replacement.Description != newDescription ||
+		result.Replacement.CategoryID == nil || *result.Replacement.CategoryID != income.ID {
 		t.Errorf("replacement must carry the new amount and metadata: %+v", result.Replacement)
 	}
 
 	original, _ := repo.GetByID(context.Background(), "m1")
-	if original.Description != "old description" || original.Category != "other" {
+	if original.Description != "old description" || original.CategoryID == nil || *original.CategoryID != other.ID {
 		t.Errorf("original's metadata must stay exactly as it was, it's a historical record: %+v", original)
 	}
 }

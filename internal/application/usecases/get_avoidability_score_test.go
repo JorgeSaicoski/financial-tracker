@@ -15,6 +15,7 @@ type asFixture struct {
 	movements  *fakeMovementRepo
 	categories *fakeCategoryRepo
 	uc         GetAvoidabilityScoreUseCase
+	categoryID map[string]string // name -> id, for seed/tests to reference
 }
 
 func newASFixture(t *testing.T) *asFixture {
@@ -23,16 +24,20 @@ func newASFixture(t *testing.T) *asFixture {
 	categories := newFakeCategoryRepo()
 
 	ctx := context.Background()
+	categoryID := make(map[string]string)
 	for name, avoidability := range map[string]int{"dining": 80, "market": 20} {
 		a := avoidability
-		if _, err := categories.Create(ctx, &dto.CategoryDTO{UserID: "u1", Name: name, AvoidabilityPercent: &a}); err != nil {
+		c, err := categories.Create(ctx, &dto.CategoryDTO{Name: name, AvoidabilityPercent: &a, ContributorIDs: []string{"u1"}})
+		if err != nil {
 			t.Fatal(err)
 		}
+		categoryID[name] = c.ID
 	}
 
 	return &asFixture{
 		movements: movements, categories: categories,
-		uc: NewGetAvoidabilityScore(movements, categories),
+		uc:         NewGetAvoidabilityScore(movements, categories),
+		categoryID: categoryID,
 	}
 }
 
@@ -40,8 +45,9 @@ func newASFixture(t *testing.T) *asFixture {
 // name, amount (positive magnitude) on the 5th of monthStart.
 func (f *asFixture) seed(monthStart time.Time, category string, amount int64) {
 	day := monthStart.AddDate(0, 0, 4)
+	id := f.categoryID[category]
 	f.movements.add(&dto.MovementDTO{
-		UserID: "u1", Amount: -amount, Currency: "brl", Category: category,
+		UserID: "u1", Amount: -amount, Currency: "brl", CategoryID: &id,
 		Timestamp: day, CreatedAt: day, Status: string(entities.MovementStatusActive),
 	})
 }
@@ -204,8 +210,9 @@ func TestAvoidabilityScoreSecondCurrencyReportedSeparately(t *testing.T) {
 	f.seed(currentMonthStart, "dining", 400)
 
 	// A usd movement the same month — must not blend into the brl figures.
+	dining := f.categoryID["dining"]
 	f.movements.add(&dto.MovementDTO{
-		UserID: "u1", Amount: -200, Currency: "usd", Category: "dining",
+		UserID: "u1", Amount: -200, Currency: "usd", CategoryID: &dining,
 		Timestamp: currentMonthStart.AddDate(0, 0, 4), CreatedAt: currentMonthStart, Status: string(entities.MovementStatusActive),
 	})
 

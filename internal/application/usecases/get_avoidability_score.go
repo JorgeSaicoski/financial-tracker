@@ -3,7 +3,6 @@ package usecases
 import (
 	"context"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/JorgeSaicoski/financial-tracker/internal/application/dto"
@@ -61,11 +60,11 @@ func (uc *getAvoidabilityScoreUseCase) Execute(ctx context.Context, userID strin
 	if err != nil {
 		return nil, err
 	}
-	categoryRows, err := uc.categories.ListByUser(ctx, userID)
+	categoryRows, err := uc.categories.ListForUser(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
-	categoriesByName := CategoriesByName(categoryRows)
+	categoriesByID := CategoriesByID(categoryRows)
 
 	byMonth, _ := bucketByMonthAndCurrency(movements)
 
@@ -73,7 +72,7 @@ func (uc *getAvoidabilityScoreUseCase) Execute(ctx context.Context, userID strin
 	for i := months - 1; i >= 0; i-- {
 		monthDate := time.Date(currentMonthStart.Year(), currentMonthStart.Month()-time.Month(i), 1, 0, 0, 0, 0, time.UTC)
 		key := monthKey{year: monthDate.Year(), month: monthDate.Month()}
-		out = append(out, uc.buildScoredMonth(monthDate, key, byMonth, categoriesByName))
+		out = append(out, uc.buildScoredMonth(monthDate, key, byMonth, categoriesByID))
 	}
 	return out, nil
 }
@@ -83,7 +82,7 @@ func (uc *getAvoidabilityScoreUseCase) Execute(ctx context.Context, userID strin
 // baseline.
 func (uc *getAvoidabilityScoreUseCase) buildScoredMonth(
 	monthDate time.Time, key monthKey, byMonth map[monthKey]map[string][]*dto.MovementDTO,
-	categoriesByName map[string]*dto.CategoryDTO,
+	categoriesByID map[string]*dto.CategoryDTO,
 ) AvoidabilityScoreMonth {
 	report := AvoidabilityScoreMonth{Month: monthDate}
 
@@ -120,37 +119,39 @@ func (uc *getAvoidabilityScoreUseCase) buildScoredMonth(
 		}
 
 		categorySet := map[string]bool{}
-		for name := range actualSpend {
-			categorySet[name] = true
+		for id := range actualSpend {
+			categorySet[id] = true
 		}
 		for _, bs := range baselineSpends {
-			for name := range bs {
-				categorySet[name] = true
+			for id := range bs {
+				categorySet[id] = true
 			}
 		}
-		names := make([]string, 0, len(categorySet))
-		for name := range categorySet {
-			names = append(names, name)
+		ids := make([]string, 0, len(categorySet))
+		for id := range categorySet {
+			ids = append(ids, id)
 		}
-		sort.Strings(names)
+		sort.Strings(ids)
 
 		currencyView := AvoidabilityScoreCurrencyView{Currency: currency}
 		var overall float64
-		for _, name := range names {
+		for _, id := range ids {
 			var avoidabilityPercent *int
-			if c, ok := categoriesByName[strings.ToLower(name)]; ok {
+			var categoryName string
+			if c, ok := categoriesByID[id]; ok {
 				avoidabilityPercent = c.AvoidabilityPercent
+				categoryName = c.Name
 			}
 			score := CategoryAvoidabilityScore{
-				Category:            name,
+				Category:            categoryName,
 				AvoidabilityPercent: avoidabilityPercent,
-				Actual:              actualSpend[name],
+				Actual:              actualSpend[id],
 			}
 
 			var sum int64
 			var dataMonths int
 			for _, bs := range baselineSpends {
-				if v, ok := bs[name]; ok {
+				if v, ok := bs[id]; ok {
 					sum += v
 					dataMonths++
 				}

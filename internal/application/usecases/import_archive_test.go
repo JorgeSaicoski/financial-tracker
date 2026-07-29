@@ -15,7 +15,7 @@ func TestImportArchiveRestoresEverything(t *testing.T) {
 	accounts := newFakeAccountRepo()
 	movements := newFakeMovementRepo()
 	purchases := newFakePurchaseRepo(movements)
-	uc := NewImportArchive(accounts, movements, purchases)
+	uc := NewImportArchive(accounts, movements, purchases, newFakeCategoryRepo())
 
 	bundle := ArchiveBundle{
 		Accounts: []*dto.AccountDTO{
@@ -61,7 +61,7 @@ func TestImportArchiveIsIdempotent(t *testing.T) {
 	accounts := newFakeAccountRepo()
 	movements := newFakeMovementRepo()
 	purchases := newFakePurchaseRepo(movements)
-	uc := NewImportArchive(accounts, movements, purchases)
+	uc := NewImportArchive(accounts, movements, purchases, newFakeCategoryRepo())
 
 	m := activeMovement("mov-1", -100, entities.SyncStatusPending)
 	bundle := ArchiveBundle{
@@ -96,7 +96,7 @@ func TestImportArchiveDropsReversalLinks(t *testing.T) {
 	accounts := newFakeAccountRepo()
 	movements := newFakeMovementRepo()
 	purchases := newFakePurchaseRepo(movements)
-	uc := NewImportArchive(accounts, movements, purchases)
+	uc := NewImportArchive(accounts, movements, purchases, newFakeCategoryRepo())
 
 	original := activeMovement("mov-original", -100, entities.SyncStatusPending)
 	reversalID := "mov-reversal"
@@ -140,7 +140,7 @@ func TestImportArchiveRejectsMovementReferencingUnownedAccount(t *testing.T) {
 	accounts := newFakeAccountRepo()
 	movements := newFakeMovementRepo()
 	purchases := newFakePurchaseRepo(movements)
-	uc := NewImportArchive(accounts, movements, purchases)
+	uc := NewImportArchive(accounts, movements, purchases, newFakeCategoryRepo())
 
 	other, err := accounts.Create(ctx, &dto.AccountDTO{UserID: "user-2", Name: "Victim's account", Type: "bank", Currency: "usd"})
 	if err != nil {
@@ -166,7 +166,7 @@ func TestImportArchiveRejectsMovementReferencingUnownedPurchase(t *testing.T) {
 	accounts := newFakeAccountRepo()
 	movements := newFakeMovementRepo()
 	purchases := newFakePurchaseRepo(movements)
-	uc := NewImportArchive(accounts, movements, purchases)
+	uc := NewImportArchive(accounts, movements, purchases, newFakeCategoryRepo())
 
 	other, _, err := purchases.CreateWithInstallments(ctx, &dto.CreditCardPurchaseDTO{
 		UserID: "user-2", Category: "shopping", TotalAmount: -900,
@@ -194,7 +194,7 @@ func TestImportArchiveAllowsMovementReferencingAccountRestoredInSameBundle(t *te
 	accounts := newFakeAccountRepo()
 	movements := newFakeMovementRepo()
 	purchases := newFakePurchaseRepo(movements)
-	uc := NewImportArchive(accounts, movements, purchases)
+	uc := NewImportArchive(accounts, movements, purchases, newFakeCategoryRepo())
 
 	accountID := "acc-1"
 	m := activeMovement("mov-1", -100, entities.SyncStatusPending)
@@ -214,7 +214,7 @@ func TestImportArchiveAllowsMovementReferencingAccountRestoredInSameBundle(t *te
 }
 
 func TestImportArchiveRejectsEmptyUserID(t *testing.T) {
-	uc := NewImportArchive(newFakeAccountRepo(), newFakeMovementRepo(), newFakePurchaseRepo(newFakeMovementRepo()))
+	uc := NewImportArchive(newFakeAccountRepo(), newFakeMovementRepo(), newFakePurchaseRepo(newFakeMovementRepo()), newFakeCategoryRepo())
 	if _, err := uc.Execute(context.Background(), "", ArchiveBundle{}); err == nil {
 		t.Error("expected an error for empty user id")
 	}

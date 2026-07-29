@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/JorgeSaicoski/financial-tracker/internal/application/dto"
@@ -23,78 +24,95 @@ func NewCategoryRepository(db *sql.DB) repositories.CategoryRepository {
 	return &categoryRepository{db: db}
 }
 
-const categoryColumns = `id, user_id, name, avoidability_percent, created_at`
+const categoryColumns = `id, name, avoidability_percent, created_at`
 
-// EnsureByName is a check-then-insert, not an atomic upsert. SQLite's
-// single-connection pool (db.SetMaxOpenConns(1), see db.go) already
-// serializes every call here, so the (user_id, lower(name)) unique index
-// this table carries can't actually be raced in practice — but Create
-// re-reads on conflict anyway (mirroring the Postgres implementation,
-// which does need it) so this stays correct if that pooling assumption
-// ever changes.
-func (r *categoryRepository) EnsureByName(ctx context.Context, userID, name string, avoidabilityPercent *int) (*dto.CategoryDTO, error) {
-	existing, err := r.getByUserAndName(ctx, userID, name)
-	if err == nil {
-		return existing, nil
+// GetByID returns any category by id — categories are globally visible,
+// there's no ownership check here (see CategoryRepository doc comment).
+func (r *categoryRepository) GetByID(ctx context.Context, id string) (*dto.CategoryDTO, error) {
+	row := r.db.QueryRowContext(ctx, `SELECT `+categoryColumns+` FROM categories WHERE id = ?`, id)
+	c, err := scanCategory(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, apperrors.ErrNotFound
 	}
-	if !errors.Is(err, apperrors.ErrNotFound) {
+	if err != nil {
 		return nil, err
 	}
-	created, err := r.Create(ctx, &dto.CategoryDTO{
-		UserID:              userID,
-		Name:                name,
-		AvoidabilityPercent: avoidabilityPercent,
-		CreatedAt:           time.Now().UTC(),
-	})
-	if err == nil {
-		return created, nil
-	}
-	if winner, getErr := r.getByUserAndName(ctx, userID, name); getErr == nil {
-		return winner, nil
-	}
-	return nil, err
-}
-
-func (r *categoryRepository) getByUserAndName(ctx context.Context, userID, name string) (*dto.CategoryDTO, error) {
-	row := r.db.QueryRowContext(ctx,
-		`SELECT `+categoryColumns+` FROM categories WHERE user_id = ? AND lower(name) = lower(?)`,
-		userID, name)
-	c, err := scanCategory(row)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, apperrors.ErrNotFound
-	}
-	return c, err
-}
-
-func (r *categoryRepository) GetByID(ctx context.Context, userID, id string) (*dto.CategoryDTO, error) {
-	row := r.db.QueryRowContext(ctx,
-		`SELECT `+categoryColumns+` FROM categories WHERE id = ? AND user_id = ?`, id, userID)
-	c, err := scanCategory(row)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, apperrors.ErrNotFound
-	}
-	return c, err
-}
-
-func (r *categoryRepository) ListByUser(ctx context.Context, userID string) ([]*dto.CategoryDTO, error) {
-	rows, err := r.db.QueryContext(ctx,
-		`SELECT `+categoryColumns+` FROM categories WHERE user_id = ? ORDER BY name ASC`, userID)
+	contributors, err := r.loadContributors(ctx, []string{c.ID})
 	if err != nil {
-		return nil, fmt.Errorf("sqlite: query categories: %w", err)
+		return nil, err
+	}
+	c.ContributorIDs = contributors[c.ID]
+	return c, nil
+}
+
+func (r *categoryRepository) ListAll(ctx context.Context) ([]*dto.CategoryDTO, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT `+categoryColumns+` FROM categories ORDER BY name ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite: query all categories: %w", err)
 	}
 	defer rows.Close()
 
 	out := make([]*dto.CategoryDTO, 0)
+	ids := make([]string, 0)
 	for rows.Next() {
 		c, err := scanCategory(rows)
 		if err != nil {
 			return nil, err
 		}
 		out = append(out, c)
+		ids = append(ids, c.ID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	contributors, err := r.loadContributors(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range out {
+		c.ContributorIDs = contributors[c.ID]
+	}
+	return out, nil
+}
+
+// loadContributors batches category_maintainers lookups for one or many
+// category ids into a single query, so ListAll doesn't do an N+1 round
+// trip per row. Missing keys in the returned map mean zero contributors
+// (a system category), not an error.
+func (r *categoryRepository) loadContributors(ctx context.Context, categoryIDs []string) (map[string][]string, error) {
+	out := make(map[string][]string, len(categoryIDs))
+	if len(categoryIDs) == 0 {
+		return out, nil
+	}
+
+	placeholders := make([]string, len(categoryIDs))
+	args := make([]any, len(categoryIDs))
+	for i, cid := range categoryIDs {
+		placeholders[i] = "?"
+		args[i] = cid
+	}
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT category_id, user_id FROM category_maintainers WHERE category_id IN (`+strings.Join(placeholders, ", ")+`)`,
+		args...)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite: query category maintainers: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var categoryID, userID string
+		if err := rows.Scan(&categoryID, &userID); err != nil {
+			return nil, err
+		}
+		out[categoryID] = append(out[categoryID], userID)
 	}
 	return out, rows.Err()
 }
 
+// Create inserts the category and, in the same transaction, adds every
+// id in c.ContributorIDs to category_maintainers and to user_categories
+// — the creator both may edit it and has it, granted together.
 func (r *categoryRepository) Create(ctx context.Context, c *dto.CategoryDTO) (*dto.CategoryDTO, error) {
 	if c.ID == "" {
 		c.ID = id.NewUUID()
@@ -102,19 +120,41 @@ func (r *categoryRepository) Create(ctx context.Context, c *dto.CategoryDTO) (*d
 	if c.CreatedAt.IsZero() {
 		c.CreatedAt = time.Now().UTC()
 	}
-	_, err := r.db.ExecContext(ctx,
-		`INSERT INTO categories (`+categoryColumns+`) VALUES (?, ?, ?, ?, ?)`,
-		c.ID, c.UserID, c.Name, nullableInt(c.AvoidabilityPercent), formatTime(c.CreatedAt))
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite: begin create category: %w", err)
+	}
+	defer tx.Rollback()
+
+	_, err = tx.ExecContext(ctx,
+		`INSERT INTO categories (`+categoryColumns+`) VALUES (?, ?, ?, ?)`,
+		c.ID, c.Name, nullableInt(c.AvoidabilityPercent), formatTime(c.CreatedAt))
 	if err != nil {
 		return nil, fmt.Errorf("sqlite: insert category: %w", err)
+	}
+	for _, contributorID := range c.ContributorIDs {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO category_maintainers (category_id, user_id) VALUES (?, ?)`,
+			c.ID, contributorID); err != nil {
+			return nil, fmt.Errorf("sqlite: add contributor: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO user_categories (user_id, category_id) VALUES (?, ?)`,
+			contributorID, c.ID); err != nil {
+			return nil, fmt.Errorf("sqlite: add to user's list: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("sqlite: commit create category: %w", err)
 	}
 	return c, nil
 }
 
-func (r *categoryRepository) Update(ctx context.Context, userID, categoryID, name string, avoidabilityPercent *int) error {
+func (r *categoryRepository) Update(ctx context.Context, categoryID, name string, avoidabilityPercent *int) error {
 	result, err := r.db.ExecContext(ctx,
-		`UPDATE categories SET name = ?, avoidability_percent = ? WHERE id = ? AND user_id = ?`,
-		name, nullableInt(avoidabilityPercent), categoryID, userID)
+		`UPDATE categories SET name = ?, avoidability_percent = ? WHERE id = ?`,
+		name, nullableInt(avoidabilityPercent), categoryID)
 	if err != nil {
 		return fmt.Errorf("sqlite: update category: %w", err)
 	}
@@ -128,20 +168,105 @@ func (r *categoryRepository) Update(ctx context.Context, userID, categoryID, nam
 	return nil
 }
 
-func (r *categoryRepository) Delete(ctx context.Context, userID, categoryID string) error {
-	result, err := r.db.ExecContext(ctx,
-		`DELETE FROM categories WHERE id = ? AND user_id = ?`, categoryID, userID)
-	if err != nil {
-		return fmt.Errorf("sqlite: delete category: %w", err)
+func (r *categoryRepository) IsContributor(ctx context.Context, userID, categoryID string) (bool, error) {
+	var n int
+	if err := r.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM category_maintainers WHERE category_id = ? AND user_id = ?`,
+		categoryID, userID,
+	).Scan(&n); err != nil {
+		return false, fmt.Errorf("sqlite: check contributor: %w", err)
 	}
-	n, err := result.RowsAffected()
+	return n > 0, nil
+}
+
+func (r *categoryRepository) ListForUser(ctx context.Context, userID string) ([]*dto.CategoryDTO, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT `+categoryColumns+` FROM categories c
+		 JOIN user_categories uc ON uc.category_id = c.id
+		 WHERE uc.user_id = ?
+		 ORDER BY c.name ASC`, userID)
 	if err != nil {
-		return fmt.Errorf("sqlite: delete category rows affected: %w", err)
+		return nil, fmt.Errorf("sqlite: query categories for user: %w", err)
 	}
-	if n == 0 {
-		return apperrors.ErrNotFound
+	defer rows.Close()
+
+	out := make([]*dto.CategoryDTO, 0)
+	ids := make([]string, 0)
+	for rows.Next() {
+		c, err := scanCategory(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+		ids = append(ids, c.ID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	contributors, err := r.loadContributors(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range out {
+		c.ContributorIDs = contributors[c.ID]
+	}
+	return out, nil
+}
+
+func (r *categoryRepository) HasForUser(ctx context.Context, userID, categoryID string) (bool, error) {
+	var n int
+	if err := r.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM user_categories WHERE user_id = ? AND category_id = ?`,
+		userID, categoryID,
+	).Scan(&n); err != nil {
+		return false, fmt.Errorf("sqlite: check user has category: %w", err)
+	}
+	return n > 0, nil
+}
+
+func (r *categoryRepository) Remove(ctx context.Context, userID, categoryID string) error {
+	if _, err := r.db.ExecContext(ctx,
+		`DELETE FROM user_categories WHERE user_id = ? AND category_id = ?`,
+		userID, categoryID,
+	); err != nil {
+		return fmt.Errorf("sqlite: remove category from user's list: %w", err)
 	}
 	return nil
+}
+
+func (r *categoryRepository) RemoveAndReassign(ctx context.Context, userID, categoryID, defaultCategoryID string) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("sqlite: begin remove and reassign: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE movements SET category_id = ? WHERE category_id = ? AND user_id = ?`,
+		defaultCategoryID, categoryID, userID,
+	); err != nil {
+		return fmt.Errorf("sqlite: reassign movements: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE credit_card_purchases SET category_id = ? WHERE category_id = ? AND user_id = ?`,
+		defaultCategoryID, categoryID, userID,
+	); err != nil {
+		return fmt.Errorf("sqlite: reassign credit card purchases: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE recurring_rules SET category_id = ? WHERE category_id = ? AND user_id = ?`,
+		defaultCategoryID, categoryID, userID,
+	); err != nil {
+		return fmt.Errorf("sqlite: reassign recurring rules: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM user_categories WHERE user_id = ? AND category_id = ?`,
+		userID, categoryID,
+	); err != nil {
+		return fmt.Errorf("sqlite: remove category from user's list: %w", err)
+	}
+	return tx.Commit()
 }
 
 // nullableInt converts a *int to the driver.Value SQLite expects for a
@@ -160,7 +285,7 @@ func scanCategory(row scannable) (*dto.CategoryDTO, error) {
 		avoidabilityPercent sql.NullInt64
 		createdAt           string
 	)
-	if err := row.Scan(&c.ID, &c.UserID, &c.Name, &avoidabilityPercent, &createdAt); err != nil {
+	if err := row.Scan(&c.ID, &c.Name, &avoidabilityPercent, &createdAt); err != nil {
 		return nil, err
 	}
 	if avoidabilityPercent.Valid {
