@@ -15,8 +15,9 @@ func TestGetCashflowExcludesTransfers(t *testing.T) {
 	to := mustCreateAccount(t, accounts, "u1", "usd")
 
 	now := time.Now().UTC()
+	incomeCategoryID := entities.CategoryIncomeID
 	income := activeMovement("income", 1000, entities.SyncStatusPending)
-	income.Category = string(entities.CategoryIncome)
+	income.CategoryID = &incomeCategoryID
 	income.Timestamp = now
 	movements.add(income)
 

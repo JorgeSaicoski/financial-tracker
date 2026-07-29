@@ -11,7 +11,7 @@ import (
 
 func newPurchaseUseCase() (CreateCreditCardPurchaseUseCase, *fakeMovementRepo) {
 	movements := newFakeMovementRepo()
-	return NewCreateCreditCardPurchase(newFakePurchaseRepo(movements), newFakeCardRepo(), newFakeUserSettingsRepo()), movements
+	return NewCreateCreditCardPurchase(newFakePurchaseRepo(movements), newFakeCardRepo(), newFakeCategoryRepo(), newFakeUserSettingsRepo()), movements
 }
 
 func TestCreatePurchaseValidation(t *testing.T) {
@@ -24,7 +24,6 @@ func TestCreatePurchaseValidation(t *testing.T) {
 		{"one installment", CreateCreditCardPurchaseInput{UserID: "u1", TotalAmount: -1000, Currency: "usd", Installments: 1}},
 		{"zero amount", CreateCreditCardPurchaseInput{UserID: "u1", Currency: "usd", Installments: 3}},
 		{"too small to split", CreateCreditCardPurchaseInput{UserID: "u1", TotalAmount: -5, Currency: "usd", Installments: 12}},
-		{"unknown category", CreateCreditCardPurchaseInput{UserID: "u1", TotalAmount: -1000, Currency: "usd", Installments: 3, Category: "yacht"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -77,7 +76,6 @@ func TestCreatePurchaseInstallmentShape(t *testing.T) {
 	uc, movements := newPurchaseUseCase()
 	purchase, installments, err := uc.Execute(context.Background(), CreateCreditCardPurchaseInput{
 		UserID: "u1", TotalAmount: -900, Currency: "usd", Installments: 3, Description: "tv",
-		Category: string(entities.CategoryShopping),
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -116,7 +114,7 @@ func TestCreatePurchaseWithCardDatesInstallmentsOnDueDays(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	uc := NewCreateCreditCardPurchase(newFakePurchaseRepo(movements), cards, newFakeUserSettingsRepo())
+	uc := NewCreateCreditCardPurchase(newFakePurchaseRepo(movements), cards, newFakeCategoryRepo(), newFakeUserSettingsRepo())
 
 	purchase, installments, err := uc.Execute(context.Background(), CreateCreditCardPurchaseInput{
 		UserID: "u1", TotalAmount: -900, Currency: "usd", Installments: 3, CardID: &card.ID,

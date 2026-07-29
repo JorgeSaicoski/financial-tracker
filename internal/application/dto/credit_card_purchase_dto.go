@@ -7,12 +7,16 @@ import (
 )
 
 // CreditCardPurchaseDTO is the application layer's representation of an
-// installment-purchase grouping record. Category and Status are plain
-// strings, validated in usecases via the domain types.
+// installment-purchase grouping record. Status is a plain string,
+// validated in usecases via the domain type. CategoryID is the actual
+// foreign key (BACK-14 follow-up) — Category is a read-only display
+// name resolved by the repository via a join on read, same convention
+// as MovementDTO; see that type's own comment.
 type CreditCardPurchaseDTO struct {
 	ID               string
 	UserID           string
 	Description      string
+	CategoryID       *string
 	Category         string
 	TotalAmount      int64 // signed, smallest currency unit
 	Currency         string
@@ -32,7 +36,7 @@ func CreditCardPurchaseFromEntity(p *entities.CreditCardPurchase) *CreditCardPur
 		ID:               p.ID,
 		UserID:           p.UserID,
 		Description:      p.Description,
-		Category:         string(p.Category),
+		CategoryID:       p.CategoryID,
 		TotalAmount:      p.TotalAmount,
 		Currency:         p.Currency,
 		InstallmentCount: p.InstallmentCount,
@@ -51,7 +55,7 @@ func (p *CreditCardPurchaseDTO) ToEntity() *entities.CreditCardPurchase {
 		ID:               p.ID,
 		UserID:           p.UserID,
 		Description:      p.Description,
-		Category:         entities.Category(p.Category),
+		CategoryID:       p.CategoryID,
 		TotalAmount:      p.TotalAmount,
 		Currency:         p.Currency,
 		InstallmentCount: p.InstallmentCount,
