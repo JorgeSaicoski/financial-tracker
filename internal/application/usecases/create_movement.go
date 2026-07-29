@@ -12,23 +12,31 @@ import (
 )
 
 type createMovementUseCase struct {
-	repo     repositories.MovementRepository
-	accounts repositories.AccountRepository
-	plans    repositories.PlanRepository
-	settings repositories.UserSettingsRepository
+	repo       repositories.MovementRepository
+	accounts   repositories.AccountRepository
+	plans      repositories.PlanRepository
+	categories repositories.CategoryRepository
+	settings   repositories.UserSettingsRepository
 }
 
 // NewCreateMovement returns interface type for dependency injection.
-func NewCreateMovement(repo repositories.MovementRepository, accounts repositories.AccountRepository, plans repositories.PlanRepository, settings repositories.UserSettingsRepository) CreateMovementUseCase {
-	return &createMovementUseCase{repo: repo, accounts: accounts, plans: plans, settings: settings}
+func NewCreateMovement(repo repositories.MovementRepository, accounts repositories.AccountRepository, plans repositories.PlanRepository, categories repositories.CategoryRepository, settings repositories.UserSettingsRepository) CreateMovementUseCase {
+	return &createMovementUseCase{repo: repo, accounts: accounts, plans: plans, categories: categories, settings: settings}
 }
 
 func (uc *createMovementUseCase) Execute(ctx context.Context, input CreateMovementInput) (*dto.MovementDTO, error) {
 	if input.UserID == "" || input.Currency == "" || input.Amount == 0 {
 		return nil, apperrors.ErrInvalidInput
 	}
+	if err := validateAvoidabilityPercent(input.AvoidabilityOverridePercent); err != nil {
+		return nil, err
+	}
 
-	category, paymentMethod, err := normalizeCategoryAndMethod(input.Category, input.PaymentMethod)
+	paymentMethod, err := normalizePaymentMethod(input.PaymentMethod)
+	if err != nil {
+		return nil, err
+	}
+	categoryID, err := resolveCategoryID(ctx, uc.categories, input.UserID, input.CategoryID)
 	if err != nil {
 		return nil, err
 	}
@@ -71,38 +79,35 @@ func (uc *createMovementUseCase) Execute(ctx context.Context, input CreateMoveme
 
 	now := time.Now().UTC()
 	movement := &entities.Movement{
-		UserID:        input.UserID,
-		Amount:        input.Amount,
-		Currency:      input.Currency,
-		Description:   input.Description,
-		Category:      category,
-		PaymentMethod: paymentMethod,
-		AccountID:     input.AccountID,
-		PlanID:        planID,
-		Status:        entities.MovementStatusActive,
-		SyncStatus:    syncStatus,
-		Timestamp:     now,
-		CreatedAt:     now,
+		UserID:                      input.UserID,
+		Amount:                      input.Amount,
+		Currency:                    input.Currency,
+		Description:                 input.Description,
+		CategoryID:                  categoryID,
+		PaymentMethod:               paymentMethod,
+		AvoidabilityOverridePercent: input.AvoidabilityOverridePercent,
+		AccountID:                   input.AccountID,
+		PlanID:                      planID,
+		Status:                      entities.MovementStatusActive,
+		SyncStatus:                  syncStatus,
+		Timestamp:                   now,
+		CreatedAt:                   now,
 	}
 
 	return uc.repo.Create(ctx, dto.MovementFromEntity(movement))
 }
 
-// normalizeCategoryAndMethod applies the empty-means-other default and
-// rejects values outside the domain's fixed lists. Inputs arrive as
-// plain strings (application/dto convention); the domain types do the
-// validating.
-func normalizeCategoryAndMethod(category, method string) (entities.Category, entities.PaymentMethod, error) {
-	c := entities.Category(category)
+// normalizePaymentMethod applies the empty-means-other default and
+// rejects values outside the domain's fixed payment-method list. Category
+// doesn't go through here — it's a real foreign key now, validated via
+// resolveCategoryID in categories.go.
+func normalizePaymentMethod(method string) (entities.PaymentMethod, error) {
 	m := entities.PaymentMethod(method)
-	if c == "" {
-		c = entities.CategoryOther
-	}
 	if m == "" {
 		m = entities.PaymentMethodOther
 	}
-	if !c.IsValid() || !m.IsValid() {
-		return "", "", apperrors.ErrInvalidInput
+	if !m.IsValid() {
+		return "", apperrors.ErrInvalidInput
 	}
-	return c, m, nil
+	return m, nil
 }

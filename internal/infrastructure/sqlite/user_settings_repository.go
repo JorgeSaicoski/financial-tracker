@@ -21,7 +21,7 @@ func NewUserSettingsRepository(db *sql.DB) repositories.UserSettingsRepository {
 	return &userSettingsRepository{db: db}
 }
 
-const userSettingsColumns = `user_id, ledger_sync_entitled, ledger_sync_enabled, cloud_storage_entitled, created_at, updated_at`
+const userSettingsColumns = `user_id, ledger_sync_entitled, ledger_sync_enabled, cloud_storage_entitled, default_category_id, created_at, updated_at`
 
 func (r *userSettingsRepository) Get(ctx context.Context, userID string) (*dto.UserSettingsDTO, error) {
 	row := r.db.QueryRowContext(ctx, `SELECT `+userSettingsColumns+` FROM user_settings WHERE user_id = ?`, userID)
@@ -46,13 +46,31 @@ func (r *userSettingsRepository) UpdateEnabled(ctx context.Context, userID strin
 	now := time.Now().UTC()
 	_, err := r.db.ExecContext(ctx,
 		`INSERT INTO user_settings (`+userSettingsColumns+`)
-		 VALUES (?, ?, ?, ?, ?, ?)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(user_id) DO UPDATE SET
 		   ledger_sync_enabled = excluded.ledger_sync_enabled,
 		   updated_at = excluded.updated_at`,
-		userID, true, ledgerSyncEnabled, true, formatTime(now), formatTime(now))
+		userID, true, ledgerSyncEnabled, true, nil, formatTime(now), formatTime(now))
 	if err != nil {
 		return nil, fmt.Errorf("sqlite: upsert user settings: %w", err)
+	}
+	return r.Get(ctx, userID)
+}
+
+// SetDefaultCategory upserts default_category_id — same lazy-row pattern
+// as UpdateEnabled, but leaves ledger_sync_enabled untouched on conflict
+// instead of the other way around.
+func (r *userSettingsRepository) SetDefaultCategory(ctx context.Context, userID string, categoryID *string) (*dto.UserSettingsDTO, error) {
+	now := time.Now().UTC()
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO user_settings (`+userSettingsColumns+`)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(user_id) DO UPDATE SET
+		   default_category_id = excluded.default_category_id,
+		   updated_at = excluded.updated_at`,
+		userID, true, true, true, categoryID, formatTime(now), formatTime(now))
+	if err != nil {
+		return nil, fmt.Errorf("sqlite: upsert user settings default category: %w", err)
 	}
 	return r.Get(ctx, userID)
 }
@@ -79,12 +97,14 @@ func (r *userSettingsRepository) ListSyncDisabledUserIDs(ctx context.Context) ([
 func scanUserSettings(row scannable) (*dto.UserSettingsDTO, error) {
 	var (
 		s                    dto.UserSettingsDTO
+		defaultCategoryID    sql.NullString
 		createdAt, updatedAt string
 	)
-	err := row.Scan(&s.UserID, &s.LedgerSyncEntitled, &s.LedgerSyncEnabled, &s.CloudStorageEntitled, &createdAt, &updatedAt)
+	err := row.Scan(&s.UserID, &s.LedgerSyncEntitled, &s.LedgerSyncEnabled, &s.CloudStorageEntitled, &defaultCategoryID, &createdAt, &updatedAt)
 	if err != nil {
 		return nil, err
 	}
+	s.DefaultCategoryID = stringPtr(defaultCategoryID)
 	if s.CreatedAt, err = parseTime(createdAt); err != nil {
 		return nil, fmt.Errorf("sqlite: parse user_settings created_at: %w", err)
 	}

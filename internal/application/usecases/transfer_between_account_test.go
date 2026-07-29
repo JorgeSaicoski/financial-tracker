@@ -44,7 +44,8 @@ func TestTransferBetweenAccountsHappyPath(t *testing.T) {
 	if *result.Debit.TransferID != result.TransferID || *result.Credit.TransferID != result.TransferID {
 		t.Error("legs not linked by transfer id")
 	}
-	if result.Debit.Category != string(entities.CategoryTransfer) || result.Credit.Category != string(entities.CategoryTransfer) {
+	if result.Debit.CategoryID == nil || *result.Debit.CategoryID != entities.CategoryTransferID ||
+		result.Credit.CategoryID == nil || *result.Credit.CategoryID != entities.CategoryTransferID {
 		t.Error("legs must be categorized as transfer")
 	}
 

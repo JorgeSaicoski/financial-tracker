@@ -71,8 +71,17 @@ type MovementRepository interface {
 	// UpdateMetadata overwrites the local-only fields — description,
 	// category, payment method, account, plan — regardless of sync
 	// status, since none of them are ever pushed to ledger-service.
-	// Category and paymentMethod arrive already validated by the usecase.
-	UpdateMetadata(ctx context.Context, id, description, category, paymentMethod string, accountID, planID *string) error
+	// categoryID and paymentMethod arrive already validated by the
+	// usecase; nil categoryID clears it (genuinely uncategorized).
+	UpdateMetadata(ctx context.Context, id, description string, categoryID *string, paymentMethod string, accountID, planID *string) error
+	// UpdateAvoidabilityOverride overwrites a movement's ad-hoc
+	// avoidability_override_percent (BACK-14) — local-only, like
+	// UpdateMetadata's fields, editable regardless of sync status. A
+	// separate method rather than a new UpdateMetadata parameter: nil is
+	// itself a legitimate target value (clearing the override), so it
+	// can't reuse UpdateMetadata's "every string param is always
+	// supplied" shape.
+	UpdateAvoidabilityOverride(ctx context.Context, id string, avoidabilityOverridePercent *int) error
 	// UpdateFinancial overwrites amount/currency/timestamp in place.
 	// Callers must only use this on a movement that hasn't synced yet —
 	// once ledger-service has it, these fields are immutable there.

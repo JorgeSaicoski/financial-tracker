@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	recurringapp "github.com/JorgeSaicoski/financial-tracker/internal/application/recurring"
 	"github.com/JorgeSaicoski/financial-tracker/internal/application/repositories"
 	syncapp "github.com/JorgeSaicoski/financial-tracker/internal/application/sync"
 	"github.com/JorgeSaicoski/financial-tracker/internal/application/usecases"
@@ -68,23 +69,27 @@ func main() {
 
 	syncInterval := durationEnvOr(log, "SYNC_INTERVAL", 30*time.Second)
 	retryCooldown := durationEnvOr(log, "SYNC_RETRY_COOLDOWN", 60*time.Second)
+	recurringInterval := durationEnvOr(log, "RECURRING_INTERVAL", 1*time.Hour)
 
 	// Infrastructure: the local database (SQLite by default, or Postgres
 	// when DB_DRIVER=postgres) is the source of truth; ledger-service is
 	// only reached by the background sync, so requests keep working while
 	// it's down.
 	var (
-		db               *sql.DB
-		err              error
-		movementRepo     repositories.MovementRepository
-		purchaseRepo     repositories.CreditCardPurchaseRepository
-		accountRepo      repositories.AccountRepository
-		currencyRepo     repositories.CurrencyRepository
-		exchangeRateRepo repositories.ExchangeRateRepository
-		localArchiveRepo repositories.LocalArchiveSettingsRepository
-		planRepo         repositories.PlanRepository
-		userRepo         repositories.UserRepository
-		settingsRepo     repositories.UserSettingsRepository
+		db                *sql.DB
+		err               error
+		movementRepo      repositories.MovementRepository
+		purchaseRepo      repositories.CreditCardPurchaseRepository
+		accountRepo       repositories.AccountRepository
+		currencyRepo      repositories.CurrencyRepository
+		categoryRepo      repositories.CategoryRepository
+		exchangeRateRepo  repositories.ExchangeRateRepository
+		recurringRuleRepo repositories.RecurringRuleRepository
+		localArchiveRepo  repositories.LocalArchiveSettingsRepository
+		planRepo          repositories.PlanRepository
+		userRepo          repositories.UserRepository
+		settingsRepo      repositories.UserSettingsRepository
+		limitsRepo        repositories.LimitsRepository
 	)
 
 	switch dbDriver {
@@ -113,11 +118,14 @@ func main() {
 		purchaseRepo = postgresql.NewCreditCardPurchaseRepository(db)
 		accountRepo = postgresql.NewAccountRepository(db)
 		currencyRepo = postgresql.NewCurrencyRepository(db)
+		categoryRepo = postgresql.NewCategoryRepository(db)
 		exchangeRateRepo = postgresql.NewExchangeRateRepository(db)
+		recurringRuleRepo = postgresql.NewRecurringRuleRepository(db)
 		localArchiveRepo = postgresql.NewLocalArchiveSettingsRepository(db)
 		planRepo = postgresql.NewPlanRepository(db)
 		userRepo = postgresql.NewUserRepository(db)
 		settingsRepo = postgresql.NewUserSettingsRepository(db)
+		limitsRepo = postgresql.NewLimitsRepository(db)
 	case "sqlite":
 		db, err = sqlite.Open(dbPath)
 		if err != nil {
@@ -132,11 +140,14 @@ func main() {
 		purchaseRepo = sqlite.NewCreditCardPurchaseRepository(db)
 		accountRepo = sqlite.NewAccountRepository(db)
 		currencyRepo = sqlite.NewCurrencyRepository(db)
+		categoryRepo = sqlite.NewCategoryRepository(db)
 		exchangeRateRepo = sqlite.NewExchangeRateRepository(db)
+		recurringRuleRepo = sqlite.NewRecurringRuleRepository(db)
 		localArchiveRepo = sqlite.NewLocalArchiveSettingsRepository(db)
 		planRepo = sqlite.NewPlanRepository(db)
 		userRepo = sqlite.NewUserRepository(db)
 		settingsRepo = sqlite.NewUserSettingsRepository(db)
+		limitsRepo = sqlite.NewLimitsRepository(db)
 	default:
 		log.Error("unknown DB_DRIVER %q (want sqlite or postgres)", dbDriver)
 		os.Exit(1)
@@ -146,12 +157,13 @@ func main() {
 	ledgerClient := ledgerservice.NewClient(ledgerServiceURL)
 	ledgerGateway := ledgerservice.NewLedgerGateway(ledgerClient)
 	syncService := syncapp.NewService(movementRepo, settingsRepo, ledgerGateway, log, retryCooldown)
+	recurringService := recurringapp.NewService(recurringRuleRepo, log)
 
-	createMovement := usecases.NewCreateMovement(movementRepo, accountRepo, planRepo, settingsRepo)
-	createPurchase := usecases.NewCreateCreditCardPurchase(purchaseRepo, settingsRepo)
+	createMovement := usecases.NewCreateMovement(movementRepo, accountRepo, planRepo, categoryRepo, settingsRepo)
+	createPurchase := usecases.NewCreateCreditCardPurchase(purchaseRepo, categoryRepo, settingsRepo)
 	getMovement := usecases.NewGetMovement(movementRepo)
 	listMovements := usecases.NewListMovements(movementRepo)
-	updateMovement := usecases.NewUpdateMovement(movementRepo, accountRepo, planRepo, syncService)
+	updateMovement := usecases.NewUpdateMovement(movementRepo, accountRepo, planRepo, categoryRepo, syncService)
 	cancelMovement := usecases.NewCancelMovement(movementRepo, syncService)
 	cancelPurchase := usecases.NewCancelCreditCardPurchase(purchaseRepo, movementRepo, syncService)
 	getCashflow := usecases.NewGetCashflow(movementRepo, accountRepo)
@@ -165,10 +177,13 @@ func main() {
 	setExchangeRate := usecases.NewSetExchangeRate(exchangeRateRepo, currencyRepo)
 	listExchangeRates := usecases.NewListExchangeRates(exchangeRateRepo)
 	deleteExchangeRate := usecases.NewDeleteExchangeRate(exchangeRateRepo)
+	createRecurringRule := usecases.NewCreateRecurringRule(recurringRuleRepo, accountRepo, categoryRepo)
+	listRecurringRules := usecases.NewListRecurringRules(recurringRuleRepo)
+	updateRecurringRule := usecases.NewUpdateRecurringRule(recurringRuleRepo, accountRepo, categoryRepo)
 	getLocalArchiveSetting := usecases.NewGetLocalArchiveSetting(localArchiveRepo)
 	setLocalArchiveSetting := usecases.NewSetLocalArchiveSetting(localArchiveRepo)
 	exportArchive := usecases.NewExportArchive(accountRepo, movementRepo, purchaseRepo)
-	importArchive := usecases.NewImportArchive(accountRepo, movementRepo, purchaseRepo)
+	importArchive := usecases.NewImportArchive(accountRepo, movementRepo, purchaseRepo, categoryRepo)
 	createPlan := usecases.NewCreatePlan(planRepo, accountRepo)
 	listPlans := usecases.NewListPlans(planRepo, movementRepo)
 	getPlan := usecases.NewGetPlan(planRepo, movementRepo)
@@ -176,7 +191,11 @@ func main() {
 	ensureUser := usecases.NewEnsureUser(userRepo)
 	getUser := usecases.NewGetUser(userRepo)
 	getSettings := usecases.NewGetUserSettings(settingsRepo)
-	updateSettings := usecases.NewUpdateUserSettings(settingsRepo, movementRepo)
+	updateSettings := usecases.NewUpdateUserSettings(settingsRepo, movementRepo, categoryRepo)
+	createCategory := usecases.NewCreateCategory(categoryRepo, limitsRepo)
+	listCategories := usecases.NewListCategories(categoryRepo)
+	updateCategory := usecases.NewUpdateCategory(categoryRepo)
+	deleteCategory := usecases.NewDeleteCategory(categoryRepo, settingsRepo)
 
 	movementHandler := handlers.NewMovementHandler(
 		createMovement,
@@ -187,14 +206,17 @@ func main() {
 		cancelMovement,
 		cancelPurchase,
 		getCashflow,
+		listCategories,
 		syncService,
 		defaultCurrency,
 		log,
 	)
 	accountHandler := handlers.NewAccountHandler(createAccount, listAccounts, reportBalance, log)
 	currencyHandler := handlers.NewCurrencyHandler(listCurrencies, addCurrency, log)
+	categoryHandler := handlers.NewCategoryHandler(createCategory, updateCategory, deleteCategory, log)
 	transferHandler := handlers.NewTransferHandler(transferBetweenAccounts, cancelTransfer, log)
 	exchangeRateHandler := handlers.NewExchangeRateHandler(setExchangeRate, listExchangeRates, deleteExchangeRate, log)
+	recurringRuleHandler := handlers.NewRecurringRuleHandler(createRecurringRule, listRecurringRules, updateRecurringRule, defaultCurrency, log)
 	archiveHandler := handlers.NewArchiveHandler(getLocalArchiveSetting, setLocalArchiveSetting, exportArchive, importArchive, log)
 	planHandler := handlers.NewPlanHandler(createPlan, listPlans, getPlan, updatePlan, log)
 	settingsHandler := handlers.NewSettingsHandler(getSettings, updateSettings, log)
@@ -223,11 +245,12 @@ func main() {
 		log.Info("auth: validating Authorization bearer tokens against OIDC issuer %s (audience %q)", oidcIssuerURL, oidcAudience)
 	}
 
-	router := api.NewRouter(movementHandler, accountHandler, currencyHandler, transferHandler, exchangeRateHandler, archiveHandler, planHandler, settingsHandler, userHandler, configHandler, authMiddleware, corsAllowedOrigin)
+	router := api.NewRouter(movementHandler, accountHandler, currencyHandler, categoryHandler, transferHandler, exchangeRateHandler, recurringRuleHandler, archiveHandler, planHandler, settingsHandler, userHandler, configHandler, authMiddleware, corsAllowedOrigin)
 
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
 	syncService.Start(ctx, syncInterval)
+	recurringService.Start(ctx, recurringInterval)
 
 	dbDescription := dbPath
 	if dbDriver == "postgres" {
@@ -235,7 +258,7 @@ func main() {
 	}
 	addr := ":" + port
 	log.Info("financial-tracker API listening on %s (db driver %s at %s, syncing to ledger-service at %s every %s)", addr, dbDriver, dbDescription, ledgerServiceURL, syncInterval)
-	log.Info("endpoints: GET /config | GET|PATCH /settings | POST /movements | GET /movements | PATCH /movements/{id} | POST /movements/{id}/cancel | POST /credit-card-purchases/{id}/cancel | POST /sync | GET /categories | GET /cashflow | GET|POST /accounts | POST /accounts/{id}/balance | GET|POST /currencies | POST /transfers | POST /transfers/{id}/cancel | GET|POST /exchange-rates | DELETE /exchange-rates/{id} | GET|PUT /settings/local-archive | GET /export/archive | POST /import/archive | GET|POST /plans | GET|PATCH /plans/{id} | GET /me")
+	log.Info("endpoints: GET /config | GET|PATCH /settings | POST /movements | GET /movements | PATCH /movements/{id} | POST /movements/{id}/cancel | POST /credit-card-purchases/{id}/cancel | POST /sync | GET /categories | POST /categories | PATCH /categories/{id} | DELETE /categories/{id} | GET /cashflow | GET|POST /accounts | POST /accounts/{id}/balance | GET|POST /currencies | POST /transfers | POST /transfers/{id}/cancel | GET|POST /exchange-rates | DELETE /exchange-rates/{id} | GET|POST /recurring-rules | PATCH /recurring-rules/{id} | GET|PUT /settings/local-archive | GET /export/archive | POST /import/archive | GET|POST /plans | GET|PATCH /plans/{id} | GET /me")
 
 	if err := http.ListenAndServe(addr, router); err != nil {
 		log.Error("server failed: %v", err)

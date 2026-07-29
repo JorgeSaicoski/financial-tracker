@@ -7,6 +7,8 @@ import (
 	"github.com/JorgeSaicoski/financial-tracker/internal/domain/entities"
 )
 
+func boolPtr(b bool) *bool { return &b }
+
 func TestGetUserSettingsDefaultsWhenUntouched(t *testing.T) {
 	uc := NewGetUserSettings(newFakeUserSettingsRepo())
 
@@ -25,10 +27,10 @@ func TestGetUserSettingsDefaultsWhenUntouched(t *testing.T) {
 func TestCreateMovementUsesLocalStatusWhenSyncDisabled(t *testing.T) {
 	settings := newFakeUserSettingsRepo()
 	movements := newFakeMovementRepo()
-	createMovement := NewCreateMovement(movements, newFakeAccountRepo(), newFakePlanRepo(), settings)
-	updateSettings := NewUpdateUserSettings(settings, movements)
+	createMovement := NewCreateMovement(movements, newFakeAccountRepo(), newFakePlanRepo(), newFakeCategoryRepo(), settings)
+	updateSettings := NewUpdateUserSettings(settings, movements, newFakeCategoryRepo())
 
-	if _, err := updateSettings.Execute(context.Background(), "u1", false); err != nil {
+	if _, err := updateSettings.Execute(context.Background(), "u1", UpdateUserSettingsInput{LedgerSyncEnabled: boolPtr(false)}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -60,8 +62,8 @@ func TestCreateMovementUsesLocalStatusWhenSyncDisabled(t *testing.T) {
 func TestDisableCreateEnableCyclePushesExactlyTheBacklog(t *testing.T) {
 	settings := newFakeUserSettingsRepo()
 	movements := newFakeMovementRepo()
-	createMovement := NewCreateMovement(movements, newFakeAccountRepo(), newFakePlanRepo(), settings)
-	updateSettings := NewUpdateUserSettings(settings, movements)
+	createMovement := NewCreateMovement(movements, newFakeAccountRepo(), newFakePlanRepo(), newFakeCategoryRepo(), settings)
+	updateSettings := NewUpdateUserSettings(settings, movements, newFakeCategoryRepo())
 	ctx := context.Background()
 
 	// Something synced before any of this happened — must never be
@@ -75,7 +77,7 @@ func TestDisableCreateEnableCyclePushesExactlyTheBacklog(t *testing.T) {
 	}
 
 	// Disable.
-	if _, err := updateSettings.Execute(ctx, "u1", false); err != nil {
+	if _, err := updateSettings.Execute(ctx, "u1", UpdateUserSettingsInput{LedgerSyncEnabled: boolPtr(false)}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -95,7 +97,7 @@ func TestDisableCreateEnableCyclePushesExactlyTheBacklog(t *testing.T) {
 	}
 
 	// Re-enable: the backlog should be reclassified to pending.
-	if _, err := updateSettings.Execute(ctx, "u1", true); err != nil {
+	if _, err := updateSettings.Execute(ctx, "u1", UpdateUserSettingsInput{LedgerSyncEnabled: boolPtr(true)}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -120,7 +122,7 @@ func TestEntitlementBlocksEffectiveSyncEvenWhenEnabled(t *testing.T) {
 	settings := newFakeUserSettingsRepo()
 	settings.setEntitled("u1", false)
 	movements := newFakeMovementRepo()
-	createMovement := NewCreateMovement(movements, newFakeAccountRepo(), newFakePlanRepo(), settings)
+	createMovement := NewCreateMovement(movements, newFakeAccountRepo(), newFakePlanRepo(), newFakeCategoryRepo(), settings)
 
 	m, err := createMovement.Execute(context.Background(), CreateMovementInput{
 		UserID: "u1", Currency: "usd", Amount: -100,
