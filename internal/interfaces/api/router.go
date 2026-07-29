@@ -32,6 +32,7 @@ func NewRouter(
 	userHandler handlers.UserHandler,
 	configHandler handlers.ConfigHandler,
 	billingHandler handlers.BillingHandler,
+	reportHandler handlers.ReportHandler,
 	authMiddleware AuthMiddleware,
 	allowedOrigin string,
 	// standalone (BACK-09) rejects /sync (there is no ledger-service to
@@ -80,6 +81,7 @@ func NewRouter(
 	protected.HandleFunc("PATCH /categories/{id}", categoryHandler.UpdateCategory)
 	protected.HandleFunc("DELETE /categories/{id}", categoryHandler.DeleteCategory)
 	protected.HandleFunc("GET /cashflow", movementHandler.Cashflow)
+	protected.HandleFunc("GET /reports/purchasing-power", reportHandler.PurchasingPower)
 
 	protected.HandleFunc("GET /accounts", accountHandler.ListAccounts)
 	protected.HandleFunc("POST /accounts", accountHandler.CreateAccount)

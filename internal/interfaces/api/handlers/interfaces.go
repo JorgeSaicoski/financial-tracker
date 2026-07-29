@@ -165,3 +165,9 @@ type BillingHandler interface {
 	Webhook(w http.ResponseWriter, r *http.Request)
 	GetPlan(w http.ResponseWriter, r *http.Request)
 }
+
+// ReportHandler exposes computed-on-read reports — today just BACK-12's
+// purchasing-power report.
+type ReportHandler interface {
+	PurchasingPower(w http.ResponseWriter, r *http.Request)
+}
