@@ -12,27 +12,31 @@ import (
 )
 
 type createMovementUseCase struct {
-	repo     repositories.MovementRepository
-	accounts repositories.AccountRepository
-	methods  repositories.PaymentMethodRepository
-	settings repositories.UserSettingsRepository
+	repo       repositories.MovementRepository
+	accounts   repositories.AccountRepository
+	methods    repositories.PaymentMethodRepository
+	categories repositories.CategoryRepository
+	settings   repositories.UserSettingsRepository
 }
 
 // NewCreateMovement returns interface type for dependency injection.
-func NewCreateMovement(repo repositories.MovementRepository, accounts repositories.AccountRepository, methods repositories.PaymentMethodRepository, settings repositories.UserSettingsRepository) CreateMovementUseCase {
-	return &createMovementUseCase{repo: repo, accounts: accounts, methods: methods, settings: settings}
+func NewCreateMovement(repo repositories.MovementRepository, accounts repositories.AccountRepository, methods repositories.PaymentMethodRepository, categories repositories.CategoryRepository, settings repositories.UserSettingsRepository) CreateMovementUseCase {
+	return &createMovementUseCase{repo: repo, accounts: accounts, methods: methods, categories: categories, settings: settings}
 }
 
 func (uc *createMovementUseCase) Execute(ctx context.Context, input CreateMovementInput) (*dto.MovementDTO, error) {
 	if input.UserID == "" || input.Currency == "" || input.Amount == 0 {
 		return nil, apperrors.ErrInvalidInput
 	}
+	if err := validateAvoidabilityPercent(input.AvoidabilityOverridePercent); err != nil {
+		return nil, err
+	}
 
-	category, err := normalizeCategory(input.Category)
+	paymentMethod, err := resolvePaymentMethod(ctx, uc.methods, input.UserID, input.PaymentMethod)
 	if err != nil {
 		return nil, err
 	}
-	paymentMethod, err := resolvePaymentMethod(ctx, uc.methods, input.UserID, input.PaymentMethod)
+	categoryID, err := resolveCategoryID(ctx, uc.categories, input.UserID, input.CategoryID)
 	if err != nil {
 		return nil, err
 	}
@@ -66,33 +70,19 @@ func (uc *createMovementUseCase) Execute(ctx context.Context, input CreateMoveme
 
 	now := time.Now().UTC()
 	movement := &entities.Movement{
-		UserID:        input.UserID,
-		Amount:        input.Amount,
-		Currency:      input.Currency,
-		Description:   input.Description,
-		Category:      category,
-		PaymentMethod: paymentMethod,
-		AccountID:     input.AccountID,
-		Status:        entities.MovementStatusActive,
-		SyncStatus:    syncStatus,
-		Timestamp:     now,
-		CreatedAt:     now,
+		UserID:                      input.UserID,
+		Amount:                      input.Amount,
+		Currency:                    input.Currency,
+		Description:                 input.Description,
+		CategoryID:                  categoryID,
+		PaymentMethod:               paymentMethod,
+		AvoidabilityOverridePercent: input.AvoidabilityOverridePercent,
+		AccountID:                   input.AccountID,
+		Status:                      entities.MovementStatusActive,
+		SyncStatus:                  syncStatus,
+		Timestamp:                   now,
+		CreatedAt:                   now,
 	}
 
 	return uc.repo.Create(ctx, dto.MovementFromEntity(movement))
-}
-
-// normalizeCategory applies the empty-means-other default and rejects
-// values outside the domain's fixed category list. Payment method no
-// longer goes through here (BACK-17 turned it into a per-user registry,
-// resolved via resolvePaymentMethod in payment_methods.go).
-func normalizeCategory(category string) (entities.Category, error) {
-	c := entities.Category(category)
-	if c == "" {
-		c = entities.CategoryOther
-	}
-	if !c.IsValid() {
-		return "", apperrors.ErrInvalidInput
-	}
-	return c, nil
 }

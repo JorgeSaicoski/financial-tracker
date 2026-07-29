@@ -25,6 +25,7 @@ type movementHandler struct {
 	cancelPurchase     usecases.CancelCreditCardPurchaseUseCase
 	getCashflow        usecases.GetCashflowUseCase
 	listPaymentMethods usecases.ListPaymentMethodsUseCase
+	listCategories     usecases.ListCategoriesUseCase
 	syncRunner         services.SyncRunner
 
 	defaultCurrency string
@@ -42,6 +43,7 @@ func NewMovementHandler(
 	cancelPurchase usecases.CancelCreditCardPurchaseUseCase,
 	getCashflow usecases.GetCashflowUseCase,
 	listPaymentMethods usecases.ListPaymentMethodsUseCase,
+	listCategories usecases.ListCategoriesUseCase,
 	syncRunner services.SyncRunner,
 	defaultCurrency string,
 	log logger.Logger,
@@ -56,6 +58,7 @@ func NewMovementHandler(
 		cancelPurchase:     cancelPurchase,
 		getCashflow:        getCashflow,
 		listPaymentMethods: listPaymentMethods,
+		listCategories:     listCategories,
 		syncRunner:         syncRunner,
 		defaultCurrency:    defaultCurrency,
 		log:                log,
@@ -105,7 +108,7 @@ func (h *movementHandler) CreateMovement(w http.ResponseWriter, r *http.Request)
 			TotalAmount:  req.Amount,
 			Currency:     currency,
 			Description:  req.Description,
-			Category:     req.Category,
+			CategoryID:   req.CategoryID,
 			Installments: req.Installments,
 		})
 		if err != nil {
@@ -117,13 +120,14 @@ func (h *movementHandler) CreateMovement(w http.ResponseWriter, r *http.Request)
 	}
 
 	movement, err := h.createMovement.Execute(r.Context(), usecases.CreateMovementInput{
-		UserID:        userID,
-		Amount:        req.Amount,
-		Currency:      currency,
-		Description:   req.Description,
-		Category:      req.Category,
-		PaymentMethod: req.PaymentMethod,
-		AccountID:     accountID,
+		UserID:                      userID,
+		Amount:                      req.Amount,
+		Currency:                    currency,
+		Description:                 req.Description,
+		CategoryID:                  req.CategoryID,
+		PaymentMethod:               req.PaymentMethod,
+		AccountID:                   accountID,
+		AvoidabilityOverridePercent: req.AvoidabilityOverridePercent,
 	})
 	if err != nil {
 		h.writeUsecaseError(w, "create movement", err)
@@ -227,13 +231,14 @@ func (h *movementHandler) UpdateMovement(w http.ResponseWriter, r *http.Request)
 	}
 
 	input := usecases.UpdateMovementInput{
-		Description:   req.Description,
-		Category:      req.Category,
-		PaymentMethod: req.PaymentMethod,
-		AccountID:     req.AccountID,
-		Amount:        req.Amount,
-		Currency:      req.Currency,
-		Timestamp:     req.Timestamp,
+		Description:                 req.Description,
+		CategoryID:                  req.CategoryID,
+		PaymentMethod:               req.PaymentMethod,
+		AccountID:                   req.AccountID,
+		Amount:                      req.Amount,
+		Currency:                    req.Currency,
+		Timestamp:                   req.Timestamp,
+		AvoidabilityOverridePercent: req.AvoidabilityOverridePercent,
 	}
 
 	result, err := h.updateMovement.Execute(r.Context(), userID, r.PathValue("id"), input)
@@ -357,10 +362,12 @@ func (h *movementHandler) Cashflow(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusOK, resp)
 }
 
-// ListCategories handles GET /categories: the still-fixed category list
-// plus the caller's own payment-method registry (BACK-17 — id, name;
-// system rows "credit_card"/"bank_transfer" and the ordinary first-run
-// defaults lazily ensured first).
+// ListCategories handles GET /categories: the full global category
+// registry (BACK-14 follow-up — id, name, avoidability_percent,
+// is_contributor relative to the caller) plus the caller's own
+// payment-method registry (BACK-17 — id, name; system rows
+// "credit_card"/"bank_transfer" and the ordinary first-run defaults
+// lazily ensured first).
 func (h *movementHandler) ListCategories(w http.ResponseWriter, r *http.Request) {
 	userID, ok := reqctx.UserID(r.Context())
 	if !ok {
@@ -368,9 +375,14 @@ func (h *movementHandler) ListCategories(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	categories := make([]string, 0)
-	for _, c := range entities.Categories() {
-		categories = append(categories, string(c))
+	categoryRows, err := h.listCategories.Execute(r.Context())
+	if err != nil {
+		h.writeUsecaseError(w, "list categories", err)
+		return
+	}
+	categories := make([]interfacedto.CategoryResponse, 0, len(categoryRows))
+	for _, c := range categoryRows {
+		categories = append(categories, toCategoryResponse(c, userID))
 	}
 
 	methodRows, err := h.listPaymentMethods.Execute(r.Context(), userID)
@@ -412,16 +424,20 @@ var errInvalidParam = errors.New("invalid parameter")
 
 func toMovementResponse(m *dto.MovementDTO) interfacedto.MovementResponse {
 	resp := interfacedto.MovementResponse{
-		ID:            m.ID,
-		UserID:        m.UserID,
-		Amount:        m.Amount,
-		Currency:      m.Currency,
-		Description:   m.Description,
-		Category:      m.Category,
-		PaymentMethod: m.PaymentMethod,
-		Status:        m.Status,
-		SyncStatus:    m.SyncStatus,
-		Timestamp:     m.Timestamp,
+		ID:                          m.ID,
+		UserID:                      m.UserID,
+		Amount:                      m.Amount,
+		Currency:                    m.Currency,
+		Description:                 m.Description,
+		Category:                    m.Category,
+		PaymentMethod:               m.PaymentMethod,
+		AvoidabilityOverridePercent: m.AvoidabilityOverridePercent,
+		Status:                      m.Status,
+		SyncStatus:                  m.SyncStatus,
+		Timestamp:                   m.Timestamp,
+	}
+	if m.CategoryID != nil {
+		resp.CategoryID = *m.CategoryID
 	}
 	if m.AccountID != nil {
 		resp.AccountID = *m.AccountID
@@ -443,6 +459,9 @@ func toMovementResponse(m *dto.MovementDTO) interfacedto.MovementResponse {
 	}
 	if m.TransferID != nil {
 		resp.TransferID = *m.TransferID
+	}
+	if m.RecurringRuleID != nil {
+		resp.RecurringRuleID = *m.RecurringRuleID
 	}
 	return resp
 }
@@ -470,6 +489,9 @@ func toPurchaseResponse(p *dto.CreditCardPurchaseDTO, movements []*dto.MovementD
 		InstallmentCount: p.InstallmentCount,
 		PurchaseDate:     p.PurchaseDate,
 		Status:           p.Status,
+	}
+	if p.CategoryID != nil {
+		resp.CategoryID = *p.CategoryID
 	}
 	for _, m := range movements {
 		resp.Movements = append(resp.Movements, toMovementResponse(m))

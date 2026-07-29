@@ -32,12 +32,19 @@ type ArchiveAccountDTO struct {
 // completeness but are dropped by the import side (see the import usecase
 // for why: a self-referencing foreign-key ordering problem neither SQLite
 // nor Postgres defers here).
+//
+// category_id (BACK-14 follow-up) is the real foreign key restored as-is;
+// category is a denormalized display name carried along so the import
+// side can create a fresh category (with this same id, the importing user
+// as sole contributor) when category_id doesn't already exist in the
+// target environment — see the import usecase.
 type ArchiveMovementDTO struct {
 	ID            string `json:"id"`
 	UserID        string `json:"user_id"`
 	Amount        int64  `json:"amount"`
 	Currency      string `json:"currency"`
 	Description   string `json:"description,omitempty"`
+	CategoryID    string `json:"category_id,omitempty"`
 	Category      string `json:"category"`
 	PaymentMethod string `json:"payment_method"`
 
@@ -68,6 +75,7 @@ type ArchiveCreditCardPurchaseDTO struct {
 	ID               string    `json:"id"`
 	UserID           string    `json:"user_id"`
 	Description      string    `json:"description,omitempty"`
+	CategoryID       string    `json:"category_id,omitempty"`
 	Category         string    `json:"category"`
 	TotalAmount      int64     `json:"total_amount"`
 	Currency         string    `json:"currency"`
@@ -83,9 +91,12 @@ type ArchiveCreditCardPurchaseDTO struct {
 // POST /import/archive round-trips to the same state (BACK-15's
 // acceptance criteria), modulo the cancel/reversal links noted above.
 //
-// Categories aren't included: they're still the fixed, hardcoded list
-// (BACK-14 hasn't landed), so there's nothing user-defined to restore
-// there yet.
+// Categories themselves aren't a separate top-level list here: they're
+// globally shared (BACK-14 follow-up), not part of any one user's
+// account state, so each movement/purchase just carries its own
+// category_id — the import side creates a category fresh only if that id
+// doesn't already exist in the target environment (see the import
+// usecase).
 type ArchiveResponse struct {
 	ExportedAt          time.Time                      `json:"exported_at"`
 	UserID              string                         `json:"user_id"`
