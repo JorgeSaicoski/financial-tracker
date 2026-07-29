@@ -647,6 +647,53 @@ type GetPurchasingPowerUseCase interface {
 	Execute(ctx context.Context, userID string, months int) ([]PurchasingPowerMonth, error)
 }
 
+// CategoryAvoidabilityScore is one category's follow-through figure for
+// one scored month, in one currency (BACK-18): did the user actually cut
+// spend in a category they themselves rated avoidable? Baseline is the
+// trailing average of this same category's spend over the 3 preceding
+// full calendar months (a fixed 3-month window — see the usecase for why
+// the denominator doesn't shrink to the count of months with data).
+// InsufficientHistory is true — and Baseline/ReductionPercent/
+// WeightedScore all stay zero — when fewer than 2 of those 3 months have
+// any data for this category at all (never a baseline fabricated from a
+// single data point); Actual is still reported in that case, since it's
+// real spend, just not scoreable yet.
+type CategoryAvoidabilityScore struct {
+	Category            string
+	AvoidabilityPercent *int
+	Baseline            int64
+	Actual              int64
+	ReductionPercent    float64 // (baseline-actual)/baseline*100; positive = spent less than usual
+	WeightedScore       float64 // reduction_percent * avoidability_percent/100
+	InsufficientHistory bool
+}
+
+// AvoidabilityScoreCurrencyView is one scored month's follow-through
+// figures in one native currency (never summed across currencies).
+// OverallScore sums WeightedScore across every category with a valid
+// baseline in this currency; a category missing one is excluded from
+// this sum entirely, not treated as a zero contribution.
+type AvoidabilityScoreCurrencyView struct {
+	Currency     string
+	Categories   []CategoryAvoidabilityScore
+	OverallScore float64
+}
+
+// AvoidabilityScoreMonth is one calendar month's follow-through report
+// (BACK-18), one AvoidabilityScoreCurrencyView per native currency active
+// that month or one of its 3 baseline months.
+type AvoidabilityScoreMonth struct {
+	Month      time.Time // first of the month, UTC
+	Currencies []AvoidabilityScoreCurrencyView
+}
+
+// GetAvoidabilityScoreUseCase reports the last `months` calendar months'
+// avoidability follow-through, reusing BACK-12's month/currency bucketing
+// and category-spending helpers.
+type GetAvoidabilityScoreUseCase interface {
+	Execute(ctx context.Context, userID string, months int) ([]AvoidabilityScoreMonth, error)
+}
+
 // CreateCategoryInput carries a POST /categories body. AvoidabilityPercent
 // nil defaults to a neutral 50 (same default the one-time migration
 // backfill used) — the user edits it afterward. UserID becomes the new

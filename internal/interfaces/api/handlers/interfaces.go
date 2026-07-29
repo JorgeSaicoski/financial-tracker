@@ -166,8 +166,9 @@ type BillingHandler interface {
 	GetPlan(w http.ResponseWriter, r *http.Request)
 }
 
-// ReportHandler exposes computed-on-read reports — today just BACK-12's
-// purchasing-power report.
+// ReportHandler exposes computed-on-read reports: BACK-12's
+// purchasing-power report and BACK-18's avoidability follow-through score.
 type ReportHandler interface {
 	PurchasingPower(w http.ResponseWriter, r *http.Request)
+	AvoidabilityScore(w http.ResponseWriter, r *http.Request)
 }

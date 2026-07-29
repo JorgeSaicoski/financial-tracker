@@ -62,38 +62,7 @@ func (uc *getPurchasingPowerUseCase) Execute(ctx context.Context, userID string,
 	}
 	categoriesByID := CategoriesByID(categoryRows)
 
-	// monthOrder preserves first-seen order (from oldest to newest, since
-	// ListByUser returns newest-first and we walk it below) so the
-	// response doesn't depend on Go's random map iteration order.
-	byMonth := make(map[monthKey]map[string][]*dto.MovementDTO)
-	var monthOrder []monthKey
-	for _, m := range movements {
-		if m.Status == string(entities.MovementStatusVoided) {
-			continue
-		}
-		if m.CategoryID != nil && *m.CategoryID == entities.CategoryTransferID {
-			// Transfers (including to an investment-type account) are
-			// neither income nor expense — excluding them here also
-			// excludes contributions to investment accounts, satisfying
-			// "profit not considering investments" without a separate
-			// account-type check.
-			continue
-		}
-		key := monthKey{year: m.Timestamp.Year(), month: m.Timestamp.Month()}
-		byCurrency, ok := byMonth[key]
-		if !ok {
-			byCurrency = make(map[string][]*dto.MovementDTO)
-			byMonth[key] = byCurrency
-			monthOrder = append(monthOrder, key)
-		}
-		byCurrency[m.Currency] = append(byCurrency[m.Currency], m)
-	}
-	sort.Slice(monthOrder, func(i, j int) bool {
-		if monthOrder[i].year != monthOrder[j].year {
-			return monthOrder[i].year < monthOrder[j].year
-		}
-		return monthOrder[i].month < monthOrder[j].month
-	})
+	byMonth, monthOrder := bucketByMonthAndCurrency(movements)
 
 	out := make([]PurchasingPowerMonth, 0, len(monthOrder))
 	for _, key := range monthOrder {
@@ -112,11 +81,7 @@ func (uc *getPurchasingPowerUseCase) buildMonth(
 ) (PurchasingPowerMonth, error) {
 	month := PurchasingPowerMonth{Month: time.Date(key.year, key.month, 1, 0, 0, 0, 0, time.UTC)}
 
-	currencies := make([]string, 0, len(byCurrency))
-	for currency := range byCurrency {
-		currencies = append(currencies, currency)
-	}
-	sort.Strings(currencies)
+	currencies := currenciesActiveIn(byCurrency)
 
 	var profitUSDAtCurrentRate int64
 	for _, currency := range currencies {
@@ -140,8 +105,6 @@ func (uc *getPurchasingPowerUseCase) buildCurrencyView(
 	categoriesByID map[string]*dto.CategoryDTO, now time.Time,
 ) (PurchasingPowerCurrencyView, int64, error) {
 	view := PurchasingPowerCurrencyView{Currency: currency}
-	spendingByCategory := make(map[string]*PurchasingPowerCategorySpending)
-	var categoryOrder []string
 	var currentRateProfit int64
 
 	for _, m := range rows {
@@ -154,24 +117,6 @@ func (uc *getPurchasingPowerUseCase) buildCurrencyView(
 			view.TotalExpenses += expense
 
 			view.PotentialSavings += entities.PotentialSaving(expense, EffectiveAvoidability(m, categoriesByID))
-
-			categoryKey := ""
-			if m.CategoryID != nil {
-				categoryKey = *m.CategoryID
-			}
-			spending, ok := spendingByCategory[categoryKey]
-			if !ok {
-				var avoidabilityPercent *int
-				var categoryName string
-				if c, ok := categoriesByID[categoryKey]; ok {
-					avoidabilityPercent = c.AvoidabilityPercent
-					categoryName = c.Name
-				}
-				spending = &PurchasingPowerCategorySpending{Category: categoryName, AvoidabilityPercent: avoidabilityPercent}
-				spendingByCategory[categoryKey] = spending
-				categoryOrder = append(categoryOrder, categoryKey)
-			}
-			spending.Amount += expense
 		}
 
 		usdAmount, err := uc.toUSD.Execute(ctx, userID, m.Amount, currency, m.Timestamp)
@@ -202,11 +147,97 @@ func (uc *getPurchasingPowerUseCase) buildCurrencyView(
 		}
 	}
 
-	sort.Strings(categoryOrder)
-	for _, name := range categoryOrder {
-		view.SpendingByCategory = append(view.SpendingByCategory, *spendingByCategory[name])
+	spending := categorySpending(rows)
+	ids := make([]string, 0, len(spending))
+	for id := range spending {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		var avoidabilityPercent *int
+		var categoryName string
+		if c, ok := categoriesByID[id]; ok {
+			avoidabilityPercent = c.AvoidabilityPercent
+			categoryName = c.Name
+		}
+		view.SpendingByCategory = append(view.SpendingByCategory, PurchasingPowerCategorySpending{
+			Category: categoryName, AvoidabilityPercent: avoidabilityPercent, Amount: spending[id],
+		})
 	}
 	view.Profit = view.Income - view.TotalExpenses
 	view.ProfitUSD = view.IncomeUSD - view.TotalExpensesUSD
 	return view, currentRateProfit, nil
+}
+
+// bucketByMonthAndCurrency groups non-voided, non-transfer movements by
+// calendar month then native currency — the same grouping/exclusion rule
+// BACK-12's report and BACK-18's avoidability score both need (extracted
+// per BACK-18's own instruction to share this rather than recompute it).
+// monthOrder preserves first-seen order (oldest to newest, since
+// ListByUser returns newest-first and this walks it in that order) so a
+// caller's response doesn't depend on Go's random map iteration order.
+func bucketByMonthAndCurrency(movements []*dto.MovementDTO) (map[monthKey]map[string][]*dto.MovementDTO, []monthKey) {
+	byMonth := make(map[monthKey]map[string][]*dto.MovementDTO)
+	var monthOrder []monthKey
+	for _, m := range movements {
+		if m.Status == string(entities.MovementStatusVoided) {
+			continue
+		}
+		if m.CategoryID != nil && *m.CategoryID == entities.CategoryTransferID {
+			// Transfers (including to an investment-type account) are
+			// neither income nor expense — excluding them here also
+			// excludes contributions to investment accounts, satisfying
+			// "profit not considering investments" without a separate
+			// account-type check.
+			continue
+		}
+		key := monthKey{year: m.Timestamp.Year(), month: m.Timestamp.Month()}
+		byCurrency, ok := byMonth[key]
+		if !ok {
+			byCurrency = make(map[string][]*dto.MovementDTO)
+			byMonth[key] = byCurrency
+			monthOrder = append(monthOrder, key)
+		}
+		byCurrency[m.Currency] = append(byCurrency[m.Currency], m)
+	}
+	sort.Slice(monthOrder, func(i, j int) bool {
+		if monthOrder[i].year != monthOrder[j].year {
+			return monthOrder[i].year < monthOrder[j].year
+		}
+		return monthOrder[i].month < monthOrder[j].month
+	})
+	return byMonth, monthOrder
+}
+
+// currenciesActiveIn returns the sorted set of native currencies present
+// in one month's movement bucket — sorted so a caller's response doesn't
+// depend on Go's random map iteration order.
+func currenciesActiveIn(byCurrency map[string][]*dto.MovementDTO) []string {
+	currencies := make([]string, 0, len(byCurrency))
+	for currency := range byCurrency {
+		currencies = append(currencies, currency)
+	}
+	sort.Strings(currencies)
+	return currencies
+}
+
+// categorySpending sums each category's expense magnitude (positive,
+// smallest currency unit) from a set of movements already bucketed to one
+// calendar month + currency via bucketByMonthAndCurrency — shared by
+// BACK-12's spending_by_category and BACK-18's baseline/actual figures.
+// Keyed by category id ("" for uncategorized); income rows (Amount > 0)
+// don't contribute.
+func categorySpending(rows []*dto.MovementDTO) map[string]int64 {
+	spending := make(map[string]int64)
+	for _, m := range rows {
+		if m.Amount > 0 {
+			continue
+		}
+		categoryKey := ""
+		if m.CategoryID != nil {
+			categoryKey = *m.CategoryID
+		}
+		spending[categoryKey] += -m.Amount
+	}
+	return spending
 }

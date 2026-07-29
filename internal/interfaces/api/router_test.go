@@ -182,9 +182,12 @@ func (s stubHandlers) GetConfig(w http.ResponseWriter, r *http.Request) { s.repl
 // interface satisfaction only cares about the method signature.
 func (s stubHandlers) Webhook(w http.ResponseWriter, r *http.Request) { s.reply("Webhook")(w, r) }
 
-// PurchasingPower satisfies handlers.ReportHandler.
+// PurchasingPower and AvoidabilityScore satisfy handlers.ReportHandler.
 func (s stubHandlers) PurchasingPower(w http.ResponseWriter, r *http.Request) {
 	s.reply("PurchasingPower")(w, r)
+}
+func (s stubHandlers) AvoidabilityScore(w http.ResponseWriter, r *http.Request) {
+	s.reply("AvoidabilityScore")(w, r)
 }
 
 func noopAuthMiddleware(next http.Handler) http.Handler { return next }
