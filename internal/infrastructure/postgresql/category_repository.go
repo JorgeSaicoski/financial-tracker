@@ -139,6 +139,11 @@ func (r *categoryRepository) Create(ctx context.Context, c *dto.CategoryDTO) (*d
 			c.ID, contributorID); err != nil {
 			return nil, fmt.Errorf("postgresql: add contributor: %w", err)
 		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO user_categories (user_id, category_id) VALUES ($1, $2)`,
+			contributorID, c.ID); err != nil {
+			return nil, fmt.Errorf("postgresql: add to user's list: %w", err)
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("postgresql: commit create category: %w", err)
@@ -174,30 +179,66 @@ func (r *categoryRepository) IsContributor(ctx context.Context, userID, category
 	return n > 0, nil
 }
 
-func (r *categoryRepository) CountByContributor(ctx context.Context, userID string) (int, error) {
-	var n int
-	if err := r.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM category_maintainers WHERE user_id = $1`, userID,
-	).Scan(&n); err != nil {
-		return 0, fmt.Errorf("postgresql: count categories by contributor: %w", err)
+func (r *categoryRepository) ListForUser(ctx context.Context, userID string) ([]*dto.CategoryDTO, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT `+categoryColumns+` FROM categories c
+		 JOIN user_categories uc ON uc.category_id = c.id
+		 WHERE uc.user_id = $1
+		 ORDER BY c.name ASC`, userID)
+	if err != nil {
+		return nil, fmt.Errorf("postgresql: query categories for user: %w", err)
 	}
-	return n, nil
+	defer rows.Close()
+
+	out := make([]*dto.CategoryDTO, 0)
+	ids := make([]string, 0)
+	for rows.Next() {
+		c, err := scanCategory(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+		ids = append(ids, c.ID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	contributors, err := r.loadContributors(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range out {
+		c.ContributorIDs = contributors[c.ID]
+	}
+	return out, nil
 }
 
-func (r *categoryRepository) Hide(ctx context.Context, userID, categoryID string) error {
+func (r *categoryRepository) HasForUser(ctx context.Context, userID, categoryID string) (bool, error) {
+	var n int
+	if err := r.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM user_categories WHERE user_id = $1 AND category_id = $2`,
+		userID, categoryID,
+	).Scan(&n); err != nil {
+		return false, fmt.Errorf("postgresql: check user has category: %w", err)
+	}
+	return n > 0, nil
+}
+
+func (r *categoryRepository) Remove(ctx context.Context, userID, categoryID string) error {
 	if _, err := r.db.ExecContext(ctx,
-		`INSERT INTO user_hidden_categories (user_id, category_id) VALUES ($1, $2) ON CONFLICT (user_id, category_id) DO NOTHING`,
+		`DELETE FROM user_categories WHERE user_id = $1 AND category_id = $2`,
 		userID, categoryID,
 	); err != nil {
-		return fmt.Errorf("postgresql: hide category: %w", err)
+		return fmt.Errorf("postgresql: remove category from user's list: %w", err)
 	}
 	return nil
 }
 
-func (r *categoryRepository) HideAndReassign(ctx context.Context, userID, categoryID, defaultCategoryID string) error {
+func (r *categoryRepository) RemoveAndReassign(ctx context.Context, userID, categoryID, defaultCategoryID string) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("postgresql: begin hide and reassign: %w", err)
+		return fmt.Errorf("postgresql: begin remove and reassign: %w", err)
 	}
 	defer tx.Rollback()
 
@@ -214,10 +255,16 @@ func (r *categoryRepository) HideAndReassign(ctx context.Context, userID, catego
 		return fmt.Errorf("postgresql: reassign credit card purchases: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO user_hidden_categories (user_id, category_id) VALUES ($1, $2) ON CONFLICT (user_id, category_id) DO NOTHING`,
+		`UPDATE recurring_rules SET category_id = $1 WHERE category_id = $2 AND user_id = $3`,
+		defaultCategoryID, categoryID, userID,
+	); err != nil {
+		return fmt.Errorf("postgresql: reassign recurring rules: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM user_categories WHERE user_id = $1 AND category_id = $2`,
 		userID, categoryID,
 	); err != nil {
-		return fmt.Errorf("postgresql: hide category: %w", err)
+		return fmt.Errorf("postgresql: remove category from user's list: %w", err)
 	}
 	return tx.Commit()
 }

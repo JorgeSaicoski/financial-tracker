@@ -822,15 +822,16 @@ func (f *fakeCardRepo) IsReferenced(_ context.Context, id string) (bool, error) 
 // fakeCategoryRepo is an in-memory CategoryRepository, mirroring the
 // semantics the SQLite implementation guarantees: categories are global
 // (no user scoping on GetByID/ListAll/Update), ContributorIDs gates
-// edits, hidden tracks each user's own opt-outs.
+// edits, has is a plain positive "who currently has this category" fact
+// — not an opt-out (there is no hidden concept, per Jorge, 2026-07-28).
 type fakeCategoryRepo struct {
 	byID   map[string]*dto.CategoryDTO
-	hidden map[string]map[string]bool // userID -> categoryID -> true
+	has    map[string]map[string]bool // userID -> categoryID -> true
 	nextID int
 }
 
 func newFakeCategoryRepo() *fakeCategoryRepo {
-	return &fakeCategoryRepo{byID: map[string]*dto.CategoryDTO{}, hidden: map[string]map[string]bool{}}
+	return &fakeCategoryRepo{byID: map[string]*dto.CategoryDTO{}, has: map[string]map[string]bool{}}
 }
 
 func (f *fakeCategoryRepo) GetByID(_ context.Context, id string) (*dto.CategoryDTO, error) {
@@ -862,6 +863,12 @@ func (f *fakeCategoryRepo) Create(_ context.Context, c *dto.CategoryDTO) (*dto.C
 	}
 	cp := *c
 	f.byID[c.ID] = &cp
+	for _, contributorID := range c.ContributorIDs {
+		if f.has[contributorID] == nil {
+			f.has[contributorID] = map[string]bool{}
+		}
+		f.has[contributorID][c.ID] = true
+	}
 	return c, nil
 }
 
@@ -888,38 +895,38 @@ func (f *fakeCategoryRepo) IsContributor(_ context.Context, userID, categoryID s
 	return false, nil
 }
 
-func (f *fakeCategoryRepo) CountByContributor(_ context.Context, userID string) (int, error) {
-	n := 0
-	for _, c := range f.byID {
-		for _, id := range c.ContributorIDs {
-			if id == userID {
-				n++
-				break
-			}
+func (f *fakeCategoryRepo) ListForUser(_ context.Context, userID string) ([]*dto.CategoryDTO, error) {
+	var out []*dto.CategoryDTO
+	for categoryID := range f.has[userID] {
+		c, ok := f.byID[categoryID]
+		if !ok {
+			continue
 		}
+		cp := *c
+		out = append(out, &cp)
 	}
-	return n, nil
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
 }
 
-func (f *fakeCategoryRepo) Hide(_ context.Context, userID, categoryID string) error {
-	if _, ok := f.byID[categoryID]; !ok {
-		return apperrors.ErrNotFound
-	}
-	if f.hidden[userID] == nil {
-		f.hidden[userID] = map[string]bool{}
-	}
-	f.hidden[userID][categoryID] = true
+func (f *fakeCategoryRepo) HasForUser(_ context.Context, userID, categoryID string) (bool, error) {
+	return f.has[userID][categoryID], nil
+}
+
+func (f *fakeCategoryRepo) Remove(_ context.Context, userID, categoryID string) error {
+	delete(f.has[userID], categoryID)
 	return nil
 }
 
-// HideAndReassign doesn't actually move fakeMovementRepo/
-// fakeCreditCardPurchaseRepo rows onto defaultCategoryID — the fakes
-// don't share state across each other the way the real repositories
-// share one database, and no usecase-level test here asserts on
-// post-delete movement category ids. That reassignment is exercised for
-// real by the live-DB repository tests instead.
-func (f *fakeCategoryRepo) HideAndReassign(ctx context.Context, userID, categoryID, defaultCategoryID string) error {
-	return f.Hide(ctx, userID, categoryID)
+// RemoveAndReassign doesn't actually move fakeMovementRepo/
+// fakeCreditCardPurchaseRepo/fakeRecurringRuleRepo rows onto
+// defaultCategoryID — the fakes don't share state across each other the
+// way the real repositories share one database, and no usecase-level
+// test here asserts on post-delete movement category ids. That
+// reassignment is exercised for real by the live-DB repository tests
+// instead.
+func (f *fakeCategoryRepo) RemoveAndReassign(ctx context.Context, userID, categoryID, defaultCategoryID string) error {
+	return f.Remove(ctx, userID, categoryID)
 }
 
 // fakeLimitsRepo is an in-memory LimitsRepository — tests seed whatever

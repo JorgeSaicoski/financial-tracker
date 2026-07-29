@@ -20,7 +20,7 @@ import (
 // "income", and "other" are the three system-seeded categories (empty
 // ContributorIDs, so no one can edit them): nil AvoidabilityPercent for
 // transfer/income (not spend), and none of the three can be created,
-// renamed, or hidden — enforced by the usecase layer via
+// renamed, or removed from a user's list — enforced by the usecase layer via
 // entities.Category, not here (this contract has no notion of
 // "system", same reasoning MovementRepository has no notion of
 // "reversal cannot be edited").
@@ -52,20 +52,46 @@ type CategoryRepository interface {
 	// when categoryID doesn't exist; callers that need existence
 	// separately already called GetByID.
 	IsContributor(ctx context.Context, userID, categoryID string) (bool, error)
-	// CountByContributor returns how many categories userID currently
-	// contributes to — backs createCategoryUseCase's per-user limit
-	// check (see LimitsRepository, "max_categories_per_user").
-	CountByContributor(ctx context.Context, userID string) (int, error)
-	// Hide marks categoryID as opted out of userID's own future use —
-	// idempotent, and never touches the category row itself or any
-	// other user's data. This is what DELETE /categories/{id} means now
-	// that a category may be shared: there is no real delete (see
-	// deleteCategoryUseCase).
-	Hide(ctx context.Context, userID, categoryID string) error
-	// HideAndReassign does what Hide does, and — in the same
-	// transaction — moves every movement and credit-card purchase userID
-	// owns from categoryID onto defaultCategoryID first. Still scoped
-	// strictly to userID's own rows, even though categoryID may be
-	// referenced by other users too; their data is never touched.
-	HideAndReassign(ctx context.Context, userID, categoryID, defaultCategoryID string) error
+	// ListForUser returns the categories userID currently *has*, backed
+	// by user_categories — a plain positive membership table, not an
+	// opt-out/"hidden" one (Jorge, 2026-07-28: "there is no hidden
+	// category"). The creator of a category always has it (contributor
+	// and "has" are granted together at creation time, in the same
+	// transaction as Create); it comes out of this list the moment
+	// userID removes it (see Remove/RemoveAndReassign), even though they
+	// may still be a contributor. Deliberately separate from "how many
+	// is userID a contributor of" (Jorge, review comment on #39: "we
+	// don't care how much categories he is contributor or not, we care
+	// how much does he has — maybe he is contributor on 15 categories
+	// but just have 10"). The usecase layer loads this into
+	// entities.User.Categories and calls AddCategory/RemoveCategory on
+	// it, rather than checking a count directly here.
+	ListForUser(ctx context.Context, userID string) ([]*dto.CategoryDTO, error)
+	// HasForUser reports whether userID currently has categoryID in
+	// their own list (user_categories) — the enforcement half of
+	// ListForUser: every write path that accepts a caller-supplied
+	// category_id (movements, purchases, recurring rules, a user's own
+	// default) must check this before accepting it, so a category
+	// removed from a user's list can't be re-selected going forward.
+	// Always true for a system category (transfer/income/other) even
+	// though no one's user_categories row is ever seeded for them — see
+	// resolveCategoryID, which is where that exception is applied.
+	HasForUser(ctx context.Context, userID, categoryID string) (bool, error)
+	// Remove takes categoryID out of userID's own list (deletes the
+	// user_categories row) — never touches the category row itself,
+	// category_maintainers, or any other user's data. This is what
+	// DELETE /categories/{id} means now that a category may be shared:
+	// there is no real delete (see deleteCategoryUseCase). Existing
+	// movements/purchases/recurring rules already referencing categoryID
+	// keep doing so unless the caller separately chose reassignment (see
+	// RemoveAndReassign) — they just can't be created or re-pointed at
+	// it going forward, per HasForUser.
+	Remove(ctx context.Context, userID, categoryID string) error
+	// RemoveAndReassign does what Remove does, and — in the same
+	// transaction — moves every movement, credit-card purchase, and
+	// recurring rule userID owns from categoryID onto defaultCategoryID
+	// first. Still scoped strictly to userID's own rows, even though
+	// categoryID may be referenced by other users too; their data is
+	// never touched.
+	RemoveAndReassign(ctx context.Context, userID, categoryID, defaultCategoryID string) error
 }

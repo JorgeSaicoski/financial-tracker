@@ -81,7 +81,7 @@ func run(ctx context.Context, src, dst *sql.DB, force bool) ([]tableCount, error
 		{"account_snapshots", copyAccountSnapshots},
 		{"categories", copyCategories},
 		{"category_maintainers", copyCategoryMaintainers},
-		{"user_hidden_categories", copyUserHiddenCategories},
+		{"user_categories", copyUserCategories},
 		{"credit_card_purchases", copyCreditCardPurchases},
 		{"movements", copyMovements},
 		{"exchange_rates", copyExchangeRates},
@@ -305,20 +305,20 @@ func copyCategoryMaintainers(ctx context.Context, src *sql.DB, tx *sql.Tx) (int,
 	return len(all), written, nil
 }
 
-// copyUserHiddenCategories copies each user's personal opt-outs (BACK-14
-// follow-up: DELETE /categories/{id} hides, it never deletes the shared
-// row) — same idempotent shape as copyCategoryMaintainers.
-func copyUserHiddenCategories(ctx context.Context, src *sql.DB, tx *sql.Tx) (int, int, error) {
-	rows, err := src.QueryContext(ctx, `SELECT user_id, category_id FROM user_hidden_categories`)
+// copyUserCategories copies each user's own "has" list (BACK-14
+// follow-up, part 3: a plain positive membership fact, not an opt-out —
+// see migration 015) — same idempotent shape as copyCategoryMaintainers.
+func copyUserCategories(ctx context.Context, src *sql.DB, tx *sql.Tx) (int, int, error) {
+	rows, err := src.QueryContext(ctx, `SELECT user_id, category_id FROM user_categories`)
 	if err != nil {
 		return 0, 0, fmt.Errorf("read: %w", err)
 	}
 	defer rows.Close()
 
-	type hidden struct{ userID, categoryID string }
-	var all []hidden
+	type hasRow struct{ userID, categoryID string }
+	var all []hasRow
 	for rows.Next() {
-		var h hidden
+		var h hasRow
 		if err := rows.Scan(&h.userID, &h.categoryID); err != nil {
 			return 0, 0, fmt.Errorf("scan: %w", err)
 		}
@@ -331,7 +331,7 @@ func copyUserHiddenCategories(ctx context.Context, src *sql.DB, tx *sql.Tx) (int
 	written := 0
 	for _, h := range all {
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO user_hidden_categories (user_id, category_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+			`INSERT INTO user_categories (user_id, category_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
 			h.userID, h.categoryID); err != nil {
 			return len(all), written, fmt.Errorf("insert %s/%s: %w", h.userID, h.categoryID, err)
 		}

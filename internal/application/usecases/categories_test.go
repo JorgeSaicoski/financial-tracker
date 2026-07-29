@@ -71,6 +71,61 @@ func TestCreateCategoryEnforcesPerUserLimit(t *testing.T) {
 	}
 }
 
+// TestCreateCategoryLimitFreesUpAfterHiding is the actual regression test
+// for the bug the PR #39 review flagged: the old CountByContributor-based
+// check never decreased, so a user who created up to the limit was
+// permanently locked out even after removing categories from their own
+// list. The limit must be checked against what the user currently has
+// (entities.User.Categories via ListForUser), not how many they've ever
+// contributed to.
+func TestCreateCategoryLimitFreesUpAfterRemoval(t *testing.T) {
+	categories := newFakeCategoryRepo()
+	limits := newFakeLimitsRepo(map[string]int{maxCategoriesPerUserLimit: 2})
+	create := NewCreateCategory(categories, limits)
+	deleteCat := NewDeleteCategory(categories, newFakeUserSettingsRepo())
+	ctx := context.Background()
+
+	a, err := create.Execute(ctx, CreateCategoryInput{UserID: "u1", Name: "a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := create.Execute(ctx, CreateCategoryInput{UserID: "u1", Name: "b"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := create.Execute(ctx, CreateCategoryInput{UserID: "u1", Name: "c"}); !errors.Is(err, apperrors.ErrInvalidInput) {
+		t.Fatalf("want ErrInvalidInput at the limit, got %v", err)
+	}
+
+	// Removing "a" from u1's own list must free a slot, even though u1
+	// remains its contributor.
+	if err := deleteCat.Execute(ctx, "u1", a.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := create.Execute(ctx, CreateCategoryInput{UserID: "u1", Name: "c"}); err != nil {
+		t.Errorf("want create to succeed once a slot is freed by removal, got %v", err)
+	}
+}
+
+// TestDeleteCategoryRejectsRemovingOneNotInTheCallersList guards
+// entities.User.RemoveCategory's "not found" check: removing a category
+// the caller was never a contributor of (never had) is rejected, not a
+// silent no-op.
+func TestDeleteCategoryRejectsRemovingOneNotInTheCallersList(t *testing.T) {
+	categories := newFakeCategoryRepo()
+	create := NewCreateCategory(categories, defaultLimits())
+	ctx := context.Background()
+
+	created, err := create.Execute(ctx, CreateCategoryInput{UserID: "u1", Name: "groceries"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = NewDeleteCategory(categories, newFakeUserSettingsRepo()).Execute(ctx, "u2", created.ID, false)
+	if !errors.Is(err, apperrors.ErrInvalidInput) {
+		t.Errorf("want ErrInvalidInput removing a category u2 never had, got %v", err)
+	}
+}
+
 func TestListCategoriesReturnsEveryoneCategories(t *testing.T) {
 	categories := newFakeCategoryRepo()
 	create := NewCreateCategory(categories, defaultLimits())
@@ -143,7 +198,7 @@ func TestUpdateCategoryRejectsSystemCategoryEdit(t *testing.T) {
 	}
 }
 
-func TestDeleteCategoryHidesWithoutTouchingTheRow(t *testing.T) {
+func TestDeleteCategoryRemovesFromListWithoutTouchingTheRow(t *testing.T) {
 	categories := newFakeCategoryRepo()
 	create := NewCreateCategory(categories, defaultLimits())
 	ctx := context.Background()
@@ -156,13 +211,13 @@ func TestDeleteCategoryHidesWithoutTouchingTheRow(t *testing.T) {
 	if err := NewDeleteCategory(categories, newFakeUserSettingsRepo()).Execute(ctx, "u1", created.ID, false); err != nil {
 		t.Fatal(err)
 	}
-	// The category row itself must still exist — hiding is per-user, not
-	// a real delete (see the usecase's doc comment).
+	// The category row itself must still exist — removing is per-user,
+	// not a real delete (see the usecase's doc comment).
 	if _, err := categories.GetByID(ctx, created.ID); err != nil {
-		t.Errorf("want category to still exist after hide, got %v", err)
+		t.Errorf("want category to still exist after removal, got %v", err)
 	}
-	if !categories.hidden["u1"][created.ID] {
-		t.Errorf("want the category marked hidden for u1")
+	if categories.has["u1"][created.ID] {
+		t.Errorf("want the category no longer in u1's list")
 	}
 }
 

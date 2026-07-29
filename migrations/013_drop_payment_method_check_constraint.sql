@@ -10,7 +10,8 @@
 -- without it, following the same documented 12-step ALTER TABLE
 -- procedure 009_add_local_sync_status.sql already used for sync_status.
 -- Every column movements has picked up since 001 (009's 'local'
--- sync_status, account_id/transfer_id, 008's recurring_rule_id, 012's
+-- sync_status, account_id/transfer_id, 012's
+-- avoidability_override_percent, 008's recurring_rule_id, 012's
 -- card_id/card_payment_for_card_id/plan_id) is carried over here too,
 -- since this rebuilds the *whole* table, not just the payment_method
 -- column — this migration was originally written before 008/012's
@@ -41,6 +42,7 @@ CREATE TABLE movements_new (
     created_at              TEXT    NOT NULL,
     account_id              TEXT    REFERENCES accounts(id),
     transfer_id             TEXT,
+    avoidability_override_percent INTEGER,
     recurring_rule_id       TEXT    REFERENCES recurring_rules(id),
     card_id                 TEXT    REFERENCES cards(id),
     card_payment_for_card_id TEXT   REFERENCES cards(id),
@@ -53,7 +55,7 @@ INSERT INTO movements_new (
     cancels_movement_id, reversed_by_movement_id, timestamp, sync_status,
     ledger_transaction_id, sync_attempts, last_sync_error,
     last_sync_attempt_at, synced_at, created_at, account_id, transfer_id,
-    recurring_rule_id, card_id, card_payment_for_card_id, plan_id
+    avoidability_override_percent, recurring_rule_id, card_id, card_payment_for_card_id, plan_id
 )
 SELECT
     id, user_id, amount, currency, description, category, payment_method,
@@ -61,7 +63,7 @@ SELECT
     cancels_movement_id, reversed_by_movement_id, timestamp, sync_status,
     ledger_transaction_id, sync_attempts, last_sync_error,
     last_sync_attempt_at, synced_at, created_at, account_id, transfer_id,
-    recurring_rule_id, card_id, card_payment_for_card_id, plan_id
+    avoidability_override_percent, recurring_rule_id, card_id, card_payment_for_card_id, plan_id
 FROM movements;
 
 DROP TABLE movements;

@@ -24,17 +24,32 @@ const maxCategoriesPerUserLimit = "max_categories_per_user"
 
 // resolveCategoryID validates a caller-supplied category_id: nil or ""
 // stays nil (genuinely uncategorized); anything else must reference an
-// existing category — categories are globally visible (BACK-14
-// follow-up), so no ownership check happens here, only existence.
-func resolveCategoryID(ctx context.Context, categories repositories.CategoryRepository, categoryID *string) (*string, error) {
+// existing category the caller currently has (HasForUser) — a category
+// removed from userID's own list can't be selected again going forward,
+// even though it stays valid on whatever already referenced it (Jorge,
+// 2026-07-28: "still restaurant but he can't choose more times
+// restaurant"). The three system categories (transfer/income/other) are
+// always selectable by anyone — no user_categories row is ever seeded
+// for them, since they're not something any one user creates or "gets".
+func resolveCategoryID(ctx context.Context, categories repositories.CategoryRepository, userID string, categoryID *string) (*string, error) {
 	if categoryID == nil || *categoryID == "" {
 		return nil, nil
 	}
-	if _, err := categories.GetByID(ctx, *categoryID); err != nil {
+	cat, err := categories.GetByID(ctx, *categoryID)
+	if err != nil {
 		if apperrors.Is(err, apperrors.ErrNotFound) {
 			return nil, fmt.Errorf("%w: category not found", apperrors.ErrInvalidInput)
 		}
 		return nil, err
+	}
+	if !entities.IsSystemCategoryName(cat.Name) {
+		has, err := categories.HasForUser(ctx, userID, *categoryID)
+		if err != nil {
+			return nil, err
+		}
+		if !has {
+			return nil, fmt.Errorf("%w: you don't have this category in your list", apperrors.ErrInvalidInput)
+		}
 	}
 	return categoryID, nil
 }
@@ -89,11 +104,15 @@ func (uc *createCategoryUseCase) Execute(ctx context.Context, input CreateCatego
 	if err != nil {
 		return nil, err
 	}
-	count, err := uc.categories.CountByContributor(ctx, input.UserID)
+	existing, err := uc.categories.ListForUser(ctx, input.UserID)
 	if err != nil {
 		return nil, err
 	}
-	if count >= limit {
+	user := &entities.User{ID: input.UserID, Categories: categoryEntitiesFromDTOs(existing)}
+	// Enforced against a placeholder — AddCategory only checks how many
+	// the user already has (len(user.Categories)), not the new one's id,
+	// so this catches the limit before the row is ever persisted.
+	if err := user.AddCategory(&entities.Category{Name: name}, limit); err != nil {
 		return nil, fmt.Errorf("%w: you've reached the limit of %d categories — reuse an existing one instead of creating a new one",
 			apperrors.ErrInvalidInput, limit)
 	}
@@ -150,9 +169,10 @@ func (uc *updateCategoryUseCase) Execute(ctx context.Context, userID, id string,
 		if entities.IsSystemCategoryName(name) {
 			return nil, fmt.Errorf("%w: %q is a reserved category name", apperrors.ErrInvalidInput, name)
 		}
-		if err := category.Rename(name, userID); err != nil {
-			return nil, fmt.Errorf("%w: %v", apperrors.ErrInvalidInput, err)
+		if !category.CanBeEditedBy(userID) {
+			return nil, fmt.Errorf("%w: user %s is not a contributor of category %s", apperrors.ErrInvalidInput, userID, category.ID)
 		}
+		category.Name = name
 	}
 	if input.AvoidabilityPercent != nil {
 		if err := validateAvoidabilityPercent(input.AvoidabilityPercent); err != nil {
@@ -188,25 +208,33 @@ func (uc *deleteCategoryUseCase) Execute(ctx context.Context, userID, id string,
 		return err
 	}
 	category := categoryEntityFromDTO(existing)
-	if !category.CanBeHidden() {
+	if category.IsSystem() {
 		return fmt.Errorf("%w: %q is a reserved category and can't be removed", apperrors.ErrInvalidInput, category.Name)
 	}
 
+	owned, err := uc.categories.ListForUser(ctx, userID)
+	if err != nil {
+		return err
+	}
+	user := &entities.User{ID: userID, Categories: categoryEntitiesFromDTOs(owned)}
+	if err := user.RemoveCategory(category); err != nil {
+		return fmt.Errorf("%w: %v", apperrors.ErrInvalidInput, err)
+	}
+
 	if !reassignExisting {
-		return uc.categories.Hide(ctx, userID, id)
+		return uc.categories.Remove(ctx, userID, id)
 	}
 
 	defaultCategoryID, err := resolveEffectiveDefaultCategoryID(ctx, uc.settings, userID)
 	if err != nil {
 		return err
 	}
-	return uc.categories.HideAndReassign(ctx, userID, id, defaultCategoryID)
+	return uc.categories.RemoveAndReassign(ctx, userID, id, defaultCategoryID)
 }
 
 // categoryEntityFromDTO converts a CategoryDTO to the domain entity so
-// the usecase can run its business-rule checks (CanBeEditedBy,
-// CanBeHidden, Rename, UpdateAvoidabilityPercent) instead of duplicating
-// them here.
+// the usecase can run its business-rule checks (CanBeEditedBy, IsSystem,
+// UpdateAvoidabilityPercent) instead of duplicating them here.
 func categoryEntityFromDTO(c *dto.CategoryDTO) *entities.Category {
 	return &entities.Category{
 		ID:                  c.ID,
@@ -215,4 +243,14 @@ func categoryEntityFromDTO(c *dto.CategoryDTO) *entities.Category {
 		ContributorIDs:      c.ContributorIDs,
 		CreatedAt:           c.CreatedAt,
 	}
+}
+
+// categoryEntitiesFromDTOs converts a slice, for populating
+// entities.User.Categories before calling AddCategory/RemoveCategory.
+func categoryEntitiesFromDTOs(cs []*dto.CategoryDTO) []*entities.Category {
+	out := make([]*entities.Category, 0, len(cs))
+	for _, c := range cs {
+		out = append(out, categoryEntityFromDTO(c))
+	}
+	return out
 }

@@ -31,7 +31,7 @@ func (uc *createCreditCardPurchaseUseCase) Execute(ctx context.Context, input Cr
 		return nil, nil, apperrors.ErrInvalidInput
 	}
 
-	categoryID, err := resolveCategoryID(ctx, uc.categories, input.CategoryID)
+	categoryID, err := resolveCategoryID(ctx, uc.categories, input.UserID, input.CategoryID)
 	if err != nil {
 		return nil, nil, err
 	}

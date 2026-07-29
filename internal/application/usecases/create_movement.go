@@ -38,7 +38,7 @@ func (uc *createMovementUseCase) Execute(ctx context.Context, input CreateMoveme
 	if err != nil {
 		return nil, err
 	}
-	categoryID, err := resolveCategoryID(ctx, uc.categories, input.CategoryID)
+	categoryID, err := resolveCategoryID(ctx, uc.categories, input.UserID, input.CategoryID)
 	if err != nil {
 		return nil, err
 	}

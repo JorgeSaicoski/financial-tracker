@@ -92,7 +92,7 @@ func (uc *updateUserSettingsUseCase) Execute(ctx context.Context, userID string,
 	}
 
 	if input.DefaultCategoryID != nil {
-		categoryID, err := resolveCategoryID(ctx, uc.categories, input.DefaultCategoryID)
+		categoryID, err := resolveCategoryID(ctx, uc.categories, userID, input.DefaultCategoryID)
 		if err != nil {
 			return UserSettingsView{}, err
 		}

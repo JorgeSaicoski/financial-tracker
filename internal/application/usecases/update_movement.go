@@ -115,7 +115,7 @@ func (uc *updateMovementUseCase) Execute(ctx context.Context, userID, id string,
 	if err != nil {
 		return UpdateMovementResult{}, err
 	}
-	categoryID, err := resolveCategoryID(ctx, uc.categories, categoryIDInput)
+	categoryID, err := resolveCategoryID(ctx, uc.categories, userID, categoryIDInput)
 	if err != nil {
 		return UpdateMovementResult{}, err
 	}
