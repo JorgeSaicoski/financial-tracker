@@ -1,4 +1,4 @@
-# financial-tracker
+<img src="brand/logo-horizontal.png" alt="Fintara" width="360" />
 
 [![CI](https://github.com/JorgeSaicoski/financial-tracker/actions/workflows/ci.yml/badge.svg)](https://github.com/JorgeSaicoski/financial-tracker/actions/workflows/ci.yml)
 
