@@ -38,7 +38,7 @@
 
 	async function handleReport(event) {
 		event.preventDefault();
-		const value = parseFloat(amountInput.replace(',', '.'));
+		const value = parseFloat(amountInput);
 		if (Number.isNaN(value)) {
 			reportError = 'Enter a number';
 			return;
@@ -46,7 +46,7 @@
 		reportError = '';
 		reporting = true;
 		try {
-			const timestamp = new Date(`${dateInput}T00:00:00Z`).toISOString();
+			const timestamp = new Date(`${dateInput}T00:00:00`).toISOString();
 			await onReportBalance(account.id, Math.round(value * 100), timestamp);
 			amountInput = '';
 			// The report just posted belongs in the history too — reload it
