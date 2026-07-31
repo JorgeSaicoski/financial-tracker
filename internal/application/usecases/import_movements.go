@@ -54,7 +54,7 @@ func (uc *importMovementsUseCase) Execute(ctx context.Context, input ImportMovem
 	if err != nil {
 		return result, err
 	}
-	categoriesByName, err := uc.categoriesByLowerName(ctx)
+	categoriesByName, err := uc.categoriesByLowerName(ctx, input.UserID)
 	if err != nil {
 		return result, err
 	}
@@ -165,23 +165,23 @@ func (uc *importMovementsUseCase) currencySet(ctx context.Context) (map[string]b
 	return set, nil
 }
 
-// categoriesByLowerName maps every existing category's lowercased name to
-// its id (BACK-14 follow-up: categories are a real, globally-shared
-// registry now, referenced by id — a CSV's "category" column is still a
-// human-readable name, so import resolves it to an id here rather than
-// requiring the operator to know ids). Two categories with the same
-// name (allowed under the shared model) collide in this map; whichever
-// was returned last by CategoryRepository.ListAll wins, an acceptable
-// ambiguity for a CSV convenience lookup.
-func (uc *importMovementsUseCase) categoriesByLowerName(ctx context.Context) (map[string]string, error) {
-	categories, err := uc.categories.ListAll(ctx)
+// categoriesByLowerName indexes the categories userID may reference on a
+// new movement — their own list (ListForUser), same scope
+// resolveCategoryID enforces — plus the three system categories, which
+// never appear in ListForUser (no user_categories row is ever seeded for
+// them) but are always selectable, per resolveCategoryID's own exception.
+func (uc *importMovementsUseCase) categoriesByLowerName(ctx context.Context, userID string) (map[string]string, error) {
+	owned, err := uc.categories.ListForUser(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
-	byName := make(map[string]string, len(categories))
-	for _, c := range categories {
+	byName := make(map[string]string, len(owned)+3)
+	for _, c := range owned {
 		byName[strings.ToLower(c.Name)] = c.ID
 	}
+	byName[entities.CategoryTransfer] = entities.CategoryTransferID
+	byName[entities.CategoryIncome] = entities.CategoryIncomeID
+	byName[entities.CategoryOther] = entities.CategoryOtherID
 	return byName, nil
 }
 
