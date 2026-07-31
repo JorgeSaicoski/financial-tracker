@@ -27,16 +27,17 @@ CREATE TABLE credit_card_purchases_new (
     installment_count INTEGER NOT NULL,
     purchase_date     TEXT    NOT NULL,
     status            TEXT    NOT NULL DEFAULT 'active' CHECK (status IN ('active','cancelled')),
-    created_at        TEXT    NOT NULL
+    created_at        TEXT    NOT NULL,
+    card_id           TEXT    REFERENCES cards(id)
 );
 
 INSERT INTO credit_card_purchases_new (
     id, user_id, description, category, total_amount, currency,
-    installment_count, purchase_date, status, created_at
+    installment_count, purchase_date, status, created_at, card_id
 )
 SELECT
     id, user_id, description, category, total_amount, currency,
-    installment_count, purchase_date, status, created_at
+    installment_count, purchase_date, status, created_at, card_id
 FROM credit_card_purchases;
 
 DROP TABLE credit_card_purchases;
@@ -45,6 +46,8 @@ ALTER TABLE credit_card_purchases_new RENAME TO credit_card_purchases;
 
 CREATE INDEX IF NOT EXISTS idx_credit_card_purchases_user
     ON credit_card_purchases (user_id, purchase_date DESC);
+CREATE INDEX IF NOT EXISTS idx_credit_card_purchases_card
+    ON credit_card_purchases (card_id) WHERE card_id IS NOT NULL;
 
 CREATE TABLE movements_new (
     id                            TEXT PRIMARY KEY,
@@ -71,7 +74,9 @@ CREATE TABLE movements_new (
     account_id                    TEXT    REFERENCES accounts(id),
     transfer_id                   TEXT,
     avoidability_override_percent INTEGER,
-    recurring_rule_id             TEXT    REFERENCES recurring_rules(id)
+    recurring_rule_id             TEXT    REFERENCES recurring_rules(id),
+    card_id                       TEXT    REFERENCES cards(id),
+    card_payment_for_card_id      TEXT    REFERENCES cards(id)
 );
 
 INSERT INTO movements_new (
@@ -80,7 +85,7 @@ INSERT INTO movements_new (
     cancels_movement_id, reversed_by_movement_id, timestamp, sync_status,
     ledger_transaction_id, sync_attempts, last_sync_error,
     last_sync_attempt_at, synced_at, created_at, account_id, transfer_id,
-    avoidability_override_percent, recurring_rule_id
+    avoidability_override_percent, recurring_rule_id, card_id, card_payment_for_card_id
 )
 SELECT
     id, user_id, amount, currency, description, category, payment_method,
@@ -88,7 +93,7 @@ SELECT
     cancels_movement_id, reversed_by_movement_id, timestamp, sync_status,
     ledger_transaction_id, sync_attempts, last_sync_error,
     last_sync_attempt_at, synced_at, created_at, account_id, transfer_id,
-    avoidability_override_percent, recurring_rule_id
+    avoidability_override_percent, recurring_rule_id, card_id, card_payment_for_card_id
 FROM movements;
 
 DROP TABLE movements;
@@ -107,3 +112,7 @@ CREATE INDEX IF NOT EXISTS idx_movements_account
     ON movements (account_id) WHERE account_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_movements_recurring_rule
     ON movements (recurring_rule_id) WHERE recurring_rule_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_movements_card
+    ON movements (card_id) WHERE card_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_movements_card_payment
+    ON movements (card_payment_for_card_id) WHERE card_payment_for_card_id IS NOT NULL;

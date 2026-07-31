@@ -26,7 +26,7 @@ func NewCreditCardPurchaseRepository(db *sql.DB) repositories.CreditCardPurchase
 // credit_card_purchases targets — category_id (BACK-14 follow-up) comes
 // straight from the DTO now, no name resolution happens here.
 const purchaseInsertColumns = `id, user_id, description, category_id, total_amount, currency,
-	installment_count, purchase_date, status, created_at`
+	installment_count, purchase_date, status, created_at, card_id`
 
 // purchaseSelectColumns/purchaseFromClause mirror
 // movementSelectColumns/movementFromClause: a LEFT JOIN against
@@ -36,7 +36,7 @@ const purchaseInsertColumns = `id, user_id, description, category_id, total_amou
 const purchaseSelectColumns = `credit_card_purchases.id, credit_card_purchases.user_id, credit_card_purchases.description,
 	COALESCE(categories.name, '') AS category, credit_card_purchases.category_id, credit_card_purchases.total_amount, credit_card_purchases.currency,
 	credit_card_purchases.installment_count, credit_card_purchases.purchase_date, credit_card_purchases.status,
-	credit_card_purchases.created_at`
+	credit_card_purchases.created_at, credit_card_purchases.card_id`
 
 const purchaseFromClause = `credit_card_purchases LEFT JOIN categories ON credit_card_purchases.category_id = categories.id`
 
@@ -53,10 +53,10 @@ func (r *creditCardPurchaseRepository) CreateWithInstallments(ctx context.Contex
 
 	_, err = tx.ExecContext(ctx,
 		`INSERT INTO credit_card_purchases (`+purchaseInsertColumns+`)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 		purchase.ID, purchase.UserID, nullString(purchase.Description), strOrNil(purchase.CategoryID),
 		purchase.TotalAmount, purchase.Currency, purchase.InstallmentCount,
-		purchase.PurchaseDate, purchase.Status, purchase.CreatedAt)
+		purchase.PurchaseDate, purchase.Status, purchase.CreatedAt, strOrNil(purchase.CardID))
 	if err != nil {
 		return nil, nil, fmt.Errorf("postgresql: insert purchase: %w", err)
 	}
@@ -113,9 +113,10 @@ func scanPurchase(row scannable) (*dto.CreditCardPurchaseDTO, error) {
 		p           dto.CreditCardPurchaseDTO
 		description sql.NullString
 		categoryID  sql.NullString
+		cardID      sql.NullString
 	)
 	err := row.Scan(&p.ID, &p.UserID, &description, &p.Category, &categoryID, &p.TotalAmount, &p.Currency,
-		&p.InstallmentCount, &p.PurchaseDate, &p.Status, &p.CreatedAt)
+		&p.InstallmentCount, &p.PurchaseDate, &p.Status, &p.CreatedAt, &cardID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, err
@@ -124,6 +125,7 @@ func scanPurchase(row scannable) (*dto.CreditCardPurchaseDTO, error) {
 	}
 	p.Description = description.String
 	p.CategoryID = stringPtr(categoryID)
+	p.CardID = stringPtr(cardID)
 	return &p, nil
 }
 

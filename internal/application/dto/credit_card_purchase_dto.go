@@ -24,6 +24,8 @@ type CreditCardPurchaseDTO struct {
 	PurchaseDate     time.Time
 	Status           string
 	CreatedAt        time.Time
+
+	CardID *string
 }
 
 func CreditCardPurchaseFromEntity(p *entities.CreditCardPurchase) *CreditCardPurchaseDTO {
@@ -41,6 +43,7 @@ func CreditCardPurchaseFromEntity(p *entities.CreditCardPurchase) *CreditCardPur
 		PurchaseDate:     p.PurchaseDate,
 		Status:           string(p.Status),
 		CreatedAt:        p.CreatedAt,
+		CardID:           p.CardID,
 	}
 }
 
@@ -59,5 +62,6 @@ func (p *CreditCardPurchaseDTO) ToEntity() *entities.CreditCardPurchase {
 		PurchaseDate:     p.PurchaseDate,
 		Status:           entities.CreditCardPurchaseStatus(p.Status),
 		CreatedAt:        p.CreatedAt,
+		CardID:           p.CardID,
 	}
 }

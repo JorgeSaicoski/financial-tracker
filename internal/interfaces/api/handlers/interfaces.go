@@ -15,6 +15,17 @@ type AccountHandler interface {
 	ReportBalance(w http.ResponseWriter, r *http.Request)
 }
 
+// CardHandler exposes the cards API (BACK-08): credit-card profiles
+// (closing/due day, optional limit/budget) plus each card's computed
+// amount-due picture.
+type CardHandler interface {
+	CreateCard(w http.ResponseWriter, r *http.Request)
+	ListCards(w http.ResponseWriter, r *http.Request)
+	GetCard(w http.ResponseWriter, r *http.Request)
+	UpdateCard(w http.ResponseWriter, r *http.Request)
+	DeleteCard(w http.ResponseWriter, r *http.Request)
+}
+
 // ConfigHandler exposes runtime flags the frontend needs before it can
 // decide how to render at all (today: whether to enforce the OIDC login
 // guard). See config_handler.go's doc comment for why this is a minimal

@@ -87,6 +87,14 @@ func (h *movementHandler) CreateMovement(w http.ResponseWriter, r *http.Request)
 	if req.AccountID != "" {
 		accountID = &req.AccountID
 	}
+	var cardID *string
+	if req.CardID != "" {
+		cardID = &req.CardID
+	}
+	var cardPaymentForCardID *string
+	if req.CardPaymentForCardID != "" {
+		cardPaymentForCardID = &req.CardPaymentForCardID
+	}
 
 	if req.Installments > 1 {
 		if entities.PaymentMethod(req.PaymentMethod) != entities.PaymentMethodCreditCard {
@@ -107,6 +115,7 @@ func (h *movementHandler) CreateMovement(w http.ResponseWriter, r *http.Request)
 			Description:  req.Description,
 			CategoryID:   req.CategoryID,
 			Installments: req.Installments,
+			CardID:       cardID,
 		})
 		if err != nil {
 			h.writeUsecaseError(w, "create credit card purchase", err)
@@ -124,6 +133,8 @@ func (h *movementHandler) CreateMovement(w http.ResponseWriter, r *http.Request)
 		CategoryID:                  req.CategoryID,
 		PaymentMethod:               req.PaymentMethod,
 		AccountID:                   accountID,
+		CardID:                      cardID,
+		CardPaymentForCardID:        cardPaymentForCardID,
 		AvoidabilityOverridePercent: req.AvoidabilityOverridePercent,
 	})
 	if err != nil {
@@ -442,6 +453,12 @@ func toMovementResponse(m *dto.MovementDTO) interfacedto.MovementResponse {
 	if m.TransferID != nil {
 		resp.TransferID = *m.TransferID
 	}
+	if m.CardID != nil {
+		resp.CardID = *m.CardID
+	}
+	if m.CardPaymentForCardID != nil {
+		resp.CardPaymentForCardID = *m.CardPaymentForCardID
+	}
 	if m.RecurringRuleID != nil {
 		resp.RecurringRuleID = *m.RecurringRuleID
 	}
@@ -471,6 +488,9 @@ func toPurchaseResponse(p *dto.CreditCardPurchaseDTO, movements []*dto.MovementD
 		InstallmentCount: p.InstallmentCount,
 		PurchaseDate:     p.PurchaseDate,
 		Status:           p.Status,
+	}
+	if p.CardID != nil {
+		resp.CardID = *p.CardID
 	}
 	if p.CategoryID != nil {
 		resp.CategoryID = *p.CategoryID

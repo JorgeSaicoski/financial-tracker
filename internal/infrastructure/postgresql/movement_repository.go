@@ -52,7 +52,8 @@ func NewMovementRepository(db *sql.DB) repositories.MovementRepository {
 const movementInsertColumns = `id, user_id, amount, currency, description, category_id, payment_method,
 	credit_card_purchase_id, installment_number, status, cancels_movement_id, reversed_by_movement_id,
 	timestamp, sync_status, ledger_transaction_id, sync_attempts, last_sync_error, last_sync_attempt_at,
-	synced_at, created_at, account_id, transfer_id, avoidability_override_percent, recurring_rule_id`
+	synced_at, created_at, account_id, transfer_id, card_id, card_payment_for_card_id,
+	avoidability_override_percent, recurring_rule_id`
 
 // movementSelectColumns is what every read query selects — a LEFT JOIN
 // against categories resolves category_id back to a name (COALESCE to
@@ -68,6 +69,7 @@ const movementSelectColumns = `movements.id, movements.user_id, movements.amount
 	movements.sync_status, movements.ledger_transaction_id, movements.sync_attempts,
 	movements.last_sync_error, movements.last_sync_attempt_at, movements.synced_at,
 	movements.created_at, movements.account_id, movements.transfer_id,
+	movements.card_id, movements.card_payment_for_card_id,
 	movements.avoidability_override_percent, movements.recurring_rule_id`
 
 const movementFromClause = `movements LEFT JOIN categories ON movements.category_id = categories.id`
@@ -146,6 +148,18 @@ func (r *movementRepository) ListByCreditCardPurchase(ctx context.Context, purch
 	return r.queryMovements(ctx,
 		`SELECT `+movementSelectColumns+` FROM `+movementFromClause+` WHERE movements.credit_card_purchase_id = $1 ORDER BY movements.installment_number ASC`,
 		purchaseID)
+}
+
+func (r *movementRepository) ListByCard(ctx context.Context, cardID string) ([]*dto.MovementDTO, error) {
+	return r.queryMovements(ctx,
+		`SELECT `+movementSelectColumns+` FROM `+movementFromClause+` WHERE movements.card_id = $1 ORDER BY movements.timestamp ASC`,
+		cardID)
+}
+
+func (r *movementRepository) ListCardPayments(ctx context.Context, cardID string) ([]*dto.MovementDTO, error) {
+	return r.queryMovements(ctx,
+		`SELECT `+movementSelectColumns+` FROM `+movementFromClause+` WHERE movements.card_payment_for_card_id = $1 ORDER BY movements.timestamp ASC`,
+		cardID)
 }
 
 func (r *movementRepository) ListByTransferID(ctx context.Context, transferID string) ([]*dto.MovementDTO, error) {
@@ -411,6 +425,18 @@ func (r *movementRepositoryTx) ListByCreditCardPurchase(ctx context.Context, pur
 		purchaseID)
 }
 
+func (r *movementRepositoryTx) ListByCard(ctx context.Context, cardID string) ([]*dto.MovementDTO, error) {
+	return queryMovements(ctx, r.tx,
+		`SELECT `+movementSelectColumns+` FROM `+movementFromClause+` WHERE movements.card_id = $1 ORDER BY movements.timestamp ASC`,
+		cardID)
+}
+
+func (r *movementRepositoryTx) ListCardPayments(ctx context.Context, cardID string) ([]*dto.MovementDTO, error) {
+	return queryMovements(ctx, r.tx,
+		`SELECT `+movementSelectColumns+` FROM `+movementFromClause+` WHERE movements.card_payment_for_card_id = $1 ORDER BY movements.timestamp ASC`,
+		cardID)
+}
+
 func (r *movementRepositoryTx) ListByTransferID(ctx context.Context, transferID string) ([]*dto.MovementDTO, error) {
 	return queryMovements(ctx, r.tx,
 		`SELECT `+movementSelectColumns+` FROM `+movementFromClause+` WHERE movements.transfer_id = $1 ORDER BY movements.amount ASC`,
@@ -563,7 +589,7 @@ func queryMovements(ctx context.Context, q queryer, query string, args ...any) (
 func insertMovement(ctx context.Context, ex execer, m *dto.MovementDTO) error {
 	_, err := ex.ExecContext(ctx,
 		`INSERT INTO movements (`+movementInsertColumns+`)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)`,
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)`,
 		m.ID, m.UserID, m.Amount, m.Currency,
 		nullString(m.Description), strOrNil(m.CategoryID), m.PaymentMethod,
 		strOrNil(m.CreditCardPurchaseID), intOrNil(m.InstallmentNumber),
@@ -571,6 +597,7 @@ func insertMovement(ctx context.Context, ex execer, m *dto.MovementDTO) error {
 		m.Timestamp, m.SyncStatus, strOrNil(m.LedgerTransactionID),
 		m.SyncAttempts, strOrNil(m.LastSyncError), timeOrNil(m.LastSyncAttemptAt),
 		timeOrNil(m.SyncedAt), m.CreatedAt, strOrNil(m.AccountID), strOrNil(m.TransferID),
+		strOrNil(m.CardID), strOrNil(m.CardPaymentForCardID),
 		intOrNil(m.AvoidabilityOverridePercent), strOrNil(m.RecurringRuleID))
 	if err != nil {
 		return fmt.Errorf("postgresql: insert movement: %w", err)
@@ -593,6 +620,7 @@ func scanMovement(row scannable) (*dto.MovementDTO, error) {
 		categoryID                          sql.NullString
 		purchaseID, cancelsID, reversedByID sql.NullString
 		ledgerTxID, accountID, transferID   sql.NullString
+		cardID, cardPaymentForCardID        sql.NullString
 		recurringRuleID                     sql.NullString
 		installmentNumber                   sql.NullInt64
 		syncAttempts                        int64
@@ -608,6 +636,7 @@ func scanMovement(row scannable) (*dto.MovementDTO, error) {
 		&m.Timestamp, &m.SyncStatus, &ledgerTxID,
 		&syncAttempts, &lastSyncError, &lastAttemptAt,
 		&syncedAt, &m.CreatedAt, &accountID, &transferID,
+		&cardID, &cardPaymentForCardID,
 		&avoidabilityOverride, &recurringRuleID)
 	if err != nil {
 		return nil, err
@@ -624,6 +653,8 @@ func scanMovement(row scannable) (*dto.MovementDTO, error) {
 	m.ReversedByMovementID = stringPtr(reversedByID)
 	m.LedgerTransactionID = stringPtr(ledgerTxID)
 	m.LastSyncError = stringPtr(lastSyncError)
+	m.CardID = stringPtr(cardID)
+	m.CardPaymentForCardID = stringPtr(cardPaymentForCardID)
 	if installmentNumber.Valid {
 		n := int(installmentNumber.Int64)
 		m.InstallmentNumber = &n

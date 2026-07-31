@@ -2,6 +2,7 @@ package usecases
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/JorgeSaicoski/financial-tracker/internal/application/dto"
@@ -12,13 +13,14 @@ import (
 
 type createCreditCardPurchaseUseCase struct {
 	purchases  repositories.CreditCardPurchaseRepository
+	cards      repositories.CardRepository
 	categories repositories.CategoryRepository
 	settings   repositories.UserSettingsRepository
 }
 
 // NewCreateCreditCardPurchase returns interface type for dependency injection.
-func NewCreateCreditCardPurchase(purchases repositories.CreditCardPurchaseRepository, categories repositories.CategoryRepository, settings repositories.UserSettingsRepository) CreateCreditCardPurchaseUseCase {
-	return &createCreditCardPurchaseUseCase{purchases: purchases, categories: categories, settings: settings}
+func NewCreateCreditCardPurchase(purchases repositories.CreditCardPurchaseRepository, cards repositories.CardRepository, categories repositories.CategoryRepository, settings repositories.UserSettingsRepository) CreateCreditCardPurchaseUseCase {
+	return &createCreditCardPurchaseUseCase{purchases: purchases, cards: cards, categories: categories, settings: settings}
 }
 
 func (uc *createCreditCardPurchaseUseCase) Execute(ctx context.Context, input CreateCreditCardPurchaseInput) (*dto.CreditCardPurchaseDTO, []*dto.MovementDTO, error) {
@@ -45,12 +47,39 @@ func (uc *createCreditCardPurchaseUseCase) Execute(ctx context.Context, input Cr
 		return nil, nil, apperrors.ErrInvalidInput
 	}
 
+	now := time.Now().UTC()
+
+	// BACK-08: with a card, each installment is dated on the card's real
+	// due days instead of a flat monthly offset from the purchase date.
+	// Without one, today's flat-offset behavior is unchanged.
+	dueDates := make([]time.Time, input.Installments)
+	if input.CardID != nil {
+		card, err := uc.cards.GetByID(ctx, input.UserID, *input.CardID)
+		if apperrors.Is(err, apperrors.ErrNotFound) {
+			return nil, nil, fmt.Errorf("%w: card not found", apperrors.ErrInvalidInput)
+		}
+		if err != nil {
+			return nil, nil, err
+		}
+		if card.Currency != input.Currency {
+			return nil, nil, fmt.Errorf("%w: purchase currency %q does not match card currency %q",
+				apperrors.ErrInvalidInput, input.Currency, card.Currency)
+		}
+		dueDates[0] = entities.NextCardDueDate(card.ClosingDay, card.DueDay, now)
+		for i := 1; i < len(dueDates); i++ {
+			dueDates[i] = entities.AddCardCycle(card.DueDay, dueDates[i-1])
+		}
+	} else {
+		for i := range dueDates {
+			dueDates[i] = now.AddDate(0, i, 0)
+		}
+	}
+
 	syncStatus, err := effectiveSyncStatus(ctx, uc.settings, input.UserID)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	now := time.Now().UTC()
 	purchase := &entities.CreditCardPurchase{
 		UserID:           input.UserID,
 		Description:      input.Description,
@@ -61,6 +90,7 @@ func (uc *createCreditCardPurchaseUseCase) Execute(ctx context.Context, input Cr
 		PurchaseDate:     now,
 		Status:           entities.CreditCardPurchaseStatusActive,
 		CreatedAt:        now,
+		CardID:           input.CardID,
 	}
 
 	installments := make([]*entities.Movement, input.Installments)
@@ -78,11 +108,12 @@ func (uc *createCreditCardPurchaseUseCase) Execute(ctx context.Context, input Cr
 			CategoryID:        categoryID,
 			PaymentMethod:     entities.PaymentMethodCreditCard,
 			InstallmentNumber: &number,
+			CardID:            input.CardID,
 			Status:            entities.MovementStatusActive,
 			SyncStatus:        syncStatus,
-			// One installment per month starting now. Future ones are
-			// invisible to the sync worker until their date arrives.
-			Timestamp: now.AddDate(0, i, 0),
+			// One installment per due date. Future ones are invisible to
+			// the sync worker until their date arrives.
+			Timestamp: dueDates[i],
 			CreatedAt: now,
 		}
 	}

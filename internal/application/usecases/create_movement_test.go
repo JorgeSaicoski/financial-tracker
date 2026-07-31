@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/JorgeSaicoski/financial-tracker/internal/application/dto"
 	"github.com/JorgeSaicoski/financial-tracker/internal/domain/entities"
@@ -11,7 +12,7 @@ import (
 )
 
 func TestCreateMovementValidation(t *testing.T) {
-	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), newFakeCategoryRepo(), newFakeUserSettingsRepo())
+	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), newFakeCardRepo(), newFakeCategoryRepo(), newFakeUserSettingsRepo())
 
 	cases := []struct {
 		name  string
@@ -35,7 +36,7 @@ func TestCreateMovementValidation(t *testing.T) {
 
 func TestCreateMovementDefaultsAndState(t *testing.T) {
 	repo := newFakeMovementRepo()
-	uc := NewCreateMovement(repo, newFakeAccountRepo(), newFakeCategoryRepo(), newFakeUserSettingsRepo())
+	uc := NewCreateMovement(repo, newFakeAccountRepo(), newFakeCardRepo(), newFakeCategoryRepo(), newFakeUserSettingsRepo())
 
 	m, err := uc.Execute(context.Background(), CreateMovementInput{
 		UserID: "u1", Amount: -500, Currency: "usd",
@@ -66,7 +67,7 @@ func TestCreateMovementDefaultsAndState(t *testing.T) {
 }
 
 func TestCreateMovementKeepsExplicitFields(t *testing.T) {
-	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), newFakeCategoryRepo(), newFakeUserSettingsRepo())
+	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), newFakeCardRepo(), newFakeCategoryRepo(), newFakeUserSettingsRepo())
 
 	m, err := uc.Execute(context.Background(), CreateMovementInput{
 		UserID: "u1", Amount: -500, Currency: "usd",
@@ -81,6 +82,156 @@ func TestCreateMovementKeepsExplicitFields(t *testing.T) {
 	}
 }
 
+func TestCreateMovementWithCardIDDatesOnDueDay(t *testing.T) {
+	cards := newFakeCardRepo()
+	card, err := cards.Create(context.Background(), dtoCard("u1", "5", "15"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), cards, newFakeCategoryRepo(), newFakeUserSettingsRepo())
+
+	m, err := uc.Execute(context.Background(), CreateMovementInput{
+		UserID: "u1", Amount: -500, Currency: "usd",
+		PaymentMethod: string(entities.PaymentMethodCreditCard), CardID: &card.ID,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if m.CardID == nil || *m.CardID != card.ID {
+		t.Errorf("card_id not set: %+v", m)
+	}
+	wantDue := entities.NextCardDueDate(card.ClosingDay, card.DueDay, m.CreatedAt)
+	if !m.Timestamp.Equal(wantDue) {
+		t.Errorf("timestamp = %v, want the card's due date %v (not \"now\")", m.Timestamp, wantDue)
+	}
+}
+
+func TestCreateMovementCardIDRequiresCreditCardPaymentMethod(t *testing.T) {
+	cards := newFakeCardRepo()
+	card, err := cards.Create(context.Background(), dtoCard("u1", "5", "15"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), cards, newFakeCategoryRepo(), newFakeUserSettingsRepo())
+
+	_, err = uc.Execute(context.Background(), CreateMovementInput{
+		UserID: "u1", Amount: -500, Currency: "usd", CardID: &card.ID,
+	})
+	if !errors.Is(err, apperrors.ErrInvalidInput) {
+		t.Errorf("want ErrInvalidInput when card_id is set without payment_method=credit_card, got %v", err)
+	}
+}
+
+func TestCreateMovementCardIDRejectsCurrencyMismatch(t *testing.T) {
+	cards := newFakeCardRepo()
+	card, err := cards.Create(context.Background(), dtoCard("u1", "5", "15"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), cards, newFakeCategoryRepo(), newFakeUserSettingsRepo())
+
+	_, err = uc.Execute(context.Background(), CreateMovementInput{
+		UserID: "u1", Amount: -500, Currency: "brl",
+		PaymentMethod: string(entities.PaymentMethodCreditCard), CardID: &card.ID,
+	})
+	if !errors.Is(err, apperrors.ErrInvalidInput) {
+		t.Errorf("want ErrInvalidInput for currency mismatch, got %v", err)
+	}
+}
+
+func TestCreateMovementCardPaymentKeepsNowAsTimestamp(t *testing.T) {
+	cards := newFakeCardRepo()
+	card, err := cards.Create(context.Background(), dtoCard("u1", "5", "15"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	categories := newFakeCategoryRepo()
+	if _, err := categories.Create(context.Background(), &dto.CategoryDTO{ID: entities.CategoryTransferID, Name: entities.CategoryTransfer}); err != nil {
+		t.Fatal(err)
+	}
+	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), cards, categories, newFakeUserSettingsRepo())
+
+	before := time.Now().UTC()
+	transferID := entities.CategoryTransferID
+	m, err := uc.Execute(context.Background(), CreateMovementInput{
+		UserID: "u1", Amount: -400, Currency: "usd",
+		CategoryID: &transferID, CardPaymentForCardID: &card.ID,
+	})
+	after := time.Now().UTC()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if m.CardPaymentForCardID == nil || *m.CardPaymentForCardID != card.ID {
+		t.Errorf("card_payment_for_card_id not set: %+v", m)
+	}
+	if m.Timestamp.Before(before) || m.Timestamp.After(after) {
+		t.Errorf("a card payment's timestamp should be \"now\", got %v (window %v..%v)", m.Timestamp, before, after)
+	}
+}
+
+func TestCreateMovementCardPaymentEnforcesInvariants(t *testing.T) {
+	cards := newFakeCardRepo()
+	card, err := cards.Create(context.Background(), dtoCard("u1", "5", "15"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	categories := newFakeCategoryRepo()
+	if _, err := categories.Create(context.Background(), &dto.CategoryDTO{ID: entities.CategoryTransferID, Name: entities.CategoryTransfer}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := categories.Create(context.Background(), &dto.CategoryDTO{ID: "food-id", Name: "food"}); err != nil {
+		t.Fatal(err)
+	}
+	transferID := entities.CategoryTransferID
+	foodID := "food-id"
+
+	cases := []struct {
+		name  string
+		input CreateMovementInput
+	}{
+		{
+			"card_id and card_payment_for_card_id together",
+			CreateMovementInput{
+				UserID: "u1", Amount: -400, Currency: "usd",
+				CategoryID: &transferID, CardID: &card.ID, CardPaymentForCardID: &card.ID,
+			},
+		},
+		{
+			"wrong category",
+			CreateMovementInput{
+				UserID: "u1", Amount: -400, Currency: "usd",
+				CategoryID: &foodID, CardPaymentForCardID: &card.ID,
+			},
+		},
+		{
+			"missing category",
+			CreateMovementInput{
+				UserID: "u1", Amount: -400, Currency: "usd",
+				CardPaymentForCardID: &card.ID,
+			},
+		},
+		{
+			"positive amount",
+			CreateMovementInput{
+				UserID: "u1", Amount: 400, Currency: "usd",
+				CategoryID: &transferID, CardPaymentForCardID: &card.ID,
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), cards, categories, newFakeUserSettingsRepo())
+			if _, err := uc.Execute(context.Background(), tc.input); !errors.Is(err, apperrors.ErrInvalidInput) {
+				t.Errorf("want ErrInvalidInput, got %v", err)
+			}
+		})
+	}
+}
+
+func dtoCard(userID, closingDay, dueDay string) *dto.CardDTO {
+	return &dto.CardDTO{UserID: userID, Name: "Visa", ClosingDay: closingDay, DueDay: dueDay, Currency: "usd"}
+}
+
 // TestCreateMovementRequiresExistingCategoryID guards BACK-14 follow-up's
 // contract: category_id must reference an existing (globally visible)
 // category — there's no more implicit name-based registration, since
@@ -92,7 +243,7 @@ func TestCreateMovementRequiresExistingCategoryID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), categories, newFakeUserSettingsRepo())
+	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), newFakeCardRepo(), categories, newFakeUserSettingsRepo())
 
 	m, err := uc.Execute(context.Background(), CreateMovementInput{
 		UserID: "u1", Amount: -500, Currency: "usd", CategoryID: &food.ID,
@@ -119,7 +270,7 @@ func TestCreateMovementRejectsCategoryUserDoesNotHave(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), categories, newFakeUserSettingsRepo())
+	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), newFakeCardRepo(), categories, newFakeUserSettingsRepo())
 
 	_, err = uc.Execute(context.Background(), CreateMovementInput{
 		UserID: "u1", Amount: -500, Currency: "usd", CategoryID: &food.ID,
@@ -141,7 +292,7 @@ func TestCreateMovementRejectsCategoryRemovedFromCallersList(t *testing.T) {
 	if err := categories.Remove(context.Background(), "u1", restaurant.ID); err != nil {
 		t.Fatal(err)
 	}
-	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), categories, newFakeUserSettingsRepo())
+	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), newFakeCardRepo(), categories, newFakeUserSettingsRepo())
 
 	_, err = uc.Execute(context.Background(), CreateMovementInput{
 		UserID: "u1", Amount: -500, Currency: "usd", CategoryID: &restaurant.ID,
@@ -160,7 +311,7 @@ func TestCreateMovementAllowsSystemCategoryRegardlessOfHasList(t *testing.T) {
 	if _, err := categories.Create(context.Background(), &dto.CategoryDTO{ID: entities.CategoryOtherID, Name: entities.CategoryOther}); err != nil {
 		t.Fatal(err)
 	}
-	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), categories, newFakeUserSettingsRepo())
+	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), newFakeCardRepo(), categories, newFakeUserSettingsRepo())
 
 	otherID := entities.CategoryOtherID
 	m, err := uc.Execute(context.Background(), CreateMovementInput{
@@ -173,3 +324,4 @@ func TestCreateMovementAllowsSystemCategoryRegardlessOfHasList(t *testing.T) {
 		t.Errorf("category_id = %v, want %q", m.CategoryID, entities.CategoryOtherID)
 	}
 }
+
