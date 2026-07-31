@@ -169,6 +169,65 @@ func TestCreateMovementCardPaymentKeepsNowAsTimestamp(t *testing.T) {
 	}
 }
 
+func TestCreateMovementCardPaymentEnforcesInvariants(t *testing.T) {
+	cards := newFakeCardRepo()
+	card, err := cards.Create(context.Background(), dtoCard("u1", "5", "15"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	categories := newFakeCategoryRepo()
+	if _, err := categories.Create(context.Background(), &dto.CategoryDTO{ID: entities.CategoryTransferID, Name: entities.CategoryTransfer}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := categories.Create(context.Background(), &dto.CategoryDTO{ID: "food-id", Name: "food"}); err != nil {
+		t.Fatal(err)
+	}
+	transferID := entities.CategoryTransferID
+	foodID := "food-id"
+
+	cases := []struct {
+		name  string
+		input CreateMovementInput
+	}{
+		{
+			"card_id and card_payment_for_card_id together",
+			CreateMovementInput{
+				UserID: "u1", Amount: -400, Currency: "usd",
+				CategoryID: &transferID, CardID: &card.ID, CardPaymentForCardID: &card.ID,
+			},
+		},
+		{
+			"wrong category",
+			CreateMovementInput{
+				UserID: "u1", Amount: -400, Currency: "usd",
+				CategoryID: &foodID, CardPaymentForCardID: &card.ID,
+			},
+		},
+		{
+			"missing category",
+			CreateMovementInput{
+				UserID: "u1", Amount: -400, Currency: "usd",
+				CardPaymentForCardID: &card.ID,
+			},
+		},
+		{
+			"positive amount",
+			CreateMovementInput{
+				UserID: "u1", Amount: 400, Currency: "usd",
+				CategoryID: &transferID, CardPaymentForCardID: &card.ID,
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), cards, categories, newFakeUserSettingsRepo())
+			if _, err := uc.Execute(context.Background(), tc.input); !errors.Is(err, apperrors.ErrInvalidInput) {
+				t.Errorf("want ErrInvalidInput, got %v", err)
+			}
+		})
+	}
+}
+
 func dtoCard(userID, closingDay, dueDay string) *dto.CardDTO {
 	return &dto.CardDTO{UserID: userID, Name: "Visa", ClosingDay: closingDay, DueDay: dueDay, Currency: "usd"}
 }

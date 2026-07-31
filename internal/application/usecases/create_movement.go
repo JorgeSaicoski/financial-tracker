@@ -83,8 +83,21 @@ func (uc *createMovementUseCase) Execute(ctx context.Context, input CreateMoveme
 	// BACK-08: a card payment (an ordinary expense settling a card's
 	// statement) needs the same ownership/currency validation as a
 	// charge, but keeps "now" as its timestamp — it's a real event that
-	// happened today, not a future due date.
+	// happened today, not a future due date. It must also be shaped like
+	// the transfer-style payment the doc comment on
+	// Movement.CardPaymentForCardID promises: category=transfer, a
+	// negative amount, and never combined with CardID — otherwise it
+	// double-counts in cashflow and corrupts next_due_total math.
 	if input.CardPaymentForCardID != nil {
+		if input.CardID != nil {
+			return nil, fmt.Errorf("%w: card_id and card_payment_for_card_id are mutually exclusive", apperrors.ErrInvalidInput)
+		}
+		if categoryID == nil || *categoryID != entities.CategoryTransferID {
+			return nil, fmt.Errorf("%w: card_payment_for_card_id requires category \"transfer\"", apperrors.ErrInvalidInput)
+		}
+		if input.Amount >= 0 {
+			return nil, fmt.Errorf("%w: card_payment_for_card_id requires a negative amount", apperrors.ErrInvalidInput)
+		}
 		if _, err := uc.validateCard(ctx, input.UserID, input.Currency, *input.CardPaymentForCardID); err != nil {
 			return nil, err
 		}
