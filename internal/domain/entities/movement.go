@@ -120,3 +120,17 @@ func (m Movement) IsReversal() bool {
 func (m Movement) IsCancelled() bool {
 	return m.Status == MovementStatusVoided || m.ReversedByMovementID != nil
 }
+
+// PotentialSaving is BACK-12's avoidability-weighted counterfactual for
+// a single expense: how much of it could plausibly be avoided, given its
+// own or its category's avoidability_percent (BACK-14, resolved by
+// application/usecases.EffectiveAvoidability before this is called). A
+// nil avoidabilityPercent (unresolved: no override, no matching category)
+// contributes 0 rather than an assumed percentage, so callers can add
+// this into a running total unconditionally.
+func PotentialSaving(expenseAmount int64, avoidabilityPercent *int) int64 {
+	if avoidabilityPercent == nil {
+		return 0
+	}
+	return expenseAmount * int64(*avoidabilityPercent) / 100
+}

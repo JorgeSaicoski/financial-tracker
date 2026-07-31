@@ -52,9 +52,25 @@ Beyond movements, the tracker knows about:
   `POST /movements/{id}/cancel`.
 - **Exchange rates** — user-managed historical rates against USD
   (`POST /exchange-rates`, `GET /exchange-rates`), a decimal string never
-  a float. Backing the (not yet built) purchasing-power report; posting
-  the same currency + effective date again backfills/corrects that row
-  instead of duplicating it.
+  a float. Backing the purchasing-power report below; posting the same
+  currency + effective date again backfills/corrects that row instead of
+  duplicating it.
+- **Purchasing power** (`GET /reports/purchasing-power?months=`) — per
+  calendar month, per native currency (never summed together): spending
+  by category (each tagged with that category's `avoidability_percent`,
+  BACK-14), income, total expenses, `potential_savings` (the
+  avoidability-weighted counterfactual — Σ `expense × avoidability% /
+  100`), and profit. Every one of those figures also gets a USD view,
+  each movement converted at the BACK-11 rate effective *at its own
+  timestamp* — this is what makes a currency's devaluation visible: the
+  native profit stays identical across months, but the USD profit drops.
+  `profit_usd_at_current_rate` additionally converts the whole month at
+  *today's* rate, so the response shows both "what it was worth then"
+  and "what it's worth now." Transfers are excluded (so are contributions
+  to investment accounts, since those are transfers too) and cancelled
+  movements never count; a currency missing a rate for some date marks
+  that month's USD figures `usd_incomplete: true` rather than guessing —
+  native figures are always complete regardless.
 
 Backend layout follows Clean Architecture (see `CleanExampleGo` for the
 reference pattern this was modeled on): the **domain** layer holds pure
@@ -85,7 +101,7 @@ application/usecases         every use-case interface + Input/Result/View type c
                              ListCurrencies, AddCurrency, TransferBetweenAccounts,
                              CancelTransfer, SetExchangeRate, ListExchangeRates,
                              DeleteExchangeRate, ToUSD, CreateCategory, ListCategories,
-                             UpdateCategory, DeleteCategory
+                             UpdateCategory, DeleteCategory, GetPurchasingPower
 application/sync             SyncService: pushes pending movements to ledger-service via the
                              LedgerGateway port (background ticker + manual trigger)
 infrastructure/sqlite        implements the repositories on the local SQLite DB (source of truth,
@@ -242,6 +258,7 @@ gets from cashflow totals).
 | `PATCH` | `/categories/{id}` | Rename and/or change `avoidability_percent`. 400 outside 0-100 or on a system category. |
 | `DELETE` | `/categories/{id}` | Remove a category the user owns. 400 on a system category. Movements still referencing the deleted name are untouched — they just resolve to no avoidability going forward. |
 | `GET` | `/cashflow?from=&to=&user_id=` | Money in / out / net over the interval, per currency (`totals`) and per account (`by_account`, unassigned movements in their own bucket). `from`/`to` required. Transfers are excluded. |
+| `GET` | `/reports/purchasing-power?months=` | Per-month, per-currency spending/income/profit/`potential_savings`, each with a USD view — see "Purchasing power" above. `months` defaults to 6, clamped to 24. |
 | `GET` | `/accounts` | All accounts with `estimated_balance`, latest `reported_balance`/`reported_at`, `movements_since_report` and `last_return` (+ the valid `account_types`). |
 | `POST` | `/accounts` | Create an account. Body: `{name, type?, currency?, user_id?}`. Currency must be registered; duplicate names (case-insensitive) are rejected. |
 | `POST` | `/accounts/{id}/balance` | Report the account's real current balance: `{balance}` (smallest unit). Returns the updated account view, including the newly computed `last_return` when a previous report exists. |

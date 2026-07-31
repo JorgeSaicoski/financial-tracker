@@ -1,0 +1,212 @@
+package usecases
+
+import (
+	"context"
+	"sort"
+	"time"
+
+	"github.com/JorgeSaicoski/financial-tracker/internal/application/dto"
+	"github.com/JorgeSaicoski/financial-tracker/internal/application/repositories"
+	"github.com/JorgeSaicoski/financial-tracker/internal/domain/entities"
+	apperrors "github.com/JorgeSaicoski/financial-tracker/internal/pkg/errors"
+)
+
+const (
+	defaultPurchasingPowerMonths = 6
+	maxPurchasingPowerMonths     = 24
+)
+
+type getPurchasingPowerUseCase struct {
+	movements  repositories.MovementRepository
+	categories repositories.CategoryRepository
+	toUSD      ToUSDUseCase
+}
+
+// NewGetPurchasingPower returns interface type for dependency injection.
+func NewGetPurchasingPower(movements repositories.MovementRepository, categories repositories.CategoryRepository, toUSD ToUSDUseCase) GetPurchasingPowerUseCase {
+	return &getPurchasingPowerUseCase{movements: movements, categories: categories, toUSD: toUSD}
+}
+
+// monthKey is a (year, month) bucket key, and currencyBucket groups one
+// month's movements by native currency (BACK-12 never sums natively
+// across currencies).
+type monthKey struct {
+	year  int
+	month time.Month
+}
+
+func (uc *getPurchasingPowerUseCase) Execute(ctx context.Context, userID string, months int) ([]PurchasingPowerMonth, error) {
+	if userID == "" {
+		return nil, apperrors.ErrInvalidInput
+	}
+	if months <= 0 {
+		months = defaultPurchasingPowerMonths
+	}
+	if months > maxPurchasingPowerMonths {
+		months = maxPurchasingPowerMonths
+	}
+
+	now := time.Now().UTC()
+	currentMonthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	from := time.Date(currentMonthStart.Year(), currentMonthStart.Month()-time.Month(months-1), 1, 0, 0, 0, 0, time.UTC)
+	to := currentMonthStart.AddDate(0, 1, 0) // exclusive: start of next month
+
+	movements, err := uc.movements.ListByUser(ctx, userID, nil, &from, &to, 0, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	categoryRows, err := uc.categories.ListForUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	categoriesByID := CategoriesByID(categoryRows)
+
+	// monthOrder preserves first-seen order (from oldest to newest, since
+	// ListByUser returns newest-first and we walk it below) so the
+	// response doesn't depend on Go's random map iteration order.
+	byMonth := make(map[monthKey]map[string][]*dto.MovementDTO)
+	var monthOrder []monthKey
+	for _, m := range movements {
+		if m.Status == string(entities.MovementStatusVoided) {
+			continue
+		}
+		if m.CategoryID != nil && *m.CategoryID == entities.CategoryTransferID {
+			// Transfers (including to an investment-type account) are
+			// neither income nor expense — excluding them here also
+			// excludes contributions to investment accounts, satisfying
+			// "profit not considering investments" without a separate
+			// account-type check.
+			continue
+		}
+		key := monthKey{year: m.Timestamp.Year(), month: m.Timestamp.Month()}
+		byCurrency, ok := byMonth[key]
+		if !ok {
+			byCurrency = make(map[string][]*dto.MovementDTO)
+			byMonth[key] = byCurrency
+			monthOrder = append(monthOrder, key)
+		}
+		byCurrency[m.Currency] = append(byCurrency[m.Currency], m)
+	}
+	sort.Slice(monthOrder, func(i, j int) bool {
+		if monthOrder[i].year != monthOrder[j].year {
+			return monthOrder[i].year < monthOrder[j].year
+		}
+		return monthOrder[i].month < monthOrder[j].month
+	})
+
+	out := make([]PurchasingPowerMonth, 0, len(monthOrder))
+	for _, key := range monthOrder {
+		monthReport, err := uc.buildMonth(ctx, userID, key, byMonth[key], categoriesByID, now)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, monthReport)
+	}
+	return out, nil
+}
+
+func (uc *getPurchasingPowerUseCase) buildMonth(
+	ctx context.Context, userID string, key monthKey, byCurrency map[string][]*dto.MovementDTO,
+	categoriesByID map[string]*dto.CategoryDTO, now time.Time,
+) (PurchasingPowerMonth, error) {
+	month := PurchasingPowerMonth{Month: time.Date(key.year, key.month, 1, 0, 0, 0, 0, time.UTC)}
+
+	currencies := make([]string, 0, len(byCurrency))
+	for currency := range byCurrency {
+		currencies = append(currencies, currency)
+	}
+	sort.Strings(currencies)
+
+	var profitUSDAtCurrentRate int64
+	for _, currency := range currencies {
+		view, currentRateSum, err := uc.buildCurrencyView(ctx, userID, currency, byCurrency[currency], categoriesByID, now)
+		if err != nil {
+			return PurchasingPowerMonth{}, err
+		}
+		month.Currencies = append(month.Currencies, view)
+		profitUSDAtCurrentRate += currentRateSum
+	}
+	month.ProfitUSDAtCurrentRate = profitUSDAtCurrentRate
+	return month, nil
+}
+
+// buildCurrencyView computes one month's native + historical-rate-USD
+// figures for one currency, plus that group's contribution to
+// profit_usd_at_current_rate (summed by the caller across every
+// currency active that month).
+func (uc *getPurchasingPowerUseCase) buildCurrencyView(
+	ctx context.Context, userID, currency string, rows []*dto.MovementDTO,
+	categoriesByID map[string]*dto.CategoryDTO, now time.Time,
+) (PurchasingPowerCurrencyView, int64, error) {
+	view := PurchasingPowerCurrencyView{Currency: currency}
+	spendingByCategory := make(map[string]*PurchasingPowerCategorySpending)
+	var categoryOrder []string
+	var currentRateProfit int64
+
+	for _, m := range rows {
+		isIncome := m.Amount > 0
+
+		if isIncome {
+			view.Income += m.Amount
+		} else {
+			expense := -m.Amount
+			view.TotalExpenses += expense
+
+			view.PotentialSavings += entities.PotentialSaving(expense, EffectiveAvoidability(m, categoriesByID))
+
+			categoryKey := ""
+			if m.CategoryID != nil {
+				categoryKey = *m.CategoryID
+			}
+			spending, ok := spendingByCategory[categoryKey]
+			if !ok {
+				var avoidabilityPercent *int
+				var categoryName string
+				if c, ok := categoriesByID[categoryKey]; ok {
+					avoidabilityPercent = c.AvoidabilityPercent
+					categoryName = c.Name
+				}
+				spending = &PurchasingPowerCategorySpending{Category: categoryName, AvoidabilityPercent: avoidabilityPercent}
+				spendingByCategory[categoryKey] = spending
+				categoryOrder = append(categoryOrder, categoryKey)
+			}
+			spending.Amount += expense
+		}
+
+		usdAmount, err := uc.toUSD.Execute(ctx, userID, m.Amount, currency, m.Timestamp)
+		if err != nil {
+			if apperrors.Is(err, apperrors.ErrNotFound) {
+				view.USDIncomplete = true
+			} else {
+				return PurchasingPowerCurrencyView{}, 0, err
+			}
+		} else {
+			if isIncome {
+				view.IncomeUSD += usdAmount
+			} else {
+				view.TotalExpensesUSD += -usdAmount
+				view.PotentialSavingsUSD += entities.PotentialSaving(-usdAmount, EffectiveAvoidability(m, categoriesByID))
+			}
+		}
+
+		// profit_usd_at_current_rate: same amount, converted at "now"
+		// instead of the movement's own timestamp. A currency with no
+		// rate as of now simply doesn't contribute to this supplementary
+		// figure (the primary USDIncomplete signal above already covers
+		// the historical-rate figures this field is compared against).
+		if currentUSDAmount, err := uc.toUSD.Execute(ctx, userID, m.Amount, currency, now); err == nil {
+			currentRateProfit += currentUSDAmount
+		} else if !apperrors.Is(err, apperrors.ErrNotFound) {
+			return PurchasingPowerCurrencyView{}, 0, err
+		}
+	}
+
+	sort.Strings(categoryOrder)
+	for _, id := range categoryOrder {
+		view.SpendingByCategory = append(view.SpendingByCategory, *spendingByCategory[id])
+	}
+	view.Profit = view.Income - view.TotalExpenses
+	view.ProfitUSD = view.IncomeUSD - view.TotalExpensesUSD
+	return view, currentRateProfit, nil
+}

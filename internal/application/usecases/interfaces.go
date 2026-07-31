@@ -442,6 +442,67 @@ type ToUSDUseCase interface {
 	Execute(ctx context.Context, userID string, amount int64, currency string, at time.Time) (int64, error)
 }
 
+// PurchasingPowerCategorySpending is one category's slice of a month's
+// spending in one currency (BACK-12) — the expense magnitude (positive,
+// smallest currency unit) plus that category's avoidability_percent
+// (BACK-14; nil for an unrecognized/uncategorized bucket).
+type PurchasingPowerCategorySpending struct {
+	Category            string
+	AvoidabilityPercent *int
+	Amount              int64
+}
+
+// PurchasingPowerCurrencyView is one month's figures in one native
+// currency, plus that same group's USD-converted view (each movement
+// converted at the BACK-11 rate effective at its own timestamp — this is
+// what makes a devaluation visible in the USD figures while the native
+// ones stay identical). Native figures are always complete; USDIncomplete
+// is true when at least one movement in this group had no rate available
+// for its date, in which case the USD figures here exclude that
+// movement's contribution rather than guessing.
+type PurchasingPowerCurrencyView struct {
+	Currency           string
+	SpendingByCategory []PurchasingPowerCategorySpending
+	Income             int64
+	TotalExpenses      int64
+	// PotentialSavings is BACK-12's avoidability-weighted counterfactual:
+	// Σ (expense_amount × effective_avoidability / 100) over this
+	// currency's non-cancelled, non-transfer expense movements. A
+	// movement with no resolvable avoidability (BACK-14: no override, no
+	// matching/recognized category) contributes 0, not an assumed
+	// percentage — it still counts in TotalExpenses.
+	PotentialSavings int64
+	Profit           int64 // Income - TotalExpenses
+
+	IncomeUSD           int64
+	TotalExpensesUSD    int64
+	PotentialSavingsUSD int64
+	ProfitUSD           int64
+	USDIncomplete       bool
+}
+
+// PurchasingPowerMonth is one calendar month's report (BACK-12), one
+// PurchasingPowerCurrencyView per native currency active that month
+// (native figures are never summed across currencies) plus one
+// month-level figure that IS a cross-currency sum, since it's already
+// USD-normalized: ProfitUSDAtCurrentRate converts every currency's
+// income/expenses at *today's* rate rather than each movement's own
+// historical rate, so comparing it against the sum of this month's
+// per-currency ProfitUSD shows "what this month is worth now" vs. "what
+// it was worth then."
+type PurchasingPowerMonth struct {
+	Month                  time.Time // first of the month, UTC
+	Currencies             []PurchasingPowerCurrencyView
+	ProfitUSDAtCurrentRate int64
+}
+
+// GetPurchasingPowerUseCase reports the last `months` calendar months
+// (including the current, in-progress one), newest first is not
+// guaranteed — see the usecase for actual ordering.
+type GetPurchasingPowerUseCase interface {
+	Execute(ctx context.Context, userID string, months int) ([]PurchasingPowerMonth, error)
+}
+
 // CreateCategoryInput carries a POST /categories body. AvoidabilityPercent
 // nil defaults to a neutral 50 (same default the one-time migration
 // backfill used) — the user edits it afterward. UserID becomes the new
