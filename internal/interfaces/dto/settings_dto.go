@@ -22,6 +22,9 @@ type PatchSettingsRequest struct {
 // SettingsResponse is a user's settings: entitlement (operator-controlled,
 // read-only here) plus preference (user-controlled). Effective ledger
 // sync is ledger_sync_entitled AND ledger_sync_enabled.
+// SubscriptionStatus/SubscriptionCurrentPeriodEnd (BACK-19) are omitted
+// (rather than emitted as null/"") when the caller has never had a
+// subscription row — a free-tier user is the common case, not an error.
 type SettingsResponse struct {
 	UserID               string    `json:"user_id"`
 	LedgerSyncEntitled   bool      `json:"ledger_sync_entitled"`
@@ -30,4 +33,7 @@ type SettingsResponse struct {
 	DefaultCategoryID    string    `json:"default_category_id,omitempty"`
 	CreatedAt            time.Time `json:"created_at"`
 	UpdatedAt            time.Time `json:"updated_at"`
+
+	SubscriptionStatus           string     `json:"subscription_status,omitempty"`
+	SubscriptionCurrentPeriodEnd *time.Time `json:"subscription_current_period_end,omitempty"`
 }

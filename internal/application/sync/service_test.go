@@ -139,6 +139,12 @@ func (f *fakeSettingsRepo) ListSyncDisabledUserIDs(_ context.Context) ([]string,
 	return out, nil
 }
 
+func (f *fakeSettingsRepo) SetCloudStorageEntitled(_ context.Context, userID string, entitled bool) (*dto.UserSettingsDTO, error) {
+	s := dto.DefaultUserSettings(userID, time.Now().UTC())
+	s.CloudStorageEntitled = entitled
+	return s, nil
+}
+
 func (f *fakeRepo) MarkSynced(_ context.Context, id, ledgerTransactionID string, at time.Time) error {
 	m, ok := f.movements[id]
 	if !ok {

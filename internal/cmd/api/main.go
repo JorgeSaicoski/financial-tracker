@@ -8,11 +8,13 @@ import (
 	"strconv"
 	"time"
 
+	billingapp "github.com/JorgeSaicoski/financial-tracker/internal/application/billing"
 	recurringapp "github.com/JorgeSaicoski/financial-tracker/internal/application/recurring"
 	"github.com/JorgeSaicoski/financial-tracker/internal/application/repositories"
 	syncapp "github.com/JorgeSaicoski/financial-tracker/internal/application/sync"
 	"github.com/JorgeSaicoski/financial-tracker/internal/application/usecases"
 	"github.com/JorgeSaicoski/financial-tracker/internal/infrastructure/authentik"
+	billinginfra "github.com/JorgeSaicoski/financial-tracker/internal/infrastructure/billing"
 	cryptox "github.com/JorgeSaicoski/financial-tracker/internal/infrastructure/crypto"
 	"github.com/JorgeSaicoski/financial-tracker/internal/infrastructure/ledgerservice"
 	"github.com/JorgeSaicoski/financial-tracker/internal/infrastructure/postgresql"
@@ -72,6 +74,16 @@ func main() {
 	retryCooldown := durationEnvOr(log, "SYNC_RETRY_COOLDOWN", 60*time.Second)
 	recurringInterval := durationEnvOr(log, "RECURRING_INTERVAL", 1*time.Hour)
 
+	// BACK-19: paid cloud-storage subscription. Reference price is an
+	// annual USD figure in cents (1000 = $10.00/year, the ticket's
+	// anchor price — not final, see its "Open decisions"); grace period
+	// is how long a past_due subscription keeps its entitlement before
+	// the sweep lapses it ("a late card shouldn't cut off access
+	// instantly").
+	billingReferencePriceUSDCents := int64(intEnvOr(log, "BILLING_REFERENCE_PRICE_USD_CENTS", 1000))
+	billingGracePeriodDays := intEnvOr(log, "BILLING_GRACE_PERIOD_DAYS", 7)
+	billingSweepInterval := durationEnvOr(log, "BILLING_SWEEP_INTERVAL", time.Hour)
+
 	// Infrastructure: the local database (SQLite by default, or Postgres
 	// when DB_DRIVER=postgres) is the source of truth; ledger-service is
 	// only reached by the background sync, so requests keep working while
@@ -91,6 +103,7 @@ func main() {
 		settingsRepo        repositories.UserSettingsRepository
 		limitsRepo          repositories.LimitsRepository
 		ledgerPseudonymRepo repositories.LedgerPseudonymRepository
+		subscriptionRepo    repositories.SubscriptionRepository
 	)
 
 	switch dbDriver {
@@ -144,6 +157,7 @@ func main() {
 		userRepo = postgresql.NewUserRepository(db)
 		settingsRepo = postgresql.NewUserSettingsRepository(db)
 		ledgerPseudonymRepo = postgresql.NewLedgerPseudonymRepository(db)
+		subscriptionRepo = postgresql.NewSubscriptionRepository(db)
 		limitsRepo = postgresql.NewLimitsRepository(db)
 	case "sqlite":
 		db, err = sqlite.Open(dbPath)
@@ -166,6 +180,7 @@ func main() {
 		userRepo = sqlite.NewUserRepository(db)
 		settingsRepo = sqlite.NewUserSettingsRepository(db)
 		ledgerPseudonymRepo = sqlite.NewLedgerPseudonymRepository(db)
+		subscriptionRepo = sqlite.NewSubscriptionRepository(db)
 		limitsRepo = sqlite.NewLimitsRepository(db)
 	default:
 		log.Error("unknown DB_DRIVER %q (want sqlite or postgres)", dbDriver)
@@ -186,6 +201,21 @@ func main() {
 		os.Exit(1)
 	}
 	ledgerPseudonymizer := cryptox.NewLedgerPseudonymizer(ledgerHMACKey, ledgerPseudonymRepo)
+
+	// BACK-19: POST /billing/webhook authenticity — required at startup
+	// like LEDGER_HMAC_KEY above, so a deployment can't silently accept
+	// unsigned billing events.
+	billingWebhookSecretB64 := os.Getenv("BILLING_WEBHOOK_SECRET")
+	if billingWebhookSecretB64 == "" {
+		log.Error("BILLING_WEBHOOK_SECRET is required (BACK-19: authenticates POST /billing/webhook). Generate with: openssl rand -base64 32")
+		os.Exit(1)
+	}
+	billingWebhookSecret, err := cryptox.ParseHMACKey(billingWebhookSecretB64)
+	if err != nil {
+		log.Error("BILLING_WEBHOOK_SECRET: %v", err)
+		os.Exit(1)
+	}
+	billingWebhookVerifier := billinginfra.NewHMACWebhookVerifier(billingWebhookSecret)
 
 	ledgerClient := ledgerservice.NewClient(ledgerServiceURL)
 	ledgerGateway := ledgerservice.NewLedgerGateway(ledgerClient, ledgerPseudonymizer)
@@ -217,10 +247,12 @@ func main() {
 	setLocalArchiveSetting := usecases.NewSetLocalArchiveSetting(localArchiveRepo)
 	exportArchive := usecases.NewExportArchive(accountRepo, movementRepo, purchaseRepo)
 	importArchive := usecases.NewImportArchive(accountRepo, movementRepo, purchaseRepo, categoryRepo)
-	ensureUser := usecases.NewEnsureUser(userRepo)
+	ensureUser := usecases.NewEnsureUser(userRepo, settingsRepo)
 	getUser := usecases.NewGetUser(userRepo)
-	getSettings := usecases.NewGetUserSettings(settingsRepo)
-	updateSettings := usecases.NewUpdateUserSettings(settingsRepo, movementRepo, categoryRepo)
+	getSettings := usecases.NewGetUserSettings(settingsRepo, subscriptionRepo)
+	updateSettings := usecases.NewUpdateUserSettings(settingsRepo, movementRepo, categoryRepo, subscriptionRepo)
+	processBillingWebhook := usecases.NewProcessBillingWebhook(subscriptionRepo, settingsRepo)
+	getBillingPlan := usecases.NewGetBillingPlan(exchangeRateRepo, currencyRepo, billingReferencePriceUSDCents)
 	createCategory := usecases.NewCreateCategory(categoryRepo, limitsRepo)
 	listCategories := usecases.NewListCategories(categoryRepo)
 	updateCategory := usecases.NewUpdateCategory(categoryRepo)
@@ -250,6 +282,7 @@ func main() {
 	settingsHandler := handlers.NewSettingsHandler(getSettings, updateSettings, log)
 	userHandler := handlers.NewUserHandler(getUser, log)
 	configHandler := handlers.NewConfigHandler(standalone, authEnabled, log)
+	billingHandler := handlers.NewBillingHandler(processBillingWebhook, getBillingPlan, billingWebhookVerifier, log)
 
 	// Auth: AUTH_DISABLED is a dev-only escape hatch, off by default. A
 	// deployment that leaves OIDC_ISSUER_URL unset without explicitly
@@ -273,12 +306,13 @@ func main() {
 		log.Info("auth: validating Authorization bearer tokens against OIDC issuer %s (audience %q)", oidcIssuerURL, oidcAudience)
 	}
 
-	router := api.NewRouter(movementHandler, accountHandler, currencyHandler, categoryHandler, transferHandler, exchangeRateHandler, recurringRuleHandler, archiveHandler, settingsHandler, userHandler, configHandler, authMiddleware, corsAllowedOrigin)
+	router := api.NewRouter(movementHandler, accountHandler, currencyHandler, categoryHandler, transferHandler, exchangeRateHandler, recurringRuleHandler, archiveHandler, settingsHandler, userHandler, configHandler, billingHandler, authMiddleware, corsAllowedOrigin)
 
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
 	syncService.Start(ctx, syncInterval)
 	recurringService.Start(ctx, recurringInterval)
+	billingapp.NewService(subscriptionRepo, settingsRepo, billingGracePeriodDays, log).Start(ctx, billingSweepInterval)
 
 	dbDescription := dbPath
 	if dbDriver == "postgres" {
@@ -286,7 +320,7 @@ func main() {
 	}
 	addr := ":" + port
 	log.Info("financial-tracker API listening on %s (db driver %s at %s, syncing to ledger-service at %s every %s)", addr, dbDriver, dbDescription, ledgerServiceURL, syncInterval)
-	log.Info("endpoints: GET /config | GET|PATCH /settings | POST /movements | GET /movements | PATCH /movements/{id} | POST /movements/{id}/cancel | POST /credit-card-purchases/{id}/cancel | POST /sync | GET /categories | POST /categories | PATCH /categories/{id} | DELETE /categories/{id} | GET /cashflow | GET|POST /accounts | POST /accounts/{id}/balance | GET|POST /currencies | POST /transfers | POST /transfers/{id}/cancel | GET|POST /exchange-rates | DELETE /exchange-rates/{id} | GET|POST /recurring-rules | PATCH /recurring-rules/{id} | GET|PUT /settings/local-archive | GET /export/archive | POST /import/archive | GET /me")
+	log.Info("endpoints: GET /config | GET|PATCH /settings | POST /movements | GET /movements | PATCH /movements/{id} | POST /movements/{id}/cancel | POST /credit-card-purchases/{id}/cancel | POST /sync | GET /categories | POST /categories | PATCH /categories/{id} | DELETE /categories/{id} | GET /cashflow | GET|POST /accounts | POST /accounts/{id}/balance | GET|POST /currencies | POST /transfers | POST /transfers/{id}/cancel | GET|POST /exchange-rates | DELETE /exchange-rates/{id} | GET|POST /recurring-rules | PATCH /recurring-rules/{id} | GET|PUT /settings/local-archive | GET /export/archive | POST /import/archive | GET /me | POST /billing/webhook | GET /billing/plan")
 
 	if err := http.ListenAndServe(addr, router); err != nil {
 		log.Error("server failed: %v", err)
