@@ -1,4 +1,4 @@
-.PHONY: help up down restart build rebuild logs test clean update ps run remove-db web web-install web-build deploy-up deploy-down deploy-restart deploy-logs deploy-ps deploy-remove-db
+.PHONY: help up down restart build rebuild logs test clean update ps run remove-db web web-install web-build build-standalone deploy-up deploy-down deploy-restart deploy-logs deploy-ps deploy-remove-db
 
 # Detect container runtime with full paths
 CONTAINER_CMD := $(shell command -v /usr/bin/podman 2> /dev/null || command -v /usr/local/bin/podman 2> /dev/null || command -v podman 2> /dev/null || command -v /usr/bin/docker 2> /dev/null || command -v docker 2> /dev/null)
@@ -22,6 +22,9 @@ help:
 	@echo "  make web         - Run the web frontend locally (npm run dev, no containers - needs the API running separately)"
 	@echo "  make web-install - Install/update web frontend dependencies (npm install)"
 	@echo "  make web-build   - Build the web frontend for production (npm run build)"
+	@echo "  make build-standalone - Build the standalone binary (BACK-09: one file, no"
+	@echo "                   server, no account — see README's 'Running locally"
+	@echo "                   (standalone)' section for embedding a real frontend build)"
 	@echo "  make test        - Run Go tests"
 	@echo "  make remove-db   - Delete all databases (financial-tracker + ledger-service) for a fresh start"
 	@echo "  make clean       - Clean up containers, volumes, and build artifacts"
@@ -85,6 +88,18 @@ web: web-install
 # Build the web frontend for production
 web-build: web-install
 	cd web && npm run build
+
+# Build the standalone binary (BACK-09): one file, no server, no
+# account. go:embed bakes in whatever's under internal/webui/dist/ at
+# compile time — empty by default (only a .gitkeep is version-controlled,
+# see internal/webui/webui.go's doc comment), so this always produces a
+# working API-only binary; it only serves the real UI once a static
+# frontend build has been copied into that directory first (see
+# README's "Running locally (standalone)" section for the current status
+# of that step).
+build-standalone:
+	go build -o financial-tracker-standalone ./internal/cmd/api
+	@echo "Built ./financial-tracker-standalone — run with STANDALONE=true or --standalone"
 
 # Run Go tests
 test:

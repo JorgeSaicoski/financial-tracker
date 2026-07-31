@@ -30,6 +30,23 @@ type CurrencyHandler interface {
 	AddCurrency(w http.ResponseWriter, r *http.Request)
 }
 
+// ImportHandler exposes BACK-03's CSV history backfill: the spec the
+// frontend renders (not hardcoded) and the import endpoint itself. Its
+// revert direction lives on ExportHandler instead (BACK-09's fuller
+// export, with include_cancelled support) — see that type's doc comment.
+type ImportHandler interface {
+	GetImportSpec(w http.ResponseWriter, r *http.Request)
+	ImportMovements(w http.ResponseWriter, r *http.Request)
+}
+
+// ExportHandler exposes BACK-09's CSV export: the user's own movement
+// history in exactly BACK-03's import model (see internal/infrastructure/csv
+// for the shared column model), available in every mode so data is always
+// portable — not standalone-only.
+type ExportHandler interface {
+	ExportMovements(w http.ResponseWriter, r *http.Request)
+}
+
 // CategoryHandler exposes the write side of BACK-14's per-user category
 // registry (create/rename/set avoidability/delete). The read side
 // (GET /categories, combined with the still-fixed payment-method list)
@@ -40,7 +57,6 @@ type CategoryHandler interface {
 	UpdateCategory(w http.ResponseWriter, r *http.Request)
 	DeleteCategory(w http.ResponseWriter, r *http.Request)
 }
-
 // ExchangeRateHandler exposes user-managed, historical exchange rates
 // against USD (BACK-11) — reference data the user maintains themselves,
 // no external rate API involved.
