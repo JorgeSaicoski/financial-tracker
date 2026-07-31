@@ -18,6 +18,14 @@
 	</div>
 
 	<div class="section">
+		<span class="section-label">Navigate</span>
+		<ul class="nav-links">
+			<li><a href="/">Movements</a></li>
+			<li><a href="/import">Import CSV</a></li>
+		</ul>
+	</div>
+
+	<div class="section">
 		<span class="section-label">Quick add</span>
 		<ul class="quick-actions">
 			{#each quickActions as action (action.label)}
@@ -102,6 +110,35 @@
 		display: flex;
 		flex-wrap: wrap;
 		gap: 0.5rem;
+	}
+
+	.nav-links {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 0.2rem;
+	}
+
+	.nav-links a {
+		display: block;
+		padding: 0.45rem 0.6rem;
+		border-radius: var(--radius-control);
+		color: var(--color-text-primary);
+		text-decoration: none;
+		font-size: 0.85rem;
+		font-weight: 500;
+		transition: background var(--transition-fast);
+	}
+
+	.nav-links a:hover {
+		background: var(--color-bg);
+	}
+
+	.nav-links a:focus-visible {
+		outline: none;
+		box-shadow: var(--focus-ring);
 	}
 
 	button[disabled] {
