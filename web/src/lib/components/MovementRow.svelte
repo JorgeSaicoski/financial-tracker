@@ -3,8 +3,17 @@
 	import EditMovementForm from './EditMovementForm.svelte';
 	import Modal from './Modal.svelte';
 
-	let { movement, accounts, categories, paymentMethods, onCancel, onCancelPurchase, onCancelTransfer, onSave } =
-		$props();
+	let {
+		movement,
+		accounts,
+		categories,
+		paymentMethods,
+		cards = [],
+		onCancel,
+		onCancelPurchase,
+		onCancelTransfer,
+		onSave
+	} = $props();
 
 	let editing = $state(false);
 
@@ -12,6 +21,10 @@
 
 	function accountName(id) {
 		return accounts.find((a) => a.id === id)?.name;
+	}
+
+	function cardName(id) {
+		return cards.find((c) => c.id === id)?.name;
 	}
 </script>
 
@@ -35,6 +48,14 @@
 			· {paymentMethodLabels[movement.payment_method] ?? movement.payment_method}
 			{#if movement.account_id && accountName(movement.account_id)}
 				<span class="chip account-chip">{accountName(movement.account_id)}</span>
+			{/if}
+			{#if movement.card_id && cardName(movement.card_id)}
+				<span class="chip card-chip">💳 {cardName(movement.card_id)}</span>
+			{/if}
+			{#if movement.card_payment_for_card_id}
+				<span class="chip card-payment-chip" title="Payment settling a card statement — not a spend"
+					>💳 card payment</span
+				>
 			{/if}
 			{#if movement.transfer_id}
 				<span class="chip transfer-chip" title="Part of a transfer">⇄ transfer</span>
@@ -194,9 +215,15 @@
 		color: var(--color-info);
 	}
 
-	.chip.account-chip {
+	.chip.account-chip,
+	.chip.card-chip {
 		background: var(--color-bg);
 		color: var(--color-text-secondary);
+	}
+
+	.chip.card-payment-chip {
+		background: #dbeafe;
+		color: var(--color-info);
 	}
 
 	.amount {

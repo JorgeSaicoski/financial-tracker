@@ -52,7 +52,9 @@ export function createMovement({
 	category,
 	payment_method,
 	installments,
-	account_id
+	account_id,
+	card_id,
+	card_payment_for_card_id
 }) {
 	return request('/movements', {
 		method: 'POST',
@@ -63,7 +65,9 @@ export function createMovement({
 			category,
 			payment_method,
 			installments,
-			account_id
+			account_id,
+			card_id,
+			card_payment_for_card_id
 		})
 	});
 }
@@ -145,6 +149,37 @@ export function addCurrency(code) {
 		method: 'POST',
 		body: JSON.stringify({ code })
 	});
+}
+
+// --- Cards (BACK-08) ---
+
+export function listCards() {
+	return request('/cards');
+}
+
+// closing_day/due_day are "1"-"28" or "last"; credit_limit/monthly_budget
+// are optional, in the smallest currency unit like movement amounts.
+export function createCard({ name, last_four, closing_day, due_day, credit_limit, monthly_budget, currency }) {
+	return request('/cards', {
+		method: 'POST',
+		body: JSON.stringify({ name, last_four, closing_day, due_day, credit_limit, monthly_budget, currency })
+	});
+}
+
+// patch is a partial UpdateCardRequest body: only include the fields that
+// should change.
+export function updateCard(id, patch) {
+	return request(`/cards/${id}`, {
+		method: 'PATCH',
+		body: JSON.stringify(patch)
+	});
+}
+
+// 204 No Content on success; request()'s res.json().catch(() => null)
+// already handles that gracefully. Rejects with 409 if the card is still
+// referenced by a movement or purchase.
+export function deleteCard(id) {
+	return request(`/cards/${id}`, { method: 'DELETE' });
 }
 
 // --- Local archive (BACK-15) ---

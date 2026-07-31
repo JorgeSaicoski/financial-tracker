@@ -1,16 +1,20 @@
 <script>
+	import { onDestroy, tick } from 'svelte';
 	import { labelFor, accountTypeIcons, categoryIcons, paymentMethodLabels } from '$lib/format.js';
+	import { quickAction } from '$lib/stores/quickAction.js';
 
 	let {
 		categories,
 		paymentMethods,
 		currencies,
 		accounts,
+		cards = [],
 		currency = $bindable(),
 		onSubmit,
 		onAddCurrency
 	} = $props();
 
+	let amountEl = $state();
 	let amountInput = $state('');
 	let directionInput = $state('expense');
 	let descriptionInput = $state('');
@@ -18,12 +22,37 @@
 	let paymentMethodInput = $state('other');
 	let installmentsInput = $state(1);
 	let accountInput = $state('');
+	let cardInput = $state('');
 	let submitting = $state(false);
 	let error = $state('');
 
 	const isCreditCard = $derived(paymentMethodInput === 'credit_card');
 	const splittingInstallments = $derived(isCreditCard && Number(installmentsInput) > 1);
 	const selectedAccount = $derived(accounts.find((a) => a.id === accountInput));
+	// A selected card pins currency to that card's own — POST /movements
+	// rejects a currency that doesn't match the card's, so this is a hard
+	// requirement, not just a convenience default (unlike the account's
+	// fixed-currency treatment below).
+	const selectedCard = $derived(cards.find((c) => c.id === cardInput));
+
+	// Sidebar's quick-add shortcuts (FRONT-07) set direction+category here
+	// without submitting — the user still confirms the amount. Skip the
+	// store's synchronous initial callback the same way movementEvents.js
+	// subscribers do, so mount doesn't clobber the form's own defaults.
+	let skippedInitialQuickAction = false;
+	const unsubscribeQuickAction = quickAction.subscribe((action) => {
+		if (!skippedInitialQuickAction) {
+			skippedInitialQuickAction = true;
+			return;
+		}
+		directionInput = action.direction;
+		categoryInput = action.category;
+		tick().then(() => {
+			amountEl?.focus();
+			amountEl?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+		});
+	});
+	onDestroy(unsubscribeQuickAction);
 
 	async function handleSubmit(event) {
 		event.preventDefault();
@@ -41,18 +70,20 @@
 		try {
 			await onSubmit({
 				amount: signedAmount,
-				currency: selectedAccount ? selectedAccount.currency : currency,
+				currency: selectedCard ? selectedCard.currency : selectedAccount ? selectedAccount.currency : currency,
 				description: descriptionInput.trim(),
 				category: categoryInput,
 				payment_method: paymentMethodInput,
 				installments,
 				// Installment purchases are future bills, not money leaving
 				// an account today — the API rejects the combination.
-				account_id: installments > 1 ? undefined : accountInput || undefined
+				account_id: installments > 1 ? undefined : accountInput || undefined,
+				card_id: isCreditCard ? cardInput || undefined : undefined
 			});
 			amountInput = '';
 			descriptionInput = '';
 			installmentsInput = 1;
+			cardInput = '';
 		} catch (err) {
 			error = err.message;
 		} finally {
@@ -69,13 +100,18 @@
 			min="0"
 			placeholder="Amount"
 			bind:value={amountInput}
+			bind:this={amountEl}
 			required
 		/>
 		<select bind:value={directionInput} aria-label="Direction">
 			<option value="expense">Expense</option>
 			<option value="income">Income</option>
 		</select>
-		{#if selectedAccount}
+		{#if selectedCard}
+			<span class="fixed-currency" title="Currency follows the selected card">
+				{selectedCard.currency.toUpperCase()}
+			</span>
+		{:else if selectedAccount}
 			<span class="fixed-currency" title="Currency follows the selected account">
 				{selectedAccount.currency.toUpperCase()}
 			</span>
@@ -115,6 +151,16 @@
 			</label>
 		{/if}
 	</div>
+	{#if isCreditCard && cards.length > 0}
+		<div class="form-row">
+			<select bind:value={cardInput} aria-label="Card">
+				<option value="">No card</option>
+				{#each cards as card (card.id)}
+					<option value={card.id}>{card.name}{card.last_four ? ` ••${card.last_four}` : ''}</option>
+				{/each}
+			</select>
+		</div>
+	{/if}
 
 	{#if error}
 		<p class="message error">{error}</p>
