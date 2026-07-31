@@ -21,6 +21,10 @@ func TestCreateMovementValidation(t *testing.T) {
 		{"missing user", CreateMovementInput{Amount: 100, Currency: "usd"}},
 		{"missing currency", CreateMovementInput{UserID: "u1", Amount: 100}},
 		{"zero amount", CreateMovementInput{UserID: "u1", Currency: "usd"}},
+		// "unknown payment method" is intentionally absent (BACK-17): an
+		// unrecognized payment method is no longer rejected, it's
+		// implicitly registered — see
+		// TestCreateMovementImplicitlyRegistersPaymentMethod below.
 		{"avoidability_percent out of range", CreateMovementInput{UserID: "u1", Amount: 100, Currency: "usd", AvoidabilityOverridePercent: intPtrAv(101)}},
 		{"unknown category_id", CreateMovementInput{UserID: "u1", Amount: 100, Currency: "usd", CategoryID: strPtrAv("nope")}},
 	}
@@ -57,6 +61,31 @@ func TestCreateMovementImplicitlyRegistersPaymentMethod(t *testing.T) {
 	}
 	if len(rows) != 1 || rows[0].Name != "iou" {
 		t.Errorf("want exactly one implicitly-registered payment method %q, got %+v", "iou", rows)
+	}
+}
+
+// TestCreateMovementNormalizesPaymentMethodCasing guards against exactly
+// the drift the review flagged: resolvePaymentMethod used to echo back
+// the caller's raw-cased input after EnsureByName instead of the
+// registry's canonical stored name. Left unfixed, a case-variant of a
+// reserved system name ("Credit_Card") would get stored verbatim on the
+// movement, breaking exact-string comparisons against
+// entities.PaymentMethodCreditCard elsewhere.
+func TestCreateMovementNormalizesPaymentMethodCasing(t *testing.T) {
+	methods := newFakePaymentMethodRepo()
+	if _, err := methods.EnsureByName(context.Background(), "u1", "credit_card"); err != nil {
+		t.Fatal(err)
+	}
+	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), newFakeCardRepo(), methods, newFakePlanRepo(), newFakeCategoryRepo(), newFakeUserSettingsRepo())
+
+	m, err := uc.Execute(context.Background(), CreateMovementInput{
+		UserID: "u1", Amount: 100, Currency: "usd", PaymentMethod: "Credit_Card",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if m.PaymentMethod != string(entities.PaymentMethodCreditCard) {
+		t.Errorf("payment method = %q, want canonical %q", m.PaymentMethod, entities.PaymentMethodCreditCard)
 	}
 }
 

@@ -360,6 +360,11 @@ func TestUpdateMovementValidatesLikeCreate(t *testing.T) {
 		input UpdateMovementInput
 	}{
 		{"zero amount", UpdateMovementInput{Amount: int64Ptr(0)}},
+		// "unknown category" and "unknown payment method" are intentionally
+		// absent: CategoryID is FK-based now (resolveCategoryID's rejection
+		// of an unowned/unknown id is covered by the
+		// TestCreateMovementRejects* tests) and an unrecognized payment
+		// method is implicitly registered, not rejected (BACK-17).
 		{"avoidability_percent out of range", UpdateMovementInput{AvoidabilityOverridePercent: intPtrAv(-1)}},
 		{"unknown category_id", UpdateMovementInput{CategoryID: strPtrAv("nope")}},
 		{"account belongs to another user", UpdateMovementInput{AccountID: &account.ID}},

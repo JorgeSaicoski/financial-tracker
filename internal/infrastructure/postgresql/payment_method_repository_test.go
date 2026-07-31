@@ -121,8 +121,29 @@ func TestPaymentMethodCreateRejectsDuplicateName(t *testing.T) {
 	if _, err := repo.Create(ctx, dtoPaymentMethod(userID, "cash")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.Create(ctx, dtoPaymentMethod(userID, "Cash")); err == nil {
-		t.Error("want an error inserting a case-variant duplicate name, got nil")
+	if _, err := repo.Create(ctx, dtoPaymentMethod(userID, "Cash")); !errors.Is(err, apperrors.ErrConflict) {
+		t.Errorf("want ErrConflict inserting a case-variant duplicate name, got %v", err)
+	}
+}
+
+// TestPaymentMethodUpdateRejectsRenameOntoExistingName is Update's
+// counterpart to TestPaymentMethodCreateRejectsDuplicateName — the same
+// unique index rejects a rename that collides with a sibling row.
+func TestPaymentMethodUpdateRejectsRenameOntoExistingName(t *testing.T) {
+	repo := NewPaymentMethodRepository(openTestDB(t))
+	ctx := context.Background()
+	userID := "u1"
+
+	if _, err := repo.Create(ctx, dtoPaymentMethod(userID, "cash")); err != nil {
+		t.Fatal(err)
+	}
+	other, err := repo.Create(ctx, dtoPaymentMethod(userID, "voucher"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := repo.Update(ctx, userID, other.ID, "Cash"); !errors.Is(err, apperrors.ErrConflict) {
+		t.Errorf("want ErrConflict renaming onto an existing name, got %v", err)
 	}
 }
 

@@ -42,10 +42,11 @@ func resolvePaymentMethod(ctx context.Context, methods repositories.PaymentMetho
 	if name == "" {
 		name = "other"
 	}
-	if _, err := methods.EnsureByName(ctx, userID, name); err != nil {
+	method, err := methods.EnsureByName(ctx, userID, name)
+	if err != nil {
 		return "", err
 	}
-	return name, nil
+	return method.Name, nil
 }
 
 // ensureSystemPaymentMethods lazily creates "credit_card" and

@@ -9,23 +9,22 @@
 -- SQLite can't drop a CHECK constraint in place, so the table is rebuilt
 -- without it, following the same documented 12-step ALTER TABLE
 -- procedure 009_add_local_sync_status.sql already used for sync_status.
--- Every column movements has picked up since 001 (009's 'local'
--- sync_status, account_id/transfer_id, 012's
--- avoidability_override_percent, 008's recurring_rule_id, 012's
--- card_id/card_payment_for_card_id/plan_id) is carried over here too,
--- since this rebuilds the *whole* table, not just the payment_method
--- column — this migration was originally written before 008/012's
--- columns existed on this branch; leaving them out here would have
--- silently dropped both the columns and the data in them on rebuild.
+-- This migration sorts right after 013_drop_category_check_constraints.sql
+-- (same "013" prefix, "category" < "payment_method"), which already
+-- rebuilt this exact table once to drop *its* CHECK constraint — category
+-- must stay CHECK-free here too (never reintroduce the old fixed-list
+-- constraint), and every column that rebuild carried over
+-- (avoidability_override_percent, recurring_rule_id, card_id,
+-- card_payment_for_card_id, plan_id) must be carried over here too, or
+-- this second same-migration-number rebuild would silently drop them
+-- right back out from under it.
 CREATE TABLE movements_new (
     id                      TEXT PRIMARY KEY,
     user_id                 TEXT    NOT NULL,
     amount                  INTEGER NOT NULL,
     currency                TEXT    NOT NULL,
     description             TEXT,
-    category                TEXT    NOT NULL DEFAULT 'other' CHECK (category IN (
-        'food','transport','housing','utilities','health','entertainment',
-        'shopping','education','income','transfer','other')),
+    category                TEXT    NOT NULL DEFAULT 'other',
     payment_method          TEXT    NOT NULL DEFAULT 'other',
     credit_card_purchase_id TEXT    REFERENCES credit_card_purchases(id),
     installment_number      INTEGER,

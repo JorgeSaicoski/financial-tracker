@@ -52,13 +52,13 @@ func (uc *updateRecurringRuleUseCase) Execute(ctx context.Context, userID, id st
 	if err != nil {
 		return nil, err
 	}
-	paymentMethod := existing.PaymentMethod
+	paymentMethodInput := existing.PaymentMethod
 	if input.PaymentMethod != nil {
-		resolved, err := resolvePaymentMethod(ctx, uc.methods, existing.UserID, *input.PaymentMethod)
-		if err != nil {
-			return nil, err
-		}
-		paymentMethod = resolved
+		paymentMethodInput = *input.PaymentMethod
+	}
+	paymentMethod, err := resolvePaymentMethod(ctx, uc.methods, userID, paymentMethodInput)
+	if err != nil {
+		return nil, err
 	}
 	accountID := existing.AccountID
 	if input.AccountID != nil {
