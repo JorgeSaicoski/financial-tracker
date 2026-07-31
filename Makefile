@@ -1,4 +1,9 @@
-.PHONY: help up down restart build rebuild logs test clean update ps run remove-db web web-install web-build build-standalone deploy-up deploy-down deploy-restart deploy-logs deploy-ps deploy-remove-db
+.PHONY: help up down restart build rebuild logs test clean update ps run remove-db web web-install web-build build-standalone web-build-standalone deploy-up deploy-down deploy-restart deploy-logs deploy-ps deploy-remove-db
+
+# Version stamp for `go build -ldflags "-X main.version=..."` — INFRA-06's
+# release workflow overrides this with the pushed tag; a local build just
+# gets "dev".
+VERSION ?= dev
 
 # Detect container runtime with full paths
 CONTAINER_CMD := $(shell command -v /usr/bin/podman 2> /dev/null || command -v /usr/local/bin/podman 2> /dev/null || command -v podman 2> /dev/null || command -v /usr/bin/docker 2> /dev/null || command -v docker 2> /dev/null)
@@ -23,8 +28,11 @@ help:
 	@echo "  make web-install - Install/update web frontend dependencies (npm install)"
 	@echo "  make web-build   - Build the web frontend for production (npm run build)"
 	@echo "  make build-standalone - Build the standalone binary (BACK-09: one file, no"
-	@echo "                   server, no account — see README's 'Running locally"
-	@echo "                   (standalone)' section for embedding a real frontend build)"
+	@echo "                   server, no account — no real frontend embedded, see below)"
+	@echo "  make web-build-standalone - Build the standalone binary WITH the real frontend"
+	@echo "                   embedded (static-adapter build copied into internal/webui/dist/"
+	@echo "                   first). This is what 'Running locally (standalone)' in the"
+	@echo "                   README actually means to run."
 	@echo "  make test        - Run Go tests"
 	@echo "  make remove-db   - Delete all databases (financial-tracker + ledger-service) for a fresh start"
 	@echo "  make clean       - Clean up containers, volumes, and build artifacts"
@@ -98,8 +106,20 @@ web-build: web-install
 # README's "Running locally (standalone)" section for the current status
 # of that step).
 build-standalone:
-	go build -o financial-tracker-standalone ./internal/cmd/api
+	go build -ldflags "-X main.version=$(VERSION)" -o financial-tracker-standalone ./internal/cmd/api
 	@echo "Built ./financial-tracker-standalone — run with STANDALONE=true or --standalone"
+
+# Build the standalone binary with the real frontend embedded (INFRA-06):
+# the static-adapter build (web/svelte.config.js's BUILD_TARGET=static
+# path) copied into internal/webui/dist/ right before go:embed needs it
+# to exist, i.e. right before `go build`. See internal/webui/webui.go's
+# doc comment for why this can't just happen at go:embed time itself.
+web-build-standalone: web-install
+	cd web && npm run build:static
+	find internal/webui/dist -mindepth 1 ! -name '.gitkeep' -delete
+	cp -r web/build/. internal/webui/dist/
+	go build -ldflags "-X main.version=$(VERSION)" -o financial-tracker-standalone ./internal/cmd/api
+	@echo "Built ./financial-tracker-standalone (version $(VERSION), with embedded frontend) — run with STANDALONE=true or --standalone"
 
 # Run Go tests
 test:
