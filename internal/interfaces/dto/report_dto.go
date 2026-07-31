@@ -49,3 +49,37 @@ type PurchasingPowerMonthResponse struct {
 type PurchasingPowerResponse struct {
 	Months []PurchasingPowerMonthResponse `json:"months"`
 }
+
+// CategoryAvoidabilityScoreResponse is one category's follow-through
+// figure for one scored month, in one currency (BACK-18). Baseline,
+// reduction_percent and weighted_score are all 0 when
+// insufficient_history is true — the client should check that flag first,
+// not infer "no history" from a zero baseline.
+type CategoryAvoidabilityScoreResponse struct {
+	Category            string  `json:"category"`
+	AvoidabilityPercent *int    `json:"avoidability_percent,omitempty"`
+	Baseline            int64   `json:"baseline"`
+	Actual              int64   `json:"actual"`
+	ReductionPercent    float64 `json:"reduction_percent"`
+	WeightedScore       float64 `json:"weighted_score"`
+	InsufficientHistory bool    `json:"insufficient_history,omitempty"`
+}
+
+// AvoidabilityScoreCurrencyResponse is one scored month's figures in one
+// native currency (never summed across currencies). OverallScore sums
+// WeightedScore across every category with a valid baseline in this
+// currency.
+type AvoidabilityScoreCurrencyResponse struct {
+	Currency     string                              `json:"currency"`
+	Categories   []CategoryAvoidabilityScoreResponse `json:"categories"`
+	OverallScore float64                             `json:"overall_score"`
+}
+
+type AvoidabilityScoreMonthResponse struct {
+	Month      time.Time                           `json:"month"`
+	Currencies []AvoidabilityScoreCurrencyResponse `json:"currencies"`
+}
+
+type AvoidabilityScoreResponse struct {
+	Months []AvoidabilityScoreMonthResponse `json:"months"`
+}
