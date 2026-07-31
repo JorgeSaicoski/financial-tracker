@@ -451,6 +451,7 @@ does and doesn't protect against" above.
   into this same subscription, sold separately, or stays permanently free
   is not decided by this ticket — `ProcessBillingWebhookUseCase` only
   ever touches `cloud_storage_entitled` today.
+
 ## Categories & avoidability (`categories` table)
 
 Categories are a **shared, globally-visible registry**

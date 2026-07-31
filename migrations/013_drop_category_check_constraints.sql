@@ -50,6 +50,8 @@ ALTER TABLE credit_card_purchases_new RENAME TO credit_card_purchases;
 
 CREATE INDEX IF NOT EXISTS idx_credit_card_purchases_user
     ON credit_card_purchases (user_id, purchase_date DESC);
+CREATE INDEX IF NOT EXISTS idx_credit_card_purchases_card
+    ON credit_card_purchases (card_id) WHERE card_id IS NOT NULL;
 
 CREATE TABLE movements_new (
     id                            TEXT PRIMARY KEY,
@@ -117,3 +119,9 @@ CREATE INDEX IF NOT EXISTS idx_movements_account
     ON movements (account_id) WHERE account_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_movements_recurring_rule
     ON movements (recurring_rule_id) WHERE recurring_rule_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_movements_card
+    ON movements (card_id) WHERE card_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_movements_card_payment
+    ON movements (card_payment_for_card_id) WHERE card_payment_for_card_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_movements_plan
+    ON movements (plan_id) WHERE plan_id IS NOT NULL;

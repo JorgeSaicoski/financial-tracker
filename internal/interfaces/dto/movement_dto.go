@@ -56,9 +56,9 @@ type MovementResponse struct {
 	CancelsMovementID           string `json:"cancels_movement_id,omitempty"`
 	ReversedByMovementID        string `json:"reversed_by_movement_id,omitempty"`
 	TransferID                  string `json:"transfer_id,omitempty"`
-	RecurringRuleID             string `json:"recurring_rule_id,omitempty"`
 	CardID                      string `json:"card_id,omitempty"`
 	CardPaymentForCardID        string `json:"card_payment_for_card_id,omitempty"`
+	RecurringRuleID             string `json:"recurring_rule_id,omitempty"`
 	PlanID                      string `json:"plan_id,omitempty"`
 	AvoidabilityOverridePercent *int   `json:"avoidability_percent,omitempty"`
 }
