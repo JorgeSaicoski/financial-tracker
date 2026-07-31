@@ -149,9 +149,9 @@ func main() {
 		planRepo            repositories.PlanRepository
 		userRepo            repositories.UserRepository
 		settingsRepo        repositories.UserSettingsRepository
+		limitsRepo          repositories.LimitsRepository
 		ledgerPseudonymRepo repositories.LedgerPseudonymRepository
 		subscriptionRepo    repositories.SubscriptionRepository
-		limitsRepo          repositories.LimitsRepository
 	)
 
 	switch dbDriver {
