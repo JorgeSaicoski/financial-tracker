@@ -13,6 +13,7 @@ type AccountHandler interface {
 	CreateAccount(w http.ResponseWriter, r *http.Request)
 	ListAccounts(w http.ResponseWriter, r *http.Request)
 	ReportBalance(w http.ResponseWriter, r *http.Request)
+	ListSnapshots(w http.ResponseWriter, r *http.Request)
 }
 
 // ConfigHandler exposes runtime flags the frontend needs before it can

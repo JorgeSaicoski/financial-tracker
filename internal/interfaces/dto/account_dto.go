@@ -14,11 +14,13 @@ type CreateAccountRequest struct {
 }
 
 // ReportBalanceRequest is the body for POST /accounts/{id}/balance: the
-// balance the bank/broker/wallet actually shows right now, in the
-// smallest currency unit. Pointer so an omitted balance is rejected
-// rather than silently recorded as zero.
+// balance the bank/broker/wallet actually shows, in the smallest
+// currency unit. Balance is a pointer so an omitted balance is rejected
+// rather than silently recorded as zero; Timestamp omitted means "now" —
+// an explicit one backfills a report for an earlier date.
 type ReportBalanceRequest struct {
-	Balance *int64 `json:"balance"`
+	Balance   *int64     `json:"balance"`
+	Timestamp *time.Time `json:"timestamp,omitempty"`
 }
 
 // AccountResponse is an account plus its derived balance picture.
@@ -45,6 +47,24 @@ type AccountResponse struct {
 type AccountsResponse struct {
 	Accounts     []AccountResponse `json:"accounts"`
 	AccountTypes []string          `json:"account_types"`
+}
+
+// AccountSnapshotResponse is one reported snapshot plus its own return —
+// the difference the movements since the previous snapshot (or, for the
+// earliest one, since the account's implicit zero starting balance)
+// don't explain. ReturnFrom is absent for the earliest snapshot.
+type AccountSnapshotResponse struct {
+	ID         string     `json:"id"`
+	Balance    int64      `json:"balance"`
+	Timestamp  time.Time  `json:"timestamp"`
+	Return     int64      `json:"return"`
+	ReturnFrom *time.Time `json:"return_from,omitempty"`
+	ReturnTo   time.Time  `json:"return_to"`
+	CreatedAt  time.Time  `json:"created_at"`
+}
+
+type AccountSnapshotsResponse struct {
+	Snapshots []AccountSnapshotResponse `json:"snapshots"`
 }
 
 type CurrenciesResponse struct {

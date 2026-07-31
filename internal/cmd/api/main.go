@@ -167,6 +167,7 @@ func main() {
 	createAccount := usecases.NewCreateAccount(accountRepo, currencyRepo)
 	listAccounts := usecases.NewListAccounts(accountRepo, movementRepo)
 	reportBalance := usecases.NewReportAccountBalance(accountRepo, movementRepo)
+	listAccountSnapshots := usecases.NewListAccountSnapshots(accountRepo, movementRepo)
 	listCurrencies := usecases.NewListCurrencies(currencyRepo)
 	addCurrency := usecases.NewAddCurrency(currencyRepo)
 	transferBetweenAccounts := usecases.NewTransferBetweenAccounts(movementRepo, accountRepo, settingsRepo)
@@ -204,7 +205,7 @@ func main() {
 		defaultCurrency,
 		log,
 	)
-	accountHandler := handlers.NewAccountHandler(createAccount, listAccounts, reportBalance, log)
+	accountHandler := handlers.NewAccountHandler(createAccount, listAccounts, reportBalance, listAccountSnapshots, log)
 	currencyHandler := handlers.NewCurrencyHandler(listCurrencies, addCurrency, log)
 	categoryHandler := handlers.NewCategoryHandler(createCategory, updateCategory, deleteCategory, log)
 	transferHandler := handlers.NewTransferHandler(transferBetweenAccounts, cancelTransfer, log)
