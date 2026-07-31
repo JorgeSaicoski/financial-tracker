@@ -22,6 +22,8 @@ type CreateMovementRequest struct {
 	PaymentMethod string  `json:"payment_method,omitempty"`
 	Installments  int     `json:"installments,omitempty"`
 	AccountID     string  `json:"account_id,omitempty"`
+	// PlanID (BACK-10) tags this movement as funding a savings plan.
+	PlanID string `json:"plan_id,omitempty"`
 	// AvoidabilityOverridePercent (0-100, BACK-14) is this movement's own
 	// ad-hoc avoidability, for a one-off spend that doesn't deserve its
 	// own category — wins over the resolved category's own value.
@@ -48,6 +50,7 @@ type MovementResponse struct {
 	CancelsMovementID           string `json:"cancels_movement_id,omitempty"`
 	ReversedByMovementID        string `json:"reversed_by_movement_id,omitempty"`
 	TransferID                  string `json:"transfer_id,omitempty"`
+	PlanID                      string `json:"plan_id,omitempty"`
 	RecurringRuleID             string `json:"recurring_rule_id,omitempty"`
 	AvoidabilityOverridePercent *int   `json:"avoidability_percent,omitempty"`
 }
@@ -64,6 +67,7 @@ type UpdateMovementRequest struct {
 	CategoryID    *string    `json:"category_id,omitempty"`
 	PaymentMethod *string    `json:"payment_method,omitempty"`
 	AccountID     *string    `json:"account_id,omitempty"`
+	PlanID        *string    `json:"plan_id,omitempty"`
 	Amount        *int64     `json:"amount,omitempty"`
 	Currency      *string    `json:"currency,omitempty"`
 	Timestamp     *time.Time `json:"timestamp,omitempty"`

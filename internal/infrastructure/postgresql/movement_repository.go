@@ -52,7 +52,8 @@ func NewMovementRepository(db *sql.DB) repositories.MovementRepository {
 const movementInsertColumns = `id, user_id, amount, currency, description, category_id, payment_method,
 	credit_card_purchase_id, installment_number, status, cancels_movement_id, reversed_by_movement_id,
 	timestamp, sync_status, ledger_transaction_id, sync_attempts, last_sync_error, last_sync_attempt_at,
-	synced_at, created_at, account_id, transfer_id, avoidability_override_percent, recurring_rule_id`
+	synced_at, created_at, account_id, transfer_id, plan_id,
+	avoidability_override_percent, recurring_rule_id`
 
 // movementSelectColumns is what every read query selects — a LEFT JOIN
 // against categories resolves category_id back to a name (COALESCE to
@@ -67,7 +68,7 @@ const movementSelectColumns = `movements.id, movements.user_id, movements.amount
 	movements.cancels_movement_id, movements.reversed_by_movement_id, movements.timestamp,
 	movements.sync_status, movements.ledger_transaction_id, movements.sync_attempts,
 	movements.last_sync_error, movements.last_sync_attempt_at, movements.synced_at,
-	movements.created_at, movements.account_id, movements.transfer_id,
+	movements.created_at, movements.account_id, movements.transfer_id, movements.plan_id,
 	movements.avoidability_override_percent, movements.recurring_rule_id`
 
 const movementFromClause = `movements LEFT JOIN categories ON movements.category_id = categories.id`
@@ -173,6 +174,28 @@ func (r *movementRepository) NetByAccount(ctx context.Context, accountID string,
 	return net, nil
 }
 
+// SumByPlan sums non-voided movements tagged with planID over [from, to]
+// (both inclusive) — see the application/repositories contract's own doc
+// comment for why "to" is inclusive.
+func (r *movementRepository) SumByPlan(ctx context.Context, planID string, from, to *time.Time) (int64, error) {
+	query := `SELECT COALESCE(SUM(amount), 0) FROM movements WHERE plan_id = $1 AND status = 'active'`
+	args := []any{planID}
+	if from != nil {
+		args = append(args, *from)
+		query += fmt.Sprintf(` AND timestamp >= $%d`, len(args))
+	}
+	if to != nil {
+		args = append(args, *to)
+		query += fmt.Sprintf(` AND timestamp <= $%d`, len(args))
+	}
+
+	var sum int64
+	if err := r.db.QueryRowContext(ctx, query, args...).Scan(&sum); err != nil {
+		return 0, fmt.Errorf("postgresql: sum by plan: %w", err)
+	}
+	return sum, nil
+}
+
 func (r *movementRepository) ListPendingSync(ctx context.Context, now time.Time, retryCooldown time.Duration, excludedUserIDs []string) ([]*dto.MovementDTO, error) {
 	clause, excludeArgs := excludedUserIDsClause(excludedUserIDs, 2)
 	args := []any{now, now.Add(-retryCooldown)}
@@ -217,10 +240,10 @@ func (r *movementRepository) MarkSyncFailed(ctx context.Context, movementID, syn
 		syncErr, at, movementID)
 }
 
-func (r *movementRepository) UpdateMetadata(ctx context.Context, movementID, description string, categoryID *string, paymentMethod string, accountID *string) error {
+func (r *movementRepository) UpdateMetadata(ctx context.Context, movementID, description string, categoryID *string, paymentMethod string, accountID, planID *string) error {
 	return execOnRow(ctx, r.db,
-		`UPDATE movements SET description = $1, category_id = $2, payment_method = $3, account_id = $4 WHERE id = $5`,
-		nullString(description), strOrNil(categoryID), paymentMethod, strOrNil(accountID), movementID)
+		`UPDATE movements SET description = $1, category_id = $2, payment_method = $3, account_id = $4, plan_id = $5 WHERE id = $6`,
+		nullString(description), strOrNil(categoryID), paymentMethod, strOrNil(accountID), strOrNil(planID), movementID)
 }
 
 func (r *movementRepository) UpdateAvoidabilityOverride(ctx context.Context, movementID string, avoidabilityOverridePercent *int) error {
@@ -435,6 +458,24 @@ func (r *movementRepositoryTx) NetByAccount(ctx context.Context, accountID strin
 	return net, nil
 }
 
+func (r *movementRepositoryTx) SumByPlan(ctx context.Context, planID string, from, to *time.Time) (int64, error) {
+	query := `SELECT COALESCE(SUM(amount), 0) FROM movements WHERE plan_id = $1 AND status = 'active'`
+	args := []any{planID}
+	if from != nil {
+		args = append(args, *from)
+		query += fmt.Sprintf(` AND timestamp >= $%d`, len(args))
+	}
+	if to != nil {
+		args = append(args, *to)
+		query += fmt.Sprintf(` AND timestamp <= $%d`, len(args))
+	}
+	var sum int64
+	if err := r.tx.QueryRowContext(ctx, query, args...).Scan(&sum); err != nil {
+		return 0, fmt.Errorf("postgresql: sum by plan: %w", err)
+	}
+	return sum, nil
+}
+
 func (r *movementRepositoryTx) ListPendingSync(ctx context.Context, now time.Time, retryCooldown time.Duration, excludedUserIDs []string) ([]*dto.MovementDTO, error) {
 	clause, excludeArgs := excludedUserIDsClause(excludedUserIDs, 2)
 	args := []any{now, now.Add(-retryCooldown)}
@@ -475,10 +516,10 @@ func (r *movementRepositoryTx) MarkSyncFailed(ctx context.Context, movementID, s
 		syncErr, at, movementID)
 }
 
-func (r *movementRepositoryTx) UpdateMetadata(ctx context.Context, movementID, description string, categoryID *string, paymentMethod string, accountID *string) error {
+func (r *movementRepositoryTx) UpdateMetadata(ctx context.Context, movementID, description string, categoryID *string, paymentMethod string, accountID, planID *string) error {
 	return execOnRow(ctx, r.tx,
-		`UPDATE movements SET description = $1, category_id = $2, payment_method = $3, account_id = $4 WHERE id = $5`,
-		nullString(description), strOrNil(categoryID), paymentMethod, strOrNil(accountID), movementID)
+		`UPDATE movements SET description = $1, category_id = $2, payment_method = $3, account_id = $4, plan_id = $5 WHERE id = $6`,
+		nullString(description), strOrNil(categoryID), paymentMethod, strOrNil(accountID), strOrNil(planID), movementID)
 }
 
 func (r *movementRepositoryTx) UpdateAvoidabilityOverride(ctx context.Context, movementID string, avoidabilityOverridePercent *int) error {
@@ -563,14 +604,14 @@ func queryMovements(ctx context.Context, q queryer, query string, args ...any) (
 func insertMovement(ctx context.Context, ex execer, m *dto.MovementDTO) error {
 	_, err := ex.ExecContext(ctx,
 		`INSERT INTO movements (`+movementInsertColumns+`)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)`,
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)`,
 		m.ID, m.UserID, m.Amount, m.Currency,
 		nullString(m.Description), strOrNil(m.CategoryID), m.PaymentMethod,
 		strOrNil(m.CreditCardPurchaseID), intOrNil(m.InstallmentNumber),
 		m.Status, strOrNil(m.CancelsMovementID), strOrNil(m.ReversedByMovementID),
 		m.Timestamp, m.SyncStatus, strOrNil(m.LedgerTransactionID),
 		m.SyncAttempts, strOrNil(m.LastSyncError), timeOrNil(m.LastSyncAttemptAt),
-		timeOrNil(m.SyncedAt), m.CreatedAt, strOrNil(m.AccountID), strOrNil(m.TransferID),
+		timeOrNil(m.SyncedAt), m.CreatedAt, strOrNil(m.AccountID), strOrNil(m.TransferID), strOrNil(m.PlanID),
 		intOrNil(m.AvoidabilityOverridePercent), strOrNil(m.RecurringRuleID))
 	if err != nil {
 		return fmt.Errorf("postgresql: insert movement: %w", err)
@@ -593,6 +634,7 @@ func scanMovement(row scannable) (*dto.MovementDTO, error) {
 		categoryID                          sql.NullString
 		purchaseID, cancelsID, reversedByID sql.NullString
 		ledgerTxID, accountID, transferID   sql.NullString
+		planID                              sql.NullString
 		recurringRuleID                     sql.NullString
 		installmentNumber                   sql.NullInt64
 		syncAttempts                        int64
@@ -607,7 +649,7 @@ func scanMovement(row scannable) (*dto.MovementDTO, error) {
 		&m.Status, &cancelsID, &reversedByID,
 		&m.Timestamp, &m.SyncStatus, &ledgerTxID,
 		&syncAttempts, &lastSyncError, &lastAttemptAt,
-		&syncedAt, &m.CreatedAt, &accountID, &transferID,
+		&syncedAt, &m.CreatedAt, &accountID, &transferID, &planID,
 		&avoidabilityOverride, &recurringRuleID)
 	if err != nil {
 		return nil, err
@@ -618,6 +660,7 @@ func scanMovement(row scannable) (*dto.MovementDTO, error) {
 	m.SyncAttempts = int(syncAttempts)
 	m.AccountID = stringPtr(accountID)
 	m.TransferID = stringPtr(transferID)
+	m.PlanID = stringPtr(planID)
 	m.RecurringRuleID = stringPtr(recurringRuleID)
 	m.CreditCardPurchaseID = stringPtr(purchaseID)
 	m.CancelsMovementID = stringPtr(cancelsID)

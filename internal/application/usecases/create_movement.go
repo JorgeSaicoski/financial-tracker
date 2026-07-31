@@ -14,13 +14,14 @@ import (
 type createMovementUseCase struct {
 	repo       repositories.MovementRepository
 	accounts   repositories.AccountRepository
+	plans      repositories.PlanRepository
 	categories repositories.CategoryRepository
 	settings   repositories.UserSettingsRepository
 }
 
 // NewCreateMovement returns interface type for dependency injection.
-func NewCreateMovement(repo repositories.MovementRepository, accounts repositories.AccountRepository, categories repositories.CategoryRepository, settings repositories.UserSettingsRepository) CreateMovementUseCase {
-	return &createMovementUseCase{repo: repo, accounts: accounts, categories: categories, settings: settings}
+func NewCreateMovement(repo repositories.MovementRepository, accounts repositories.AccountRepository, plans repositories.PlanRepository, categories repositories.CategoryRepository, settings repositories.UserSettingsRepository) CreateMovementUseCase {
+	return &createMovementUseCase{repo: repo, accounts: accounts, plans: plans, categories: categories, settings: settings}
 }
 
 func (uc *createMovementUseCase) Execute(ctx context.Context, input CreateMovementInput) (*dto.MovementDTO, error) {
@@ -36,6 +37,15 @@ func (uc *createMovementUseCase) Execute(ctx context.Context, input CreateMoveme
 		return nil, err
 	}
 	categoryID, err := resolveCategoryID(ctx, uc.categories, input.UserID, input.CategoryID)
+	if err != nil {
+		return nil, err
+	}
+
+	var planIDInput string
+	if input.PlanID != nil {
+		planIDInput = *input.PlanID
+	}
+	planID, err := resolvePlanForMovement(ctx, uc.plans, input.UserID, planIDInput, input.Currency)
 	if err != nil {
 		return nil, err
 	}
@@ -77,6 +87,7 @@ func (uc *createMovementUseCase) Execute(ctx context.Context, input CreateMoveme
 		PaymentMethod:               paymentMethod,
 		AvoidabilityOverridePercent: input.AvoidabilityOverridePercent,
 		AccountID:                   input.AccountID,
+		PlanID:                      planID,
 		Status:                      entities.MovementStatusActive,
 		SyncStatus:                  syncStatus,
 		Timestamp:                   now,

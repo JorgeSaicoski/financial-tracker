@@ -92,6 +92,7 @@ func cancelOne(ctx context.Context, repo repositories.MovementRepository, moveme
 		CategoryID:        movement.CategoryID,
 		PaymentMethod:     movement.PaymentMethod,
 		AccountID:         movement.AccountID, // nets the original out of its account too
+		PlanID:            movement.PlanID,    // nets the original out of its plan's progress too
 		Status:            entities.MovementStatusActive,
 		SyncStatus:        entities.SyncStatusPending,
 		CancelsMovementID: &originalID,

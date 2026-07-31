@@ -254,7 +254,7 @@ func TestTransferBetweenAccountsUsesFixedTransferCategoryID(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	uc := NewTransferBetweenAccounts(movements, accounts, newFakeUserSettingsRepo())
+	uc := NewTransferBetweenAccounts(movements, accounts, newFakePlanRepo(), newFakeUserSettingsRepo())
 	result, err := uc.Execute(ctx, TransferBetweenAccountsInput{
 		UserID: "u1", FromAccountID: from.ID, ToAccountID: to.ID, Amount: 1000,
 	})
