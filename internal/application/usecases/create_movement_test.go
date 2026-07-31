@@ -63,6 +63,31 @@ func TestCreateMovementImplicitlyRegistersPaymentMethod(t *testing.T) {
 	}
 }
 
+// TestCreateMovementNormalizesPaymentMethodCasing guards against exactly
+// the drift the review flagged: resolvePaymentMethod used to echo back
+// the caller's raw-cased input after EnsureByName instead of the
+// registry's canonical stored name. Left unfixed, a case-variant of a
+// reserved system name ("Credit_Card") would get stored verbatim on the
+// movement, breaking exact-string comparisons against
+// entities.PaymentMethodCreditCard elsewhere.
+func TestCreateMovementNormalizesPaymentMethodCasing(t *testing.T) {
+	methods := newFakePaymentMethodRepo()
+	if _, err := methods.EnsureByName(context.Background(), "u1", "credit_card"); err != nil {
+		t.Fatal(err)
+	}
+	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), methods, newFakeCategoryRepo(), newFakeUserSettingsRepo())
+
+	m, err := uc.Execute(context.Background(), CreateMovementInput{
+		UserID: "u1", Amount: 100, Currency: "usd", PaymentMethod: "Credit_Card",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if m.PaymentMethod != string(entities.PaymentMethodCreditCard) {
+		t.Errorf("payment method = %q, want canonical %q", m.PaymentMethod, entities.PaymentMethodCreditCard)
+	}
+}
+
 func TestCreateMovementDefaultsAndState(t *testing.T) {
 	repo := newFakeMovementRepo()
 	uc := NewCreateMovement(repo, newFakeAccountRepo(), newFakePaymentMethodRepo(), newFakeCategoryRepo(), newFakeUserSettingsRepo())

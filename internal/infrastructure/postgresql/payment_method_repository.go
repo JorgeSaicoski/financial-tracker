@@ -104,6 +104,13 @@ func (r *paymentMethodRepository) Create(ctx context.Context, m *dto.PaymentMeth
 		`INSERT INTO payment_methods (`+paymentMethodColumns+`) VALUES ($1, $2, $3, $4)`,
 		m.ID, m.UserID, m.Name, m.CreatedAt)
 	if err != nil {
+		// The DB's unique (user_id, lower(name)) index rejects a
+		// concurrent duplicate-name insert; detecting that portably
+		// (without depending on driver-specific error types) means
+		// re-reading by (user_id, name) rather than inspecting err.
+		if _, getErr := r.getByUserAndName(ctx, m.UserID, m.Name); getErr == nil {
+			return nil, apperrors.ErrConflict
+		}
 		return nil, fmt.Errorf("postgresql: insert payment method: %w", err)
 	}
 	return m, nil
@@ -114,6 +121,12 @@ func (r *paymentMethodRepository) Update(ctx context.Context, userID, methodID, 
 		`UPDATE payment_methods SET name = $1 WHERE id = $2 AND user_id = $3`,
 		name, methodID, userID)
 	if err != nil {
+		// Same unique (user_id, lower(name)) index as Create: renaming
+		// to a name another of the user's payment methods already has
+		// hits it too.
+		if existing, getErr := r.getByUserAndName(ctx, userID, name); getErr == nil && existing.ID != methodID {
+			return apperrors.ErrConflict
+		}
 		return fmt.Errorf("postgresql: update payment method: %w", err)
 	}
 	n, err := result.RowsAffected()
