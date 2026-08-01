@@ -17,14 +17,22 @@ type AuthMiddleware func(http.Handler) http.Handler
 func NewRouter(
 	movementHandler handlers.MovementHandler,
 	accountHandler handlers.AccountHandler,
+	cardHandler handlers.CardHandler,
 	currencyHandler handlers.CurrencyHandler,
+	categoryHandler handlers.CategoryHandler,
 	transferHandler handlers.TransferHandler,
 	exchangeRateHandler handlers.ExchangeRateHandler,
+	recurringRuleHandler handlers.RecurringRuleHandler,
+	archiveHandler handlers.ArchiveHandler,
 	importHandler handlers.ImportHandler,
 	exportHandler handlers.ExportHandler,
+	paymentMethodHandler handlers.PaymentMethodHandler,
+	planHandler handlers.PlanHandler,
 	settingsHandler handlers.SettingsHandler,
 	userHandler handlers.UserHandler,
 	configHandler handlers.ConfigHandler,
+	billingHandler handlers.BillingHandler,
+	reportHandler handlers.ReportHandler,
 	authMiddleware AuthMiddleware,
 	allowedOrigin string,
 	// standalone (BACK-09) rejects /sync (there is no ledger-service to
@@ -69,11 +77,23 @@ func NewRouter(
 		protected.HandleFunc("POST /sync", movementHandler.Sync)
 	}
 	protected.HandleFunc("GET /categories", movementHandler.ListCategories)
+	protected.HandleFunc("POST /categories", categoryHandler.CreateCategory)
+	protected.HandleFunc("PATCH /categories/{id}", categoryHandler.UpdateCategory)
+	protected.HandleFunc("DELETE /categories/{id}", categoryHandler.DeleteCategory)
 	protected.HandleFunc("GET /cashflow", movementHandler.Cashflow)
+	protected.HandleFunc("GET /reports/purchasing-power", reportHandler.PurchasingPower)
+	protected.HandleFunc("GET /reports/avoidability-score", reportHandler.AvoidabilityScore)
 
 	protected.HandleFunc("GET /accounts", accountHandler.ListAccounts)
 	protected.HandleFunc("POST /accounts", accountHandler.CreateAccount)
 	protected.HandleFunc("POST /accounts/{id}/balance", accountHandler.ReportBalance)
+	protected.HandleFunc("GET /accounts/{id}/balance", accountHandler.ListSnapshots)
+
+	protected.HandleFunc("GET /cards", cardHandler.ListCards)
+	protected.HandleFunc("POST /cards", cardHandler.CreateCard)
+	protected.HandleFunc("GET /cards/{id}", cardHandler.GetCard)
+	protected.HandleFunc("PATCH /cards/{id}", cardHandler.UpdateCard)
+	protected.HandleFunc("DELETE /cards/{id}", cardHandler.DeleteCard)
 
 	protected.HandleFunc("GET /currencies", currencyHandler.ListCurrencies)
 	protected.HandleFunc("POST /currencies", currencyHandler.AddCurrency)
@@ -85,7 +105,27 @@ func NewRouter(
 	protected.HandleFunc("POST /exchange-rates", exchangeRateHandler.SetExchangeRate)
 	protected.HandleFunc("DELETE /exchange-rates/{id}", exchangeRateHandler.DeleteExchangeRate)
 
+	protected.HandleFunc("GET /recurring-rules", recurringRuleHandler.ListRecurringRules)
+	protected.HandleFunc("POST /recurring-rules", recurringRuleHandler.CreateRecurringRule)
+	protected.HandleFunc("PATCH /recurring-rules/{id}", recurringRuleHandler.UpdateRecurringRule)
+
+	protected.HandleFunc("GET /settings/local-archive", archiveHandler.GetLocalArchiveSetting)
+	protected.HandleFunc("PUT /settings/local-archive", archiveHandler.SetLocalArchiveSetting)
+	protected.HandleFunc("GET /export/archive", archiveHandler.ExportArchive)
+	protected.HandleFunc("POST /import/archive", archiveHandler.ImportArchive)
+
+	protected.HandleFunc("POST /payment-methods", paymentMethodHandler.CreatePaymentMethod)
+	protected.HandleFunc("PATCH /payment-methods/{id}", paymentMethodHandler.UpdatePaymentMethod)
+	protected.HandleFunc("DELETE /payment-methods/{id}", paymentMethodHandler.DeletePaymentMethod)
+
+	protected.HandleFunc("POST /plans", planHandler.CreatePlan)
+	protected.HandleFunc("GET /plans", planHandler.ListPlans)
+	protected.HandleFunc("GET /plans/{id}", planHandler.GetPlan)
+	protected.HandleFunc("PATCH /plans/{id}", planHandler.UpdatePlan)
+
 	protected.HandleFunc("GET /me", userHandler.Me)
+
+	protected.HandleFunc("GET /billing/plan", billingHandler.GetPlan)
 
 	if standalone {
 		// Registered on protected (behind the no-op standalone auth
@@ -107,6 +147,12 @@ func NewRouter(
 	// it must not go through authMiddleware like everything else does —
 	// mounted on the outer mux instead of protected.
 	mux.HandleFunc("GET /config", configHandler.GetConfig)
+	// Unauthenticated by user token like /config, but for a different
+	// reason (BACK-19): the payment provider calling this has no
+	// financial-tracker session to present a bearer token for.
+	// billingHandler.Webhook checks the request's own signature header
+	// instead — see its doc comment.
+	mux.HandleFunc("POST /billing/webhook", billingHandler.Webhook)
 	// user_id always comes from the verified token (or the AUTH_DISABLED
 	// dev stand-in), never from a request body or query string — see
 	// BACK-02.
@@ -128,7 +174,7 @@ func NewRouter(
 func withCORS(next http.Handler, allowedOrigin string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		// Vary: Origin so a cache in front of this API (or the browser's own
 		// HTTP cache) doesn't serve one origin's CORS-allowed response to a

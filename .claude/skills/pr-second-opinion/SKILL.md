@@ -117,6 +117,37 @@ it'll do N+1 selects, missing indexes for an obviously hot query path, or
 unbounded loops/scans. Not a full performance audit — just what a sharp
 reviewer would actually flag reading the diff.
 
+**Relationship/membership modeling must live on the side that actually
+scales — check this explicitly, don't just accept whatever the PR did.**
+When a PR introduces a shared/global resource that many users reference
+(a category, a tag, anything where many users can each relate to one
+shared row), figure out which side answers "how many/which ones does
+*this specific user* have." That must be a direct, indexed lookup keyed
+by the user — a per-user membership table, a field the user's own row
+owns — never a scan or aggregate computed by reaching into the shared
+resource and counting who references it. Ask it plainly, the way an
+engineer thinking about running this at real scale would: if this
+service had a billion users sharing a modest, shared set of categories,
+does resolving "what does this one user have" require touching data
+proportional to the shared resource's size, or is it a direct lookup
+proportional to just that user? If it's the former, that's a design
+smell serious enough to flag on its own, independent of whether the code
+"works" in a small test.
+
+Concrete precedent, not a hypothetical: PR #39's
+`CategoryRepository.CountByContributor` modeled "how many categories
+does this user have" as a query against the shared `Category`'s own
+contributor list. Wrong side, and it wasn't just inelegant — it caused a
+real, user-facing bug (the count never decreased when a user removed a
+category from their own list, so creating up to the limit permanently
+locked them out with no way to free a slot, since nothing about "how
+many" was actually tracked from the user's own side). A PR that
+introduces this shape again — a shared resource that has to be scanned
+or counted to answer a per-user question — is repeating a mistake this
+project has already paid for once. Don't let it land quietly a second
+time; say so explicitly, cite this precedent, and don't soften it into a
+vague "consider" suggestion.
+
 ### Lens 3 — react to existing reviewers
 
 From Step 2's comments: state agreement or disagreement with specific

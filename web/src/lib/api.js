@@ -52,7 +52,9 @@ export function createMovement({
 	category,
 	payment_method,
 	installments,
-	account_id
+	account_id,
+	card_id,
+	card_payment_for_card_id
 }) {
 	return request('/movements', {
 		method: 'POST',
@@ -63,7 +65,9 @@ export function createMovement({
 			category,
 			payment_method,
 			installments,
-			account_id
+			account_id,
+			card_id,
+			card_payment_for_card_id
 		})
 	});
 }
@@ -112,11 +116,19 @@ export function createAccount({ name, type, currency }) {
 }
 
 // balance is in the smallest currency unit, like movement amounts.
-export function reportAccountBalance(id, balance) {
+// timestamp (ISO string) is optional — omitted means "now"; pass one to
+// backfill a report for an earlier date.
+export function reportAccountBalance(id, balance, timestamp) {
 	return request(`/accounts/${id}/balance`, {
 		method: 'POST',
-		body: JSON.stringify({ balance })
+		body: JSON.stringify({ balance, timestamp })
 	});
+}
+
+// The account's full reported-balance history, newest first, each entry
+// paired with its own return.
+export function getAccountSnapshots(id) {
+	return request(`/accounts/${id}/balance`);
 }
 
 // --- Transfers ---
@@ -134,6 +146,27 @@ export function cancelTransfer(id) {
 	return request(`/transfers/${id}/cancel`, { method: 'POST' });
 }
 
+// --- Import ---
+
+export function getImportSpec() {
+	return request('/import/movements/spec');
+}
+
+// csvText is the raw CSV body (spec's fixed header + data rows). Options
+// map straight onto the endpoint's query params; all default to false.
+export function importMovements(csvText, { dryRun = false, allowPartial = false, skipDuplicates = false } = {}) {
+	const query = new URLSearchParams();
+	if (dryRun) query.set('dry_run', 'true');
+	if (allowPartial) query.set('allow_partial', 'true');
+	if (skipDuplicates) query.set('skip_duplicates', 'true');
+	const qs = query.toString();
+	return request(`/import/movements${qs ? `?${qs}` : ''}`, {
+		method: 'POST',
+		headers: { 'Content-Type': 'text/csv' },
+		body: csvText
+	});
+}
+
 // --- Currencies ---
 
 export function getCurrencies() {
@@ -144,5 +177,64 @@ export function addCurrency(code) {
 	return request('/currencies', {
 		method: 'POST',
 		body: JSON.stringify({ code })
+	});
+}
+
+// --- Cards (BACK-08) ---
+
+export function listCards() {
+	return request('/cards');
+}
+
+// closing_day/due_day are "1"-"28" or "last"; credit_limit/monthly_budget
+// are optional, in the smallest currency unit like movement amounts.
+export function createCard({ name, last_four, closing_day, due_day, credit_limit, monthly_budget, currency }) {
+	return request('/cards', {
+		method: 'POST',
+		body: JSON.stringify({ name, last_four, closing_day, due_day, credit_limit, monthly_budget, currency })
+	});
+}
+
+// patch is a partial UpdateCardRequest body: only include the fields that
+// should change.
+export function updateCard(id, patch) {
+	return request(`/cards/${id}`, {
+		method: 'PATCH',
+		body: JSON.stringify(patch)
+	});
+}
+
+// 204 No Content on success; request()'s res.json().catch(() => null)
+// already handles that gracefully. Rejects with 409 if the card is still
+// referenced by a movement or purchase.
+export function deleteCard(id) {
+	return request(`/cards/${id}`, { method: 'DELETE' });
+}
+
+// --- Local archive (BACK-15) ---
+
+export function getLocalArchiveSetting() {
+	return request('/settings/local-archive');
+}
+
+export function setLocalArchiveSetting(enabled) {
+	return request('/settings/local-archive', {
+		method: 'PUT',
+		body: JSON.stringify({ local_archive_enabled: enabled })
+	});
+}
+
+// Plaintext account export — the caller (LocalBackupPanel) encrypts this
+// client-side before it's saved anywhere.
+export function exportArchive() {
+	return request('/export/archive');
+}
+
+// bundle is an already-decrypted archive (same shape exportArchive()
+// returns): { accounts, movements, credit_card_purchases }.
+export function importArchive(bundle) {
+	return request('/import/archive', {
+		method: 'POST',
+		body: JSON.stringify(bundle)
 	});
 }

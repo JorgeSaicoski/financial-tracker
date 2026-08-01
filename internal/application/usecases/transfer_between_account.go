@@ -14,12 +14,13 @@ import (
 type transferBetweenAccountsUseCase struct {
 	movements repositories.MovementRepository
 	accounts  repositories.AccountRepository
+	plans     repositories.PlanRepository
 	settings  repositories.UserSettingsRepository
 }
 
 // NewTransferBetweenAccounts returns interface type for dependency injection.
-func NewTransferBetweenAccounts(movements repositories.MovementRepository, accounts repositories.AccountRepository, settings repositories.UserSettingsRepository) TransferBetweenAccountsUseCase {
-	return &transferBetweenAccountsUseCase{movements: movements, accounts: accounts, settings: settings}
+func NewTransferBetweenAccounts(movements repositories.MovementRepository, accounts repositories.AccountRepository, plans repositories.PlanRepository, settings repositories.UserSettingsRepository) TransferBetweenAccountsUseCase {
+	return &transferBetweenAccountsUseCase{movements: movements, accounts: accounts, plans: plans, settings: settings}
 }
 
 func (uc *transferBetweenAccountsUseCase) Execute(ctx context.Context, input TransferBetweenAccountsInput) (TransferResult, error) {
@@ -62,6 +63,20 @@ func (uc *transferBetweenAccountsUseCase) Execute(ctx context.Context, input Tra
 	// not either account's.
 	transferID := id.NewUUID()
 	debit.TransferID, credit.TransferID = &transferID, &transferID
+
+	// PlanID (BACK-10), when given, tags only the credit (destination)
+	// leg — the recommended way to fund a savings plan without inflating
+	// income/expense cashflow (a transfer is already excluded from it
+	// entirely).
+	var planIDInput string
+	if input.PlanID != nil {
+		planIDInput = *input.PlanID
+	}
+	planID, err := resolvePlanForMovement(ctx, uc.plans, input.UserID, planIDInput, to.Currency)
+	if err != nil {
+		return TransferResult{}, err
+	}
+	credit.PlanID = planID
 
 	// Both legs are brand-new movements (BACK-13): if the user's
 	// effective ledger sync is off, they start "local" instead of the

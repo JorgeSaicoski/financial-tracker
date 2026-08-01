@@ -27,6 +27,8 @@
 	--color-info: #2563eb;
 	--color-success-soft: #dcfce7;
 	--color-error-soft: #fee2e2;
+	--color-warning-soft: #fef3c7;
+	--color-warning-text: #92400e;
 
 	/* chart series */
 	--chart-income: #16a34a;

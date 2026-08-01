@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/JorgeSaicoski/financial-tracker/internal/application/usecases"
 	"github.com/JorgeSaicoski/financial-tracker/internal/domain/entities"
@@ -16,6 +17,7 @@ type accountHandler struct {
 	createAccount usecases.CreateAccountUseCase
 	listAccounts  usecases.ListAccountsUseCase
 	reportBalance usecases.ReportAccountBalanceUseCase
+	listSnapshots usecases.ListAccountSnapshotsUseCase
 
 	log logger.Logger
 }
@@ -25,12 +27,14 @@ func NewAccountHandler(
 	createAccount usecases.CreateAccountUseCase,
 	listAccounts usecases.ListAccountsUseCase,
 	reportBalance usecases.ReportAccountBalanceUseCase,
+	listSnapshots usecases.ListAccountSnapshotsUseCase,
 	log logger.Logger,
 ) AccountHandler {
 	return &accountHandler{
 		createAccount: createAccount,
 		listAccounts:  listAccounts,
 		reportBalance: reportBalance,
+		listSnapshots: listSnapshots,
 		log:           log,
 	}
 }
@@ -95,8 +99,10 @@ func (h *accountHandler) ListAccounts(w http.ResponseWriter, r *http.Request) {
 }
 
 // ReportBalance handles POST /accounts/{id}/balance: the user reports
-// what the account really holds right now. Scoped to the authenticated
-// user (BACK-02) — {id} must be one of their own accounts.
+// what the account really holds right now (or, with an explicit
+// timestamp, held on an earlier date — backfilling a past report).
+// Scoped to the authenticated user (BACK-02) — {id} must be one of their
+// own accounts.
 func (h *accountHandler) ReportBalance(w http.ResponseWriter, r *http.Request) {
 	userID, ok := reqctx.UserID(r.Context())
 	if !ok {
@@ -110,12 +116,49 @@ func (h *accountHandler) ReportBalance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	view, err := h.reportBalance.Execute(r.Context(), userID, r.PathValue("id"), *req.Balance)
+	var timestamp time.Time
+	if req.Timestamp != nil {
+		timestamp = *req.Timestamp
+	}
+
+	view, err := h.reportBalance.Execute(r.Context(), userID, r.PathValue("id"), *req.Balance, timestamp)
 	if err != nil {
 		h.writeUsecaseError(w, "report balance", err)
 		return
 	}
 	writeJSON(h.log, w, http.StatusOK, toAccountResponse(view))
+}
+
+// ListSnapshots handles GET /accounts/{id}/balance: the account's full
+// reported-balance history, each entry paired with its own return.
+// Scoped to the authenticated user (BACK-02) — {id} must be one of their
+// own accounts.
+func (h *accountHandler) ListSnapshots(w http.ResponseWriter, r *http.Request) {
+	userID, ok := reqctx.UserID(r.Context())
+	if !ok {
+		writeError(h.log, w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	views, err := h.listSnapshots.Execute(r.Context(), userID, r.PathValue("id"))
+	if err != nil {
+		h.writeUsecaseError(w, "list account snapshots", err)
+		return
+	}
+
+	resp := interfacedto.AccountSnapshotsResponse{Snapshots: make([]interfacedto.AccountSnapshotResponse, 0, len(views))}
+	for _, v := range views {
+		resp.Snapshots = append(resp.Snapshots, interfacedto.AccountSnapshotResponse{
+			ID:         v.Snapshot.ID,
+			Balance:    v.Snapshot.Balance,
+			Timestamp:  v.Snapshot.Timestamp,
+			Return:     v.Return,
+			ReturnFrom: v.ReturnFrom,
+			ReturnTo:   v.ReturnTo,
+			CreatedAt:  v.Snapshot.CreatedAt,
+		})
+	}
+	writeJSON(h.log, w, http.StatusOK, resp)
 }
 
 func toAccountResponse(v usecases.AccountView) interfacedto.AccountResponse {

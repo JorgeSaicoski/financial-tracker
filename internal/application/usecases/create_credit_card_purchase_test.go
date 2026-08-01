@@ -11,7 +11,7 @@ import (
 
 func newPurchaseUseCase() (CreateCreditCardPurchaseUseCase, *fakeMovementRepo) {
 	movements := newFakeMovementRepo()
-	return NewCreateCreditCardPurchase(newFakePurchaseRepo(movements), newFakeUserSettingsRepo()), movements
+	return NewCreateCreditCardPurchase(newFakePurchaseRepo(movements), newFakeCardRepo(), newFakeCategoryRepo(), newFakeUserSettingsRepo()), movements
 }
 
 func TestCreatePurchaseValidation(t *testing.T) {
@@ -24,7 +24,6 @@ func TestCreatePurchaseValidation(t *testing.T) {
 		{"one installment", CreateCreditCardPurchaseInput{UserID: "u1", TotalAmount: -1000, Currency: "usd", Installments: 1}},
 		{"zero amount", CreateCreditCardPurchaseInput{UserID: "u1", Currency: "usd", Installments: 3}},
 		{"too small to split", CreateCreditCardPurchaseInput{UserID: "u1", TotalAmount: -5, Currency: "usd", Installments: 12}},
-		{"unknown category", CreateCreditCardPurchaseInput{UserID: "u1", TotalAmount: -1000, Currency: "usd", Installments: 3, Category: "yacht"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -77,7 +76,6 @@ func TestCreatePurchaseInstallmentShape(t *testing.T) {
 	uc, movements := newPurchaseUseCase()
 	purchase, installments, err := uc.Execute(context.Background(), CreateCreditCardPurchaseInput{
 		UserID: "u1", TotalAmount: -900, Currency: "usd", Installments: 3, Description: "tv",
-		Category: string(entities.CategoryShopping),
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -106,5 +104,39 @@ func TestCreatePurchaseInstallmentShape(t *testing.T) {
 	stored, err := movements.ListByCreditCardPurchase(context.Background(), purchase.ID)
 	if err != nil || len(stored) != 3 {
 		t.Fatalf("stored %d installments (err %v), want 3", len(stored), err)
+	}
+}
+
+func TestCreatePurchaseWithCardDatesInstallmentsOnDueDays(t *testing.T) {
+	movements := newFakeMovementRepo()
+	cards := newFakeCardRepo()
+	card, err := cards.Create(context.Background(), dtoCard("u1", "5", "15"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	uc := NewCreateCreditCardPurchase(newFakePurchaseRepo(movements), cards, newFakeCategoryRepo(), newFakeUserSettingsRepo())
+
+	purchase, installments, err := uc.Execute(context.Background(), CreateCreditCardPurchaseInput{
+		UserID: "u1", TotalAmount: -900, Currency: "usd", Installments: 3, CardID: &card.ID,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if purchase.CardID == nil || *purchase.CardID != card.ID {
+		t.Errorf("purchase card_id not set: %+v", purchase)
+	}
+
+	wantFirst := entities.NextCardDueDate(card.ClosingDay, card.DueDay, purchase.PurchaseDate)
+	if !installments[0].Timestamp.Equal(wantFirst) {
+		t.Errorf("installment 1 timestamp = %v, want the card's due date %v", installments[0].Timestamp, wantFirst)
+	}
+	for i := 1; i < len(installments); i++ {
+		want := entities.AddCardCycle(card.DueDay, installments[i-1].Timestamp)
+		if !installments[i].Timestamp.Equal(want) {
+			t.Errorf("installment %d timestamp = %v, want %v (one cycle after the previous)", i+1, installments[i].Timestamp, want)
+		}
+		if installments[i].CardID == nil || *installments[i].CardID != card.ID {
+			t.Errorf("installment %d not linked to card", i+1)
+		}
 	}
 }

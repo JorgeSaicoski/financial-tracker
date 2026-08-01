@@ -21,9 +21,23 @@ type UserSettingsRepository interface {
 	// fields are left at their current value, or the default (true) if
 	// the row didn't exist yet.
 	UpdateEnabled(ctx context.Context, userID string, ledgerSyncEnabled bool) (*dto.UserSettingsDTO, error)
+	// SetDefaultCategory upserts default_category_id — same lazy-row
+	// pattern as UpdateEnabled. categoryID nil clears it (falls back to
+	// the global "other" category); callers validate categoryID actually
+	// exists before calling this, same as UpdateEnabled doesn't validate
+	// its own bool.
+	SetDefaultCategory(ctx context.Context, userID string, categoryID *string) (*dto.UserSettingsDTO, error)
 	// ListSyncDisabledUserIDs returns the user_ids whose effective
 	// ledger sync (entitled AND enabled) is off. The sync loop excludes
 	// their movements from every pass, even ones already sitting as
 	// "pending" from before they turned sync off.
 	ListSyncDisabledUserIDs(ctx context.Context) ([]string, error)
+	// SetCloudStorageEntitled upserts cloud_storage_entitled — the
+	// operator/billing-only write path BACK-19 drives from a payment
+	// webhook and the grace-period sweep, never from a user-facing
+	// endpoint. Creating the row lazily (like UpdateEnabled) means a
+	// brand-new signup's very first write here is what overrides the
+	// "absence of a row means true" default down to false, without
+	// needing to backfill every existing user's row.
+	SetCloudStorageEntitled(ctx context.Context, userID string, entitled bool) (*dto.UserSettingsDTO, error)
 }

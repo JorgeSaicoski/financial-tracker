@@ -14,8 +14,24 @@ type Movement struct {
 	Amount        int64
 	Currency      string
 	Description   string
-	Category      Category
-	PaymentMethod PaymentMethod
+	PaymentMethod string
+
+	// CategoryID references the shared categories registry (BACK-14
+	// follow-up) — nil means genuinely uncategorized. Unlike most other
+	// *ID fields here, there's no separately-carried display name on
+	// this entity: category is a shared, contributor-maintained thing,
+	// not something this movement owns a copy of. A human-readable name
+	// is resolved at the infrastructure boundary on read (see
+	// dto.MovementDTO.Category), never stored or passed through the
+	// domain layer.
+	CategoryID *string
+
+	// AvoidabilityOverridePercent (0-100, BACK-14) is this movement's own
+	// ad-hoc avoidability, for a genuine one-off spend that doesn't
+	// deserve its own category. Wins over the movement's category's
+	// avoidability_percent when set — see application/usecases' effective-
+	// avoidability resolution helper.
+	AvoidabilityOverridePercent *int
 
 	// AccountID links the movement to the account the money moved
 	// in/out of (nil when the user didn't say). Local-only: it is not
@@ -28,10 +44,35 @@ type Movement struct {
 	// to zero in ledger-service, which never learns they're linked.
 	TransferID *string
 
+	// PlanID links a movement to a savings Plan it funds (BACK-10) — nil
+	// for an untagged movement or one funding nothing. Local-only, like
+	// AccountID/TransferID: ledger-service never learns about plans.
+	// Never set on a stress-test plan's movements, because a stress-test
+	// plan never has any — it's a pure simulation over real cashflow
+	// numbers, nothing is ever posted for it.
+	PlanID *string
+
 	// Set only when the movement is one installment of a credit-card
 	// purchase that was split (installments > 1).
 	CreditCardPurchaseID *string
 	InstallmentNumber    *int // 1-based
+
+	// RecurringRuleID links a movement the recurring generator created
+	// (BACK-07) back to its rule, purely for provenance/UI display —
+	// nothing about cancel/edit/sync treats it differently from a
+	// manually-entered movement.
+	RecurringRuleID *string
+
+	// CardID (BACK-08) links a credit-card charge to the card it was
+	// made on — set on a single (non-installment) credit-card movement
+	// directly; an installment purchase's movements inherit it from the
+	// purchase. Nil keeps today's flat-offset date behavior unchanged.
+	CardID *string
+	// CardPaymentForCardID (BACK-08) is set only on a payment movement
+	// (an ordinary expense on the paying account, category=transfer)
+	// that settles this card's statement — distinct from CardID, which
+	// marks a charge, not a payment.
+	CardPaymentForCardID *string
 
 	// Status is "voided" only for movements cancelled before they ever
 	// reached ledger-service. A synced movement stays "active" forever
@@ -97,4 +138,18 @@ func (m Movement) IsReversal() bool {
 // syncing, or reversed by a compensating movement after syncing.
 func (m Movement) IsCancelled() bool {
 	return m.Status == MovementStatusVoided || m.ReversedByMovementID != nil
+}
+
+// PotentialSaving is BACK-12's avoidability-weighted counterfactual for
+// a single expense: how much of it could plausibly be avoided, given its
+// own or its category's avoidability_percent (BACK-14, resolved by
+// application/usecases.EffectiveAvoidability before this is called). A
+// nil avoidabilityPercent (unresolved: no override, no matching category)
+// contributes 0 rather than an assumed percentage, so callers can add
+// this into a running total unconditionally.
+func PotentialSaving(expenseAmount int64, avoidabilityPercent *int) int64 {
+	if avoidabilityPercent == nil {
+		return 0
+	}
+	return expenseAmount * int64(*avoidabilityPercent) / 100
 }

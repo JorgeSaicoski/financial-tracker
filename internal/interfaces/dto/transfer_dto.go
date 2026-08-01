@@ -13,6 +13,9 @@ type CreateTransferRequest struct {
 	Amount        int64      `json:"amount"`
 	Description   string     `json:"description,omitempty"`
 	Timestamp     *time.Time `json:"timestamp,omitempty"`
+	// PlanID (BACK-10), when set, tags the credit (destination) leg as
+	// funding a savings plan — the recommended way to fund one.
+	PlanID string `json:"plan_id,omitempty"`
 }
 
 // TransferResponse links both legs of a transfer by the shared

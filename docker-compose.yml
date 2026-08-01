@@ -23,6 +23,30 @@ services:
       timeout: 5s
       retries: 5
 
+  # financial-tracker's own database. Separate from the ledger-service
+  # `postgres` service above (different schema, different service
+  # entirely) — named ft-postgres to match deploy/compose.yaml's
+  # equivalent. BACK-21: SQLite is never a real multi-tenant server
+  # backend, even in this dev-convenience stack (main.go's `case
+  # "sqlite":` now refuses to start unless STANDALONE=true) — this dev
+  # stack runs the same `postgres`-backed server path production does,
+  # not a special-cased sqlite shortcut.
+  ft-postgres:
+    image: docker.io/library/postgres:16-alpine
+    container_name: financial-tracker-postgres
+    environment:
+      POSTGRES_USER: financial_tracker
+      POSTGRES_PASSWORD: financial_tracker
+      POSTGRES_DB: financial_tracker
+    volumes:
+      - ft_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U financial_tracker -d financial_tracker"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    # No host port: only financial-tracker (below) talks to this.
+
   ledger-service:
     build:
       context: ../ledger-service
@@ -43,16 +67,29 @@ services:
       dockerfile: Dockerfile
     container_name: financial-tracker-api
     environment:
+      DB_DRIVER: postgres
+      DATABASE_URL: postgres://financial_tracker:financial_tracker@ft-postgres:5432/financial_tracker?sslmode=disable
       LEDGER_SERVICE_URL: http://ledger-service:8080
       PORT: 8081
+      # No auth yet in this dev-convenience stack — every request
+      # attributes to this fixed user. See deploy/compose.yaml for the
+      # real Authentik-backed stack.
+      AUTH_DISABLED: "true"
       DEFAULT_USER_ID: 00000000-0000-0000-0000-000000000001
       DEFAULT_CURRENCY: usd
-      DB_PATH: /data/financial-tracker.db
+      # Dev-only fixed secrets (same "just works, zero setup" pattern as
+      # the postgres test/test123 credentials above) — never used outside
+      # this local dev stack. Real deployments generate their own via
+      # `openssl rand -base64 32` (see deploy/.env.example).
+      ENCRYPTION_MASTER_KEY: GWv/njuBZVG9gkjKOyV1VuhaenDX90mw1UacYFYYFPg=
+      LEDGER_HMAC_KEY: MUnk2IeyonsbFWEvl8N+O8HRceDHOqxkOvWt/rPg8CM=
+      BILLING_WEBHOOK_SECRET: 6UlTechOweSX44LZ4EO6e1NFeMhiT1gjxStINekgzJM=
     ports:
       - "8081:8081"
-    volumes:
-      - financial_tracker_data:/data
-    # No depends_on ledger-service: financial-tracker's local SQLite is
+    depends_on:
+      ft-postgres:
+        condition: service_healthy
+    # No depends_on ledger-service: financial-tracker's own database is
     # the source of truth and must come up (and work) even when
     # ledger-service is down; the background sync catches up later.
 
@@ -75,4 +112,4 @@ services:
 
 volumes:
   postgres_data:
-  financial_tracker_data:
+  ft_postgres_data:

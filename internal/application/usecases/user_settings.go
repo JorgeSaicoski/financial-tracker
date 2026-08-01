@@ -6,6 +6,7 @@ import (
 	"github.com/JorgeSaicoski/financial-tracker/internal/application/dto"
 	"github.com/JorgeSaicoski/financial-tracker/internal/application/repositories"
 	"github.com/JorgeSaicoski/financial-tracker/internal/domain/entities"
+	apperrors "github.com/JorgeSaicoski/financial-tracker/internal/pkg/errors"
 )
 
 // effectiveSyncStatus is the sync_status a brand-new movement starts
@@ -32,12 +33,13 @@ func effectiveSyncStatus(ctx context.Context, settings repositories.UserSettings
 }
 
 type getUserSettingsUseCase struct {
-	repo repositories.UserSettingsRepository
+	repo          repositories.UserSettingsRepository
+	subscriptions repositories.SubscriptionRepository
 }
 
 // NewGetUserSettings returns interface type for dependency injection.
-func NewGetUserSettings(repo repositories.UserSettingsRepository) GetUserSettingsUseCase {
-	return &getUserSettingsUseCase{repo: repo}
+func NewGetUserSettings(repo repositories.UserSettingsRepository, subscriptions repositories.SubscriptionRepository) GetUserSettingsUseCase {
+	return &getUserSettingsUseCase{repo: repo, subscriptions: subscriptions}
 }
 
 func (uc *getUserSettingsUseCase) Execute(ctx context.Context, userID string) (UserSettingsView, error) {
@@ -45,51 +47,92 @@ func (uc *getUserSettingsUseCase) Execute(ctx context.Context, userID string) (U
 	if err != nil {
 		return UserSettingsView{}, err
 	}
-	return settingsViewFromDTO(s), nil
+	sub, err := currentSubscription(ctx, uc.subscriptions, userID)
+	if err != nil {
+		return UserSettingsView{}, err
+	}
+	return settingsViewFromDTO(s, sub), nil
 }
 
 type updateUserSettingsUseCase struct {
-	settings  repositories.UserSettingsRepository
-	movements repositories.MovementRepository
+	settings      repositories.UserSettingsRepository
+	movements     repositories.MovementRepository
+	categories    repositories.CategoryRepository
+	subscriptions repositories.SubscriptionRepository
 }
 
 // NewUpdateUserSettings returns interface type for dependency injection.
-func NewUpdateUserSettings(settings repositories.UserSettingsRepository, movements repositories.MovementRepository) UpdateUserSettingsUseCase {
-	return &updateUserSettingsUseCase{settings: settings, movements: movements}
+func NewUpdateUserSettings(settings repositories.UserSettingsRepository, movements repositories.MovementRepository, categories repositories.CategoryRepository, subscriptions repositories.SubscriptionRepository) UpdateUserSettingsUseCase {
+	return &updateUserSettingsUseCase{settings: settings, movements: movements, categories: categories, subscriptions: subscriptions}
 }
 
-func (uc *updateUserSettingsUseCase) Execute(ctx context.Context, userID string, ledgerSyncEnabled bool) (UserSettingsView, error) {
-	before, err := uc.settings.Get(ctx, userID)
-	if err != nil {
-		return UserSettingsView{}, err
-	}
-	wasEffectivelyOn := before.EffectiveLedgerSync()
-
-	after, err := uc.settings.UpdateEnabled(ctx, userID, ledgerSyncEnabled)
+func (uc *updateUserSettingsUseCase) Execute(ctx context.Context, userID string, input UpdateUserSettingsInput) (UserSettingsView, error) {
+	after, err := uc.settings.Get(ctx, userID)
 	if err != nil {
 		return UserSettingsView{}, err
 	}
 
-	// Off -> on: the backlog created while sync was off is sitting as
-	// "local" (see effectiveSyncStatus), never queried by the sync loop.
-	// Reclassify it now so the very next pass pushes exactly that
-	// backlog — BACK-13's acceptance criterion.
-	if !wasEffectivelyOn && after.EffectiveLedgerSync() {
-		if err := uc.movements.MarkLocalPending(ctx, userID); err != nil {
+	if input.LedgerSyncEnabled != nil {
+		wasEffectivelyOn := after.EffectiveLedgerSync()
+
+		after, err = uc.settings.UpdateEnabled(ctx, userID, *input.LedgerSyncEnabled)
+		if err != nil {
+			return UserSettingsView{}, err
+		}
+
+		// Off -> on: the backlog created while sync was off is sitting as
+		// "local" (see effectiveSyncStatus), never queried by the sync
+		// loop. Reclassify it now so the very next pass pushes exactly
+		// that backlog — BACK-13's acceptance criterion.
+		if !wasEffectivelyOn && after.EffectiveLedgerSync() {
+			if err := uc.movements.MarkLocalPending(ctx, userID); err != nil {
+				return UserSettingsView{}, err
+			}
+		}
+	}
+
+	if input.DefaultCategoryID != nil {
+		categoryID, err := resolveCategoryID(ctx, uc.categories, userID, input.DefaultCategoryID)
+		if err != nil {
+			return UserSettingsView{}, err
+		}
+		after, err = uc.settings.SetDefaultCategory(ctx, userID, categoryID)
+		if err != nil {
 			return UserSettingsView{}, err
 		}
 	}
 
-	return settingsViewFromDTO(after), nil
+	sub, err := currentSubscription(ctx, uc.subscriptions, userID)
+	if err != nil {
+		return UserSettingsView{}, err
+	}
+	return settingsViewFromDTO(after, sub), nil
 }
 
-func settingsViewFromDTO(s *dto.UserSettingsDTO) UserSettingsView {
-	return UserSettingsView{
+// currentSubscription returns the caller's subscription row, or nil if
+// they've never had one — a free-tier user is not an error case (BACK-19).
+func currentSubscription(ctx context.Context, subscriptions repositories.SubscriptionRepository, userID string) (*dto.SubscriptionDTO, error) {
+	sub, err := subscriptions.GetByUserID(ctx, userID)
+	if apperrors.Is(err, apperrors.ErrNotFound) {
+		return nil, nil
+	}
+	return sub, err
+}
+
+func settingsViewFromDTO(s *dto.UserSettingsDTO, sub *dto.SubscriptionDTO) UserSettingsView {
+	v := UserSettingsView{
 		UserID:               s.UserID,
 		LedgerSyncEntitled:   s.LedgerSyncEntitled,
 		LedgerSyncEnabled:    s.LedgerSyncEnabled,
 		CloudStorageEntitled: s.CloudStorageEntitled,
+		DefaultCategoryID:    s.DefaultCategoryID,
 		CreatedAt:            s.CreatedAt,
 		UpdatedAt:            s.UpdatedAt,
 	}
+	if sub != nil {
+		v.SubscriptionStatus = sub.Status
+		periodEnd := sub.CurrentPeriodEnd
+		v.SubscriptionCurrentPeriodEnd = &periodEnd
+	}
+	return v
 }

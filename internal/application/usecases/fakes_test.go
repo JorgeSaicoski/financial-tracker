@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/JorgeSaicoski/financial-tracker/internal/application/dto"
@@ -164,10 +165,49 @@ func (f *fakeMovementRepo) NetByAccount(_ context.Context, accountID string, aft
 	return net, nil
 }
 
+func (f *fakeMovementRepo) SumByPlan(_ context.Context, planID string, from, to *time.Time) (int64, error) {
+	var sum int64
+	for _, m := range f.byID {
+		if m.PlanID == nil || *m.PlanID != planID || m.Status != string(entities.MovementStatusActive) {
+			continue
+		}
+		if from != nil && m.Timestamp.Before(*from) {
+			continue
+		}
+		if to != nil && m.Timestamp.After(*to) {
+			continue
+		}
+		sum += m.Amount
+	}
+	return sum, nil
+}
+
 func (f *fakeMovementRepo) ListByCreditCardPurchase(_ context.Context, purchaseID string) ([]*dto.MovementDTO, error) {
 	var out []*dto.MovementDTO
 	for _, m := range f.byID {
 		if m.CreditCardPurchaseID != nil && *m.CreditCardPurchaseID == purchaseID {
+			cp := *m
+			out = append(out, &cp)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeMovementRepo) ListByCard(_ context.Context, cardID string) ([]*dto.MovementDTO, error) {
+	var out []*dto.MovementDTO
+	for _, m := range f.byID {
+		if m.CardID != nil && *m.CardID == cardID {
+			cp := *m
+			out = append(out, &cp)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeMovementRepo) ListCardPayments(_ context.Context, cardID string) ([]*dto.MovementDTO, error) {
+	var out []*dto.MovementDTO
+	for _, m := range f.byID {
+		if m.CardPaymentForCardID != nil && *m.CardPaymentForCardID == cardID {
 			cp := *m
 			out = append(out, &cp)
 		}
@@ -235,7 +275,7 @@ func (f *fakeMovementRepo) MarkSyncFailed(_ context.Context, id, syncErr string,
 	return nil
 }
 
-func (f *fakeMovementRepo) UpdateMetadata(_ context.Context, id, description, category, paymentMethod string, accountID *string) error {
+func (f *fakeMovementRepo) UpdateMetadata(_ context.Context, id, description string, categoryID *string, paymentMethod string, accountID, planID *string) error {
 	if f.updateMetadataErr != nil {
 		return f.updateMetadataErr
 	}
@@ -244,9 +284,19 @@ func (f *fakeMovementRepo) UpdateMetadata(_ context.Context, id, description, ca
 		return apperrors.ErrNotFound
 	}
 	m.Description = description
-	m.Category = category
+	m.CategoryID = categoryID
 	m.PaymentMethod = paymentMethod
 	m.AccountID = accountID
+	m.PlanID = planID
+	return nil
+}
+
+func (f *fakeMovementRepo) UpdateAvoidabilityOverride(_ context.Context, id string, avoidabilityOverridePercent *int) error {
+	m, ok := f.byID[id]
+	if !ok {
+		return apperrors.ErrNotFound
+	}
+	m.AvoidabilityOverridePercent = avoidabilityOverridePercent
 	return nil
 }
 
@@ -342,6 +392,19 @@ func (f *fakePurchaseRepo) MarkCancelled(_ context.Context, id string) error {
 	}
 	p.Status = string(entities.CreditCardPurchaseStatusCancelled)
 	return nil
+}
+
+func (f *fakePurchaseRepo) ListByUser(_ context.Context, userID string) ([]*dto.CreditCardPurchaseDTO, error) {
+	var out []*dto.CreditCardPurchaseDTO
+	for _, p := range f.byID {
+		if p.UserID != userID {
+			continue
+		}
+		cp := *p
+		out = append(out, &cp)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].PurchaseDate.After(out[j].PurchaseDate) })
+	return out, nil
 }
 
 type fakeSyncTrigger struct {
@@ -491,6 +554,122 @@ func (f *fakeExchangeRateRepo) Delete(_ context.Context, userID, id string) erro
 	return nil
 }
 
+// fakeRecurringRuleRepo is an in-memory RecurringRuleRepository.
+type fakeRecurringRuleRepo struct {
+	byID   map[string]*dto.RecurringRuleDTO
+	nextID int
+}
+
+func newFakeRecurringRuleRepo() *fakeRecurringRuleRepo {
+	return &fakeRecurringRuleRepo{byID: map[string]*dto.RecurringRuleDTO{}}
+}
+
+func (f *fakeRecurringRuleRepo) Create(_ context.Context, r *dto.RecurringRuleDTO) (*dto.RecurringRuleDTO, error) {
+	if r.ID == "" {
+		f.nextID++
+		r.ID = fmt.Sprintf("rr-%d", f.nextID)
+	}
+	cp := *r
+	f.byID[r.ID] = &cp
+	return r, nil
+}
+
+func (f *fakeRecurringRuleRepo) GetByID(_ context.Context, id string) (*dto.RecurringRuleDTO, error) {
+	r, ok := f.byID[id]
+	if !ok {
+		return nil, apperrors.ErrNotFound
+	}
+	cp := *r
+	return &cp, nil
+}
+
+func (f *fakeRecurringRuleRepo) ListByUser(_ context.Context, userID string) ([]*dto.RecurringRuleDTO, error) {
+	var out []*dto.RecurringRuleDTO
+	for _, r := range f.byID {
+		if r.UserID == userID {
+			cp := *r
+			out = append(out, &cp)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeRecurringRuleRepo) ListActive(_ context.Context) ([]*dto.RecurringRuleDTO, error) {
+	var out []*dto.RecurringRuleDTO
+	for _, r := range f.byID {
+		if r.Active {
+			cp := *r
+			out = append(out, &cp)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeRecurringRuleRepo) UpdateMetadata(_ context.Context, id, description string, categoryID *string, paymentMethod string, accountID *string) error {
+	r, ok := f.byID[id]
+	if !ok {
+		return apperrors.ErrNotFound
+	}
+	r.Description, r.CategoryID, r.PaymentMethod, r.AccountID = description, categoryID, paymentMethod, accountID
+	return nil
+}
+
+func (f *fakeRecurringRuleRepo) UpdateFinancial(_ context.Context, id string, amount int64, currency string) error {
+	r, ok := f.byID[id]
+	if !ok {
+		return apperrors.ErrNotFound
+	}
+	r.Amount, r.Currency = amount, currency
+	return nil
+}
+
+func (f *fakeRecurringRuleRepo) UpdateSchedule(_ context.Context, id, dayOfMonth string, endsAt *time.Time) error {
+	r, ok := f.byID[id]
+	if !ok {
+		return apperrors.ErrNotFound
+	}
+	r.DayOfMonth, r.EndsAt = dayOfMonth, endsAt
+	return nil
+}
+
+func (f *fakeRecurringRuleRepo) SetActive(_ context.Context, id string, active bool) error {
+	r, ok := f.byID[id]
+	if !ok {
+		return apperrors.ErrNotFound
+	}
+	r.Active = active
+	return nil
+}
+
+func (f *fakeRecurringRuleRepo) GenerateAndAdvance(_ context.Context, ruleID string, movements []*dto.MovementDTO, newWatermark time.Time) ([]*dto.MovementDTO, error) {
+	r, ok := f.byID[ruleID]
+	if !ok {
+		return nil, apperrors.ErrNotFound
+	}
+	r.LastGeneratedAt = &newWatermark
+	return movements, nil
+}
+
+// fakeLocalArchiveSettingsRepo is an in-memory LocalArchiveSettingsRepository.
+// A user with no entry defaults to false, matching the real SQLite/Postgres
+// implementations' "no row yet" behavior.
+type fakeLocalArchiveSettingsRepo struct {
+	enabled map[string]bool
+}
+
+func newFakeLocalArchiveSettingsRepo() *fakeLocalArchiveSettingsRepo {
+	return &fakeLocalArchiveSettingsRepo{enabled: map[string]bool{}}
+}
+
+func (f *fakeLocalArchiveSettingsRepo) IsEnabled(_ context.Context, userID string) (bool, error) {
+	return f.enabled[userID], nil
+}
+
+func (f *fakeLocalArchiveSettingsRepo) SetEnabled(_ context.Context, userID string, enabled bool) error {
+	f.enabled[userID] = enabled
+	return nil
+}
+
 // fakeUserSettingsRepo is an in-memory UserSettingsRepository. Absence of
 // a row means "everything true", mirroring the real implementations'
 // contract — Get never creates a row, only UpdateEnabled does.
@@ -523,6 +702,32 @@ func (f *fakeUserSettingsRepo) UpdateEnabled(_ context.Context, userID string, l
 	return &cp, nil
 }
 
+func (f *fakeUserSettingsRepo) SetCloudStorageEntitled(_ context.Context, userID string, entitled bool) (*dto.UserSettingsDTO, error) {
+	s, ok := f.byUserID[userID]
+	if !ok {
+		now := time.Now().UTC()
+		s = dto.DefaultUserSettings(userID, now)
+	}
+	s.CloudStorageEntitled = entitled
+	s.UpdatedAt = time.Now().UTC()
+	f.byUserID[userID] = s
+	cp := *s
+	return &cp, nil
+}
+
+func (f *fakeUserSettingsRepo) SetDefaultCategory(_ context.Context, userID string, categoryID *string) (*dto.UserSettingsDTO, error) {
+	s, ok := f.byUserID[userID]
+	if !ok {
+		now := time.Now().UTC()
+		s = dto.DefaultUserSettings(userID, now)
+	}
+	s.DefaultCategoryID = categoryID
+	s.UpdatedAt = time.Now().UTC()
+	f.byUserID[userID] = s
+	cp := *s
+	return &cp, nil
+}
+
 func (f *fakeUserSettingsRepo) ListSyncDisabledUserIDs(_ context.Context) ([]string, error) {
 	var out []string
 	for uid, s := range f.byUserID {
@@ -544,4 +749,425 @@ func (f *fakeUserSettingsRepo) setEntitled(userID string, ledgerSyncEntitled boo
 		f.byUserID[userID] = s
 	}
 	s.LedgerSyncEntitled = ledgerSyncEntitled
+}
+
+// fakeCardRepo is an in-memory CardRepository (BACK-08).
+type fakeCardRepo struct {
+	byID       map[string]*dto.CardDTO
+	referenced map[string]bool
+	nextID     int
+}
+
+func newFakeCardRepo() *fakeCardRepo {
+	return &fakeCardRepo{byID: map[string]*dto.CardDTO{}, referenced: map[string]bool{}}
+}
+
+func (f *fakeCardRepo) Create(_ context.Context, c *dto.CardDTO) (*dto.CardDTO, error) {
+	if c.ID == "" {
+		f.nextID++
+		c.ID = fmt.Sprintf("card-%d", f.nextID)
+	}
+	cp := *c
+	f.byID[c.ID] = &cp
+	return c, nil
+}
+
+func (f *fakeCardRepo) GetByID(_ context.Context, userID, id string) (*dto.CardDTO, error) {
+	c, ok := f.byID[id]
+	if !ok || c.UserID != userID {
+		return nil, apperrors.ErrNotFound
+	}
+	cp := *c
+	return &cp, nil
+}
+
+func (f *fakeCardRepo) ListByUser(_ context.Context, userID string) ([]*dto.CardDTO, error) {
+	var out []*dto.CardDTO
+	for _, c := range f.byID {
+		if c.UserID == userID {
+			cp := *c
+			out = append(out, &cp)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeCardRepo) Update(_ context.Context, userID, id string, c *dto.CardDTO) error {
+	existing, ok := f.byID[id]
+	if !ok || existing.UserID != userID {
+		return apperrors.ErrNotFound
+	}
+	existing.Name = c.Name
+	existing.LastFour = c.LastFour
+	existing.ClosingDay = c.ClosingDay
+	existing.DueDay = c.DueDay
+	existing.CreditLimit = c.CreditLimit
+	existing.MonthlyBudget = c.MonthlyBudget
+	return nil
+}
+
+func (f *fakeCardRepo) Delete(_ context.Context, userID, id string) error {
+	existing, ok := f.byID[id]
+	if !ok || existing.UserID != userID {
+		return apperrors.ErrNotFound
+	}
+	delete(f.byID, id)
+	return nil
+}
+
+func (f *fakeCardRepo) IsReferenced(_ context.Context, id string) (bool, error) {
+	return f.referenced[id], nil
+}
+
+// fakeCategoryRepo is an in-memory CategoryRepository, mirroring the
+// semantics the SQLite implementation guarantees: categories are global
+// (no user scoping on GetByID/ListAll/Update), ContributorIDs gates
+// edits, has is a plain positive "who currently has this category" fact
+// — not an opt-out (there is no hidden concept, per Jorge, 2026-07-28).
+type fakeCategoryRepo struct {
+	byID   map[string]*dto.CategoryDTO
+	has    map[string]map[string]bool // userID -> categoryID -> true
+	nextID int
+}
+
+func newFakeCategoryRepo() *fakeCategoryRepo {
+	return &fakeCategoryRepo{byID: map[string]*dto.CategoryDTO{}, has: map[string]map[string]bool{}}
+}
+
+func (f *fakeCategoryRepo) GetByID(_ context.Context, id string) (*dto.CategoryDTO, error) {
+	c, ok := f.byID[id]
+	if !ok {
+		return nil, apperrors.ErrNotFound
+	}
+	cp := *c
+	return &cp, nil
+}
+
+func (f *fakeCategoryRepo) ListAll(_ context.Context) ([]*dto.CategoryDTO, error) {
+	var out []*dto.CategoryDTO
+	for _, c := range f.byID {
+		cp := *c
+		out = append(out, &cp)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+func (f *fakeCategoryRepo) Create(_ context.Context, c *dto.CategoryDTO) (*dto.CategoryDTO, error) {
+	if c.ID == "" {
+		f.nextID++
+		c.ID = fmt.Sprintf("cat-%d", f.nextID)
+	}
+	if c.CreatedAt.IsZero() {
+		c.CreatedAt = time.Now().UTC()
+	}
+	cp := *c
+	f.byID[c.ID] = &cp
+	for _, contributorID := range c.ContributorIDs {
+		if f.has[contributorID] == nil {
+			f.has[contributorID] = map[string]bool{}
+		}
+		f.has[contributorID][c.ID] = true
+	}
+	return c, nil
+}
+
+func (f *fakeCategoryRepo) Update(_ context.Context, id, name string, avoidabilityPercent *int) error {
+	c, ok := f.byID[id]
+	if !ok {
+		return apperrors.ErrNotFound
+	}
+	c.Name = name
+	c.AvoidabilityPercent = avoidabilityPercent
+	return nil
+}
+
+func (f *fakeCategoryRepo) IsContributor(_ context.Context, userID, categoryID string) (bool, error) {
+	c, ok := f.byID[categoryID]
+	if !ok {
+		return false, nil
+	}
+	for _, id := range c.ContributorIDs {
+		if id == userID {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (f *fakeCategoryRepo) ListForUser(_ context.Context, userID string) ([]*dto.CategoryDTO, error) {
+	var out []*dto.CategoryDTO
+	for categoryID := range f.has[userID] {
+		c, ok := f.byID[categoryID]
+		if !ok {
+			continue
+		}
+		cp := *c
+		out = append(out, &cp)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+func (f *fakeCategoryRepo) HasForUser(_ context.Context, userID, categoryID string) (bool, error) {
+	return f.has[userID][categoryID], nil
+}
+
+func (f *fakeCategoryRepo) Remove(_ context.Context, userID, categoryID string) error {
+	delete(f.has[userID], categoryID)
+	return nil
+}
+
+// RemoveAndReassign doesn't actually move fakeMovementRepo/
+// fakeCreditCardPurchaseRepo/fakeRecurringRuleRepo rows onto
+// defaultCategoryID — the fakes don't share state across each other the
+// way the real repositories share one database, and no usecase-level
+// test here asserts on post-delete movement category ids. That
+// reassignment is exercised for real by the live-DB repository tests
+// instead.
+func (f *fakeCategoryRepo) RemoveAndReassign(ctx context.Context, userID, categoryID, defaultCategoryID string) error {
+	return f.Remove(ctx, userID, categoryID)
+}
+
+// fakeLimitsRepo is an in-memory LimitsRepository — tests seed whatever
+// values they need via newFakeLimitsRepo, e.g.
+// newFakeLimitsRepo(map[string]int{"max_categories_per_user": 10}).
+type fakeLimitsRepo struct {
+	values map[string]int
+}
+
+func newFakeLimitsRepo(values map[string]int) *fakeLimitsRepo {
+	return &fakeLimitsRepo{values: values}
+}
+
+func (f *fakeLimitsRepo) GetValue(_ context.Context, name string) (int, error) {
+	v, ok := f.values[name]
+	if !ok {
+		return 0, apperrors.ErrNotFound
+	}
+	return v, nil
+}
+
+// fakePaymentMethodRepo is an in-memory PaymentMethodRepository, mirroring
+// the semantics the SQLite implementation guarantees: EnsureByName is a
+// case-insensitive check-then-insert, Update/Delete/GetByID are scoped
+// to (userID, id) and return apperrors.ErrNotFound otherwise.
+type fakePaymentMethodRepo struct {
+	byID   map[string]*dto.PaymentMethodDTO
+	nextID int
+}
+
+func newFakePaymentMethodRepo() *fakePaymentMethodRepo {
+	return &fakePaymentMethodRepo{byID: map[string]*dto.PaymentMethodDTO{}}
+}
+
+func (f *fakePaymentMethodRepo) EnsureByName(_ context.Context, userID, name string) (*dto.PaymentMethodDTO, error) {
+	for _, m := range f.byID {
+		if m.UserID == userID && strings.EqualFold(m.Name, name) {
+			cp := *m
+			return &cp, nil
+		}
+	}
+	return f.Create(context.Background(), &dto.PaymentMethodDTO{
+		UserID: userID,
+		Name:   name,
+	})
+}
+
+func (f *fakePaymentMethodRepo) GetByID(_ context.Context, userID, id string) (*dto.PaymentMethodDTO, error) {
+	m, ok := f.byID[id]
+	if !ok || m.UserID != userID {
+		return nil, apperrors.ErrNotFound
+	}
+	cp := *m
+	return &cp, nil
+}
+
+func (f *fakePaymentMethodRepo) ListByUser(_ context.Context, userID string) ([]*dto.PaymentMethodDTO, error) {
+	var out []*dto.PaymentMethodDTO
+	for _, m := range f.byID {
+		if m.UserID == userID {
+			cp := *m
+			out = append(out, &cp)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+func (f *fakePaymentMethodRepo) Create(_ context.Context, m *dto.PaymentMethodDTO) (*dto.PaymentMethodDTO, error) {
+	if m.ID == "" {
+		f.nextID++
+		m.ID = fmt.Sprintf("pm-%d", f.nextID)
+	}
+	if m.CreatedAt.IsZero() {
+		m.CreatedAt = time.Now().UTC()
+	}
+	cp := *m
+	f.byID[m.ID] = &cp
+	return m, nil
+}
+
+func (f *fakePaymentMethodRepo) Update(_ context.Context, userID, id, name string) error {
+	m, ok := f.byID[id]
+	if !ok || m.UserID != userID {
+		return apperrors.ErrNotFound
+	}
+	m.Name = name
+	return nil
+}
+
+func (f *fakePaymentMethodRepo) Delete(_ context.Context, userID, id string) error {
+	m, ok := f.byID[id]
+	if !ok || m.UserID != userID {
+		return apperrors.ErrNotFound
+	}
+	delete(f.byID, id)
+	return nil
+}
+
+// fakePlanRepo is an in-memory PlanRepository.
+type fakePlanRepo struct {
+	byID   map[string]*dto.PlanDTO
+	nextID int
+}
+
+func newFakePlanRepo() *fakePlanRepo {
+	return &fakePlanRepo{byID: map[string]*dto.PlanDTO{}}
+}
+
+func (f *fakePlanRepo) Create(_ context.Context, p *dto.PlanDTO) (*dto.PlanDTO, error) {
+	if p.ID == "" {
+		f.nextID++
+		p.ID = fmt.Sprintf("plan-%d", f.nextID)
+	}
+	if p.CreatedAt.IsZero() {
+		p.CreatedAt = time.Now().UTC()
+	}
+	cp := *p
+	f.byID[p.ID] = &cp
+	return p, nil
+}
+
+func (f *fakePlanRepo) GetByID(_ context.Context, userID, id string) (*dto.PlanDTO, error) {
+	p, ok := f.byID[id]
+	if !ok || p.UserID != userID {
+		return nil, apperrors.ErrNotFound
+	}
+	cp := *p
+	return &cp, nil
+}
+
+func (f *fakePlanRepo) ListByUser(_ context.Context, userID string) ([]*dto.PlanDTO, error) {
+	var out []*dto.PlanDTO
+	for _, p := range f.byID {
+		if p.UserID == userID {
+			cp := *p
+			out = append(out, &cp)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	return out, nil
+}
+
+func (f *fakePlanRepo) Update(_ context.Context, userID, id, name string, targetAmount *int64, monthlyTargetAmount int64, endDate *time.Time, status string) error {
+	p, ok := f.byID[id]
+	if !ok || p.UserID != userID {
+		return apperrors.ErrNotFound
+	}
+	p.Name = name
+	p.TargetAmount = targetAmount
+	p.MonthlyTargetAmount = monthlyTargetAmount
+	p.EndDate = endDate
+	p.Status = status
+	return nil
+}
+
+// fakeUserRepo is an in-memory UserRepository.
+type fakeUserRepo struct {
+	byID map[string]*dto.UserDTO
+}
+
+func newFakeUserRepo() *fakeUserRepo {
+	return &fakeUserRepo{byID: map[string]*dto.UserDTO{}}
+}
+
+func (f *fakeUserRepo) Upsert(_ context.Context, user *dto.UserDTO) (*dto.UserDTO, error) {
+	now := time.Now().UTC()
+	existing, ok := f.byID[user.ID]
+	createdAt := now
+	if ok {
+		createdAt = existing.CreatedAt
+	}
+	stored := &dto.UserDTO{
+		ID: user.ID, Provider: user.Provider, ExternalID: user.ExternalID,
+		Email: user.Email, DisplayName: user.DisplayName,
+		CreatedAt: createdAt, UpdatedAt: now,
+	}
+	f.byID[user.ID] = stored
+	cp := *stored
+	return &cp, nil
+}
+
+func (f *fakeUserRepo) GetByID(_ context.Context, id string) (*dto.UserDTO, error) {
+	u, ok := f.byID[id]
+	if !ok {
+		return nil, apperrors.ErrNotFound
+	}
+	cp := *u
+	return &cp, nil
+}
+
+func (f *fakeUserRepo) Exists(_ context.Context, id string) (bool, error) {
+	_, ok := f.byID[id]
+	return ok, nil
+}
+
+// fakeSubscriptionRepo is an in-memory SubscriptionRepository.
+type fakeSubscriptionRepo struct {
+	byUserID map[string]*dto.SubscriptionDTO
+}
+
+func newFakeSubscriptionRepo() *fakeSubscriptionRepo {
+	return &fakeSubscriptionRepo{byUserID: map[string]*dto.SubscriptionDTO{}}
+}
+
+func (f *fakeSubscriptionRepo) Upsert(_ context.Context, sub *dto.SubscriptionDTO) (*dto.SubscriptionDTO, error) {
+	now := time.Now().UTC()
+	createdAt := now
+	if existing, ok := f.byUserID[sub.UserID]; ok {
+		createdAt = existing.CreatedAt
+	}
+	stored := &dto.SubscriptionDTO{
+		UserID: sub.UserID, Provider: sub.Provider, ProviderSubscriptionID: sub.ProviderSubscriptionID,
+		Status: sub.Status, CurrentPeriodEnd: sub.CurrentPeriodEnd,
+		CreatedAt: createdAt, UpdatedAt: now,
+	}
+	f.byUserID[sub.UserID] = stored
+	cp := *stored
+	return &cp, nil
+}
+
+func (f *fakeSubscriptionRepo) GetByUserID(_ context.Context, userID string) (*dto.SubscriptionDTO, error) {
+	s, ok := f.byUserID[userID]
+	if !ok {
+		return nil, apperrors.ErrNotFound
+	}
+	cp := *s
+	return &cp, nil
+}
+
+func (f *fakeSubscriptionRepo) ListLapsable(_ context.Context, asOf time.Time, graceDays int) ([]*dto.SubscriptionDTO, error) {
+	var out []*dto.SubscriptionDTO
+	for _, s := range f.byUserID {
+		if s.Status != dto.SubscriptionStatusPastDue && s.Status != dto.SubscriptionStatusCanceled {
+			continue
+		}
+		if !s.CurrentPeriodEnd.AddDate(0, 0, graceDays).After(asOf) {
+			cp := *s
+			out = append(out, &cp)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].UserID < out[j].UserID })
+	return out, nil
 }

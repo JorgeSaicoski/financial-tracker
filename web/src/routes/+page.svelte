@@ -17,10 +17,16 @@
 		syncNow
 	} from '$lib/api.js';
 	import { movementCreated, notifyMovementCreated } from '$lib/stores/movementEvents.js';
+	import { notifyAccountsChanged } from '$lib/stores/accountEvents.js';
+	// Cards are fetched/refreshed by Sidebar.svelte (mounted once in
+	// +layout.svelte, alongside every route) — this route only reads the
+	// shared store, it doesn't fetch on its own.
+	import { cards } from '$lib/stores/cards.js';
 	import { formatAmount } from '$lib/format.js';
 	import AppHeader from '$lib/components/AppHeader.svelte';
 	import BalanceCard from '$lib/components/BalanceCard.svelte';
 	import AccountsPanel from '$lib/components/AccountsPanel.svelte';
+	import LocalBackupPanel from '$lib/components/LocalBackupPanel.svelte';
 	import TransferForm from '$lib/components/TransferForm.svelte';
 	import AddMovementForm from '$lib/components/AddMovementForm.svelte';
 	import CashflowPanel from '$lib/components/CashflowPanel.svelte';
@@ -104,6 +110,7 @@
 		error = '';
 		await createAccount(input);
 		await loadAccounts();
+		notifyAccountsChanged();
 	}
 
 	async function handleReportBalance(accountId, cents) {
@@ -238,6 +245,8 @@
 
 	<AccountsPanel {accounts} {accountTypes} {currencies} onAddAccount={handleAddAccount} onReportBalance={handleReportBalance} />
 
+	<LocalBackupPanel />
+
 	<TransferForm {accounts} onCreate={handleCreateTransfer} />
 
 	<AddMovementForm
@@ -245,6 +254,7 @@
 		{paymentMethods}
 		{currencies}
 		{accounts}
+		cards={$cards}
 		bind:currency={currencyInput}
 		onSubmit={handleAddMovement}
 		onAddCurrency={handleAddCurrency}
@@ -269,6 +279,7 @@
 					{accounts}
 					{categories}
 					{paymentMethods}
+					cards={$cards}
 					onCancel={handleCancel}
 					onCancelPurchase={handleCancelPurchase}
 					onCancelTransfer={handleCancelTransfer}

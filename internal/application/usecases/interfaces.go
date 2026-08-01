@@ -59,8 +59,12 @@ type CreateCreditCardPurchaseInput struct {
 	TotalAmount  int64
 	Currency     string
 	Description  string
-	Category     string
+	CategoryID   *string
 	Installments int
+	// CardID (BACK-08), when set, dates each installment on the card's
+	// real due days (closing_day/due_day) instead of the flat monthly
+	// offset from the purchase date.
+	CardID *string
 }
 
 type CreateCreditCardPurchaseUseCase interface {
@@ -68,17 +72,36 @@ type CreateCreditCardPurchaseUseCase interface {
 }
 
 // CreateMovementInput carries the caller-supplied fields for a single
-// movement. Category and PaymentMethod default to "other" when empty so
-// pre-existing clients that only send an amount keep working; both are
-// validated against the domain's fixed lists inside the usecase.
+// movement. PaymentMethod defaults to "other" when empty, validated
+// against the domain's fixed list inside the usecase. CategoryID (BACK-14
+// follow-up) is a real foreign key now — nil leaves the movement
+// uncategorized; a non-nil value must reference an existing category
+// (any category, since they're globally shared — no ownership check).
 type CreateMovementInput struct {
 	UserID        string
 	Amount        int64
 	Currency      string
 	Description   string
-	Category      string
+	CategoryID    *string
 	PaymentMethod string
 	AccountID     *string
+	// CardID (BACK-08), accepted only when PaymentMethod is
+	// "credit_card", dates this (single, non-installment) charge on the
+	// card's real due day instead of leaving Timestamp as "now".
+	CardID *string
+	// CardPaymentForCardID (BACK-08) marks this movement as a payment
+	// settling the named card's statement — reduces that card's
+	// next_due_total. Independent of CardID: a movement is either a
+	// charge (CardID) or a payment (CardPaymentForCardID), never both.
+	CardPaymentForCardID *string
+	// PlanID (BACK-10) tags this movement as funding a savings plan. Must
+	// belong to the user, be an active savings plan, and match the
+	// movement's currency — validated in the usecase.
+	PlanID *string
+	// AvoidabilityOverridePercent (0-100, BACK-14) is this movement's own
+	// ad-hoc avoidability, for a one-off spend that doesn't deserve its
+	// own category. Wins over the resolved category's avoidability_percent.
+	AvoidabilityOverridePercent *int
 }
 
 // ImportRowInput is one CSV data row (BACK-03), still raw strings — the
@@ -193,19 +216,27 @@ type ListMovementsUseCase interface {
 }
 
 // UpdateMovementInput carries a PATCH /movements/{id} partial body — a nil
-// field means "leave unchanged". Description/Category/PaymentMethod/
+// field means "leave unchanged". Description/CategoryID/PaymentMethod/
 // AccountID are metadata: local-only, always editable regardless of sync
 // status. Amount/Currency/Timestamp are financial: editable in place only
 // before the movement syncs; once synced, editing them produces a
 // reversal + a replacement instead (see UpdateMovementResult).
 type UpdateMovementInput struct {
-	Description   *string
-	Category      *string
+	Description *string
+	// CategoryID: nil leaves it unchanged; a pointer to "" clears it
+	// (genuinely uncategorized), same convention as AccountID.
+	CategoryID    *string
 	PaymentMethod *string
 	AccountID     *string // a pointer to "" clears the account
+	PlanID        *string // a pointer to "" clears the plan link (BACK-10)
 	Amount        *int64
 	Currency      *string
 	Timestamp     *time.Time
+	// AvoidabilityOverridePercent (0-100, BACK-14), like every other
+	// field here: nil means "leave unchanged". Local-only metadata (same
+	// group as Description/CategoryID/PaymentMethod/AccountID) — editable
+	// regardless of sync status, no reversal/replacement produced.
+	AvoidabilityOverridePercent *int
 }
 
 // UpdateMovementResult reports how the edit was carried out. A
@@ -287,6 +318,11 @@ type TransferBetweenAccountsInput struct {
 	Amount        int64
 	Description   string
 	Timestamp     time.Time
+	// PlanID (BACK-10), when set, tags the credit (destination) leg only
+	// — the recommended way to fund a savings plan without inflating
+	// income/expense cashflow. Must belong to the user, be an active
+	// savings plan, and match ToAccountID's currency.
+	PlanID *string
 }
 
 // TransferResult carries both legs of a transfer, linked by TransferID:
@@ -334,12 +370,38 @@ type ListAccountsUseCase interface {
 
 // ReportAccountBalanceUseCase records what the account really holds right
 // now (per the bank/broker/wallet), as a snapshot. The returned view then
-// exposes the account's return since the previous report. Requires the
+// exposes the account's return since the previous report. A zero
+// timestamp means "now" — same convention as
+// TransferBetweenAccountsInput.Timestamp — letting a caller backfill a
+// report for an earlier date instead of always today. Requires the
 // caller's userID and returns apperrors.ErrNotFound when accountID
 // belongs to someone else (BACK-02) — same ownership rule as
 // GetMovementUseCase.
 type ReportAccountBalanceUseCase interface {
-	Execute(ctx context.Context, userID, accountID string, balance int64) (AccountView, error)
+	Execute(ctx context.Context, userID, accountID string, balance int64, timestamp time.Time) (AccountView, error)
+}
+
+// AccountSnapshotView is one reported snapshot plus its own computed
+// return: the balance change the movements since the previous snapshot
+// (or, for the earliest snapshot, since the account's implicit zero
+// starting balance) don't explain. Nil Return would only happen if
+// NetByAccount itself failed, which the usecase turns into an error
+// instead — so in practice every entry always carries one.
+type AccountSnapshotView struct {
+	Snapshot   *dto.AccountSnapshotDTO
+	Return     int64
+	ReturnFrom *time.Time // nil for the earliest snapshot (no previous one)
+	ReturnTo   time.Time
+}
+
+// ListAccountSnapshotsUseCase returns one account's full reported-balance
+// history, newest first, each entry paired with its own return — the
+// per-snapshot generalization of AccountView's single LastReturn (which
+// only ever covers the latest two). Requires the caller's userID and
+// returns apperrors.ErrNotFound when accountID belongs to someone else
+// (BACK-02) — same ownership rule as GetMovementUseCase.
+type ListAccountSnapshotsUseCase interface {
+	Execute(ctx context.Context, userID, accountID string) ([]AccountSnapshotView, error)
 }
 
 type ListCurrenciesUseCase interface {
@@ -355,14 +417,24 @@ type AddCurrencyUseCase interface {
 // UserSettingsView is what GET/PATCH /settings return (BACK-13).
 // Entitled fields are operator/billing-controlled and read-only through
 // this API; Enabled fields are user preference. Effective capability is
-// Entitled AND Enabled.
+// Entitled AND Enabled. SubscriptionStatus/SubscriptionCurrentPeriodEnd
+// (BACK-19) are the zero value/nil when the caller has never had a
+// subscription row — a free-tier user is not an error case.
 type UserSettingsView struct {
 	UserID               string
 	LedgerSyncEntitled   bool
 	LedgerSyncEnabled    bool
 	CloudStorageEntitled bool
-	CreatedAt            time.Time
-	UpdatedAt            time.Time
+
+	SubscriptionStatus           string
+	SubscriptionCurrentPeriodEnd *time.Time
+
+	// DefaultCategoryID (BACK-14 follow-up): nil when the user has never
+	// set one, which resolves to the global "other" category.
+	DefaultCategoryID *string
+
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // GetUserSettingsUseCase returns the caller's own settings, defaulting
@@ -371,14 +443,23 @@ type GetUserSettingsUseCase interface {
 	Execute(ctx context.Context, userID string) (UserSettingsView, error)
 }
 
-// UpdateUserSettingsUseCase changes ledger_sync_enabled — the only field
-// a user (as opposed to an operator) may write; entitlement fields are
-// never accepted here (rejected at the HTTP decode boundary, see
-// interfaces/dto). Toggling sync back on reclassifies the backlog
-// accumulated while it was off (SyncStatusLocal) back to "pending" so
-// the next sync pass picks it up.
+// UpdateUserSettingsInput carries a PATCH /settings partial body — nil
+// means "leave unchanged" for each field independently, same convention
+// as UpdateMovementInput. DefaultCategoryID's pointer-to-"" clears it
+// back to the global "other" fallback.
+type UpdateUserSettingsInput struct {
+	LedgerSyncEnabled *bool
+	DefaultCategoryID *string
+}
+
+// UpdateUserSettingsUseCase changes ledger_sync_enabled and/or
+// default_category_id — the only fields a user (as opposed to an
+// operator) may write; entitlement fields are never accepted here
+// (rejected at the HTTP decode boundary, see interfaces/dto). Toggling
+// sync back on reclassifies the backlog accumulated while it was off
+// (SyncStatusLocal) back to "pending" so the next sync pass picks it up.
 type UpdateUserSettingsUseCase interface {
-	Execute(ctx context.Context, userID string, ledgerSyncEnabled bool) (UserSettingsView, error)
+	Execute(ctx context.Context, userID string, input UpdateUserSettingsInput) (UserSettingsView, error)
 }
 
 // CurrencyFlow aggregates the interval's money in / money out for one
@@ -450,6 +531,50 @@ type DeleteExchangeRateUseCase interface {
 	Execute(ctx context.Context, userID, id string) error
 }
 
+// ArchiveBundle is the full restorable account state BACK-15's "no cloud"
+// archive needs: everything ExportArchiveUseCase gathers and
+// ImportArchiveUseCase consumes. Categories aren't included — they're
+// still the fixed, hardcoded list (BACK-14 hasn't landed), so there's
+// nothing user-defined to restore there yet; once BACK-14 lands, this
+// bundle should grow a Categories field too.
+type ArchiveBundle struct {
+	Accounts            []*dto.AccountDTO
+	Movements           []*dto.MovementDTO
+	CreditCardPurchases []*dto.CreditCardPurchaseDTO
+}
+
+type ExportArchiveUseCase interface {
+	Execute(ctx context.Context, userID string) (ArchiveBundle, error)
+}
+
+// ImportArchiveResult reports what a restore actually did. Restoring a
+// row whose ID already exists is a no-op ("skipped"), not an error — so
+// importing the same archive twice, or one that partially overlaps what's
+// already there, is safe. Restore is a disaster-recovery path, not a
+// merge tool: it never overwrites an existing row with the archive's copy.
+type ImportArchiveResult struct {
+	AccountsRestored, AccountsSkipped                       int
+	MovementsRestored, MovementsSkipped                     int
+	CreditCardPurchasesRestored, CreditCardPurchasesSkipped int
+}
+
+type ImportArchiveUseCase interface {
+	Execute(ctx context.Context, userID string, bundle ArchiveBundle) (ImportArchiveResult, error)
+}
+
+// GetLocalArchiveSettingUseCase reads BACK-15's local_archive_enabled
+// toggle, defaulting to false for a user who never set it.
+type GetLocalArchiveSettingUseCase interface {
+	Execute(ctx context.Context, userID string) (bool, error)
+}
+
+// SetLocalArchiveSettingUseCase flips the toggle. It never touches
+// cloud_storage_enabled (BACK-16) or any other setting — the two are
+// independent.
+type SetLocalArchiveSettingUseCase interface {
+	Execute(ctx context.Context, userID string, enabled bool) (bool, error)
+}
+
 // ToUSDUseCase converts amount (in currency's smallest unit) to USD's
 // smallest unit (cents), using the rate effective at or before "at" — the
 // row with the greatest EffectiveFrom <= at. Reused by BACK-12's
@@ -459,4 +584,449 @@ type DeleteExchangeRateUseCase interface {
 // number.
 type ToUSDUseCase interface {
 	Execute(ctx context.Context, userID string, amount int64, currency string, at time.Time) (int64, error)
+}
+
+// PurchasingPowerCategorySpending is one category's slice of a month's
+// spending in one currency (BACK-12) — the expense magnitude (positive,
+// smallest currency unit) plus that category's avoidability_percent
+// (BACK-14; nil for an unrecognized/uncategorized bucket).
+type PurchasingPowerCategorySpending struct {
+	Category            string
+	AvoidabilityPercent *int
+	Amount              int64
+}
+
+// PurchasingPowerCurrencyView is one month's figures in one native
+// currency, plus that same group's USD-converted view (each movement
+// converted at the BACK-11 rate effective at its own timestamp — this is
+// what makes a devaluation visible in the USD figures while the native
+// ones stay identical). Native figures are always complete; USDIncomplete
+// is true when at least one movement in this group had no rate available
+// for its date, in which case the USD figures here exclude that
+// movement's contribution rather than guessing.
+type PurchasingPowerCurrencyView struct {
+	Currency           string
+	SpendingByCategory []PurchasingPowerCategorySpending
+	Income             int64
+	TotalExpenses      int64
+	// PotentialSavings is BACK-12's avoidability-weighted counterfactual:
+	// Σ (expense_amount × effective_avoidability / 100) over this
+	// currency's non-cancelled, non-transfer expense movements. A
+	// movement with no resolvable avoidability (BACK-14: no override, no
+	// matching/recognized category) contributes 0, not an assumed
+	// percentage — it still counts in TotalExpenses.
+	PotentialSavings int64
+	Profit           int64 // Income - TotalExpenses
+
+	IncomeUSD           int64
+	TotalExpensesUSD    int64
+	PotentialSavingsUSD int64
+	ProfitUSD           int64
+	USDIncomplete       bool
+}
+
+// PurchasingPowerMonth is one calendar month's report (BACK-12), one
+// PurchasingPowerCurrencyView per native currency active that month
+// (native figures are never summed across currencies) plus one
+// month-level figure that IS a cross-currency sum, since it's already
+// USD-normalized: ProfitUSDAtCurrentRate converts every currency's
+// income/expenses at *today's* rate rather than each movement's own
+// historical rate, so comparing it against the sum of this month's
+// per-currency ProfitUSD shows "what this month is worth now" vs. "what
+// it was worth then."
+type PurchasingPowerMonth struct {
+	Month                  time.Time // first of the month, UTC
+	Currencies             []PurchasingPowerCurrencyView
+	ProfitUSDAtCurrentRate int64
+}
+
+// GetPurchasingPowerUseCase reports the last `months` calendar months
+// (including the current, in-progress one), newest first is not
+// guaranteed — see the usecase for actual ordering.
+type GetPurchasingPowerUseCase interface {
+	Execute(ctx context.Context, userID string, months int) ([]PurchasingPowerMonth, error)
+}
+
+// CategoryAvoidabilityScore is one category's follow-through figure for
+// one scored month, in one currency (BACK-18): did the user actually cut
+// spend in a category they themselves rated avoidable? Baseline is the
+// trailing average of this same category's spend over the 3 preceding
+// full calendar months (a fixed 3-month window — see the usecase for why
+// the denominator doesn't shrink to the count of months with data).
+// InsufficientHistory is true — and Baseline/ReductionPercent/
+// WeightedScore all stay zero — when fewer than 2 of those 3 months have
+// any data for this category at all (never a baseline fabricated from a
+// single data point); Actual is still reported in that case, since it's
+// real spend, just not scoreable yet.
+type CategoryAvoidabilityScore struct {
+	Category            string
+	AvoidabilityPercent *int
+	Baseline            int64
+	Actual              int64
+	ReductionPercent    float64 // (baseline-actual)/baseline*100; positive = spent less than usual
+	WeightedScore       float64 // reduction_percent * avoidability_percent/100
+	InsufficientHistory bool
+}
+
+// AvoidabilityScoreCurrencyView is one scored month's follow-through
+// figures in one native currency (never summed across currencies).
+// OverallScore sums WeightedScore across every category with a valid
+// baseline in this currency; a category missing one is excluded from
+// this sum entirely, not treated as a zero contribution.
+type AvoidabilityScoreCurrencyView struct {
+	Currency     string
+	Categories   []CategoryAvoidabilityScore
+	OverallScore float64
+}
+
+// AvoidabilityScoreMonth is one calendar month's follow-through report
+// (BACK-18), one AvoidabilityScoreCurrencyView per native currency active
+// that month or one of its 3 baseline months.
+type AvoidabilityScoreMonth struct {
+	Month      time.Time // first of the month, UTC
+	Currencies []AvoidabilityScoreCurrencyView
+}
+
+// GetAvoidabilityScoreUseCase reports the last `months` calendar months'
+// avoidability follow-through, reusing BACK-12's month/currency bucketing
+// and category-spending helpers.
+type GetAvoidabilityScoreUseCase interface {
+	Execute(ctx context.Context, userID string, months int) ([]AvoidabilityScoreMonth, error)
+}
+
+// CreateCategoryInput carries a POST /categories body. AvoidabilityPercent
+// nil defaults to a neutral 50 (same default the one-time migration
+// backfill used) — the user edits it afterward. UserID becomes the new
+// category's sole contributor (BACK-14 follow-up: categories are shared/
+// global, not per-user — see entities.Category).
+type CreateCategoryInput struct {
+	UserID              string
+	Name                string
+	AvoidabilityPercent *int
+}
+
+// CreateCategoryUseCase rejects the three reserved system names
+// ("transfer", "income", "other") and enforces the per-user
+// max_categories_per_user limit (see LimitsRepository) — duplicate names
+// are allowed: two different users' "restaurant" are two different rows.
+type CreateCategoryUseCase interface {
+	Execute(ctx context.Context, input CreateCategoryInput) (*dto.CategoryDTO, error)
+}
+
+// ListCategoriesUseCase returns every category in the system (BACK-14
+// follow-up: categories are globally visible, not per-user), name
+// ascending.
+type ListCategoriesUseCase interface {
+	Execute(ctx context.Context) ([]*dto.CategoryDTO, error)
+}
+
+// UpdateCategoryInput carries a PATCH /categories/{id} body — nil means
+// "leave unchanged", same convention as UpdateMovementInput.
+type UpdateCategoryInput struct {
+	Name                *string
+	AvoidabilityPercent *int
+}
+
+// UpdateCategoryUseCase rejects edits to the three reserved system
+// names, an AvoidabilityPercent outside 0-100, and any edit from a
+// caller who isn't one of the category's contributors (see
+// entities.Category.CanBeEditedBy).
+type UpdateCategoryUseCase interface {
+	Execute(ctx context.Context, userID, id string, input UpdateCategoryInput) (*dto.CategoryDTO, error)
+}
+
+// DeleteCategoryUseCase implements DELETE /categories/{id}: there is no
+// real delete once a category may be shared (BACK-14 follow-up) — this
+// removes id from the caller's own category list only (see
+// CategoryRepository.Remove), never touching the row itself or any other
+// user's data. Existing movements/purchases/recurring rules already
+// referencing id keep doing so; only future selection is blocked (see
+// resolveCategoryID). reassignExisting, when true, also moves every
+// movement/purchase/recurring rule the caller owns off id and onto their
+// resolved default category first (CategoryRepository.RemoveAndReassign)
+// — still scoped strictly to the caller's own rows. Rejects removing a
+// reserved system category.
+type DeleteCategoryUseCase interface {
+	Execute(ctx context.Context, userID, id string, reassignExisting bool) error
+}
+
+// CreateRecurringRuleInput carries the caller-supplied fields for a new
+// recurring rule (BACK-07). PaymentMethod defaults to "other" when empty.
+// CategoryID (BACK-14 follow-up) is a real foreign key — nil stays
+// uncategorized, a non-nil value must reference an existing category.
+// DayOfMonth must be "1".."28" or "last". StartsAt zero means "now".
+type CreateRecurringRuleInput struct {
+	UserID        string
+	Amount        int64
+	Currency      string
+	Description   string
+	CategoryID    *string
+	PaymentMethod string
+	AccountID     *string
+	DayOfMonth    string
+	StartsAt      time.Time
+	EndsAt        *time.Time
+}
+
+type CreateRecurringRuleUseCase interface {
+	Execute(ctx context.Context, input CreateRecurringRuleInput) (*dto.RecurringRuleDTO, error)
+}
+
+type ListRecurringRulesUseCase interface {
+	Execute(ctx context.Context, userID string) ([]*dto.RecurringRuleDTO, error)
+}
+
+// UpdateRecurringRuleInput carries a PATCH /recurring-rules/{id} partial
+// body — a nil field means "leave unchanged", mirroring
+// UpdateMovementInput. Editing any field only affects future
+// generations; movements already generated are never retroactively
+// touched. EndsAt has no way to clear an existing end date back to "no
+// end" via this input (nil means "don't change it", not "clear it") — a
+// known, documented limitation rather than an oversight; the common case
+// (setting or changing an end date) works normally.
+type UpdateRecurringRuleInput struct {
+	Description *string
+	// CategoryID: nil leaves it unchanged; a pointer to "" clears it,
+	// same convention as UpdateMovementInput.CategoryID.
+	CategoryID    *string
+	PaymentMethod *string
+	AccountID     *string // a pointer to "" clears the account
+	Amount        *int64
+	Currency      *string
+	DayOfMonth    *string
+	EndsAt        *time.Time
+	Active        *bool
+}
+
+// UpdateRecurringRuleUseCase requires the caller's userID and returns
+// apperrors.ErrNotFound (not a distinguishable "forbidden") when the rule
+// exists but belongs to someone else — same contract as GetMovementUseCase.
+type UpdateRecurringRuleUseCase interface {
+	Execute(ctx context.Context, userID, id string, input UpdateRecurringRuleInput) (*dto.RecurringRuleDTO, error)
+}
+
+// CreateCardInput carries the caller-supplied fields for a new card
+// profile (BACK-08). ClosingDay/DueDay must be "1"-"28" or "last".
+// CreditLimit/MonthlyBudget are independent and both optional — see
+// entities.Card's doc comment for why.
+type CreateCardInput struct {
+	UserID        string
+	Name          string
+	LastFour      string
+	ClosingDay    string
+	DueDay        string
+	CreditLimit   *int64
+	MonthlyBudget *int64
+	Currency      string
+}
+
+type CreateCardUseCase interface {
+	Execute(ctx context.Context, input CreateCardInput) (*dto.CardDTO, error)
+}
+
+// UpdateCardInput carries a PATCH /cards/{id} partial body — a nil field
+// means "leave unchanged", same convention as UpdateMovementInput.
+// CreditLimit/MonthlyBudget can be set or changed but not cleared back to
+// "not tracked" through this endpoint once set — same documented
+// limitation as PATCH /recurring-rules not being able to clear ends_at.
+type UpdateCardInput struct {
+	Name          *string
+	LastFour      *string
+	ClosingDay    *string
+	DueDay        *string
+	CreditLimit   *int64
+	MonthlyBudget *int64
+}
+
+type UpdateCardUseCase interface {
+	Execute(ctx context.Context, userID, id string, input UpdateCardInput) (*dto.CardDTO, error)
+}
+
+type DeleteCardUseCase interface {
+	Execute(ctx context.Context, userID, id string) error
+}
+
+type GetCardUseCase interface {
+	Execute(ctx context.Context, userID, id string) (CardView, error)
+}
+
+type ListCardsUseCase interface {
+	Execute(ctx context.Context, userID string) ([]CardView, error)
+}
+
+// CardView is a card plus its computed amount-due/limit/budget picture
+// (BACK-08):
+//
+//   - NextDueTotal/NextDueDate: the statement that has already closed
+//     and is waiting to be paid, net of payments already recorded
+//     against this card.
+//   - OpenCycleTotal: purchases made after the last closing day, still
+//     accumulating toward the next statement — not due yet.
+//   - AvailableCredit: CreditLimit minus everything outstanding
+//     (NextDueTotal + OpenCycleTotal), only when CreditLimit is set.
+//   - BudgetRemaining/OverBudget: MonthlyBudget minus OpenCycleTotal,
+//     only when MonthlyBudget is set.
+type CardView struct {
+	Card            *dto.CardDTO
+	NextDueTotal    int64
+	NextDueDate     time.Time
+	OpenCycleTotal  int64
+	AvailableCredit *int64
+	BudgetRemaining *int64
+	OverBudget      bool
+}
+
+// CreatePaymentMethodInput carries a POST /payment-methods body (BACK-17).
+type CreatePaymentMethodInput struct {
+	UserID string
+	Name   string
+}
+
+// CreatePaymentMethodUseCase rejects the two reserved system names
+// ("credit_card", "bank_transfer") and duplicate names (case-insensitive).
+type CreatePaymentMethodUseCase interface {
+	Execute(ctx context.Context, input CreatePaymentMethodInput) (*dto.PaymentMethodDTO, error)
+}
+
+// ListPaymentMethodsUseCase lazily ensures the system entries and the
+// first-run defaults exist for userID first (absence-safe, same pattern
+// as user_settings), then returns every payment-method row, name
+// ascending.
+type ListPaymentMethodsUseCase interface {
+	Execute(ctx context.Context, userID string) ([]*dto.PaymentMethodDTO, error)
+}
+
+// UpdatePaymentMethodInput carries a PATCH /payment-methods/{id} body —
+// unlike UpdateMovementInput's nil-means-unchanged fields, Name here is
+// always required: renaming is this endpoint's only capability.
+type UpdatePaymentMethodInput struct {
+	Name string
+}
+
+// UpdatePaymentMethodUseCase rejects edits to the two reserved system
+// names and renaming onto an existing name (case-insensitive).
+type UpdatePaymentMethodUseCase interface {
+	Execute(ctx context.Context, userID, id string, input UpdatePaymentMethodInput) (*dto.PaymentMethodDTO, error)
+}
+
+// DeletePaymentMethodUseCase rejects deleting either reserved system
+// name. Deleting one still referenced by movements is allowed — it's a
+// label, not an FK, same as a deleted category.
+type DeletePaymentMethodUseCase interface {
+	Execute(ctx context.Context, userID, id string) error
+}
+
+// CreatePlanInput carries a POST /plans body (BACK-10). TargetAmount and
+// AccountID are required for a savings plan, and must be absent for a
+// stress-test plan (a hypothetical cost has no real target or funding
+// account). StartDate defaults to now when zero.
+type CreatePlanInput struct {
+	UserID              string
+	Name                string
+	Type                string
+	TargetAmount        *int64
+	Currency            string
+	MonthlyTargetAmount int64
+	AccountID           *string
+	StartDate           time.Time
+	EndDate             *time.Time
+}
+
+type CreatePlanUseCase interface {
+	Execute(ctx context.Context, input CreatePlanInput) (*dto.PlanDTO, error)
+}
+
+// PlanSummary is GET /plans' lightweight per-plan progress: Progress is
+// either a savings plan's all-time SUM(amount) toward TargetAmount, or a
+// stress-test plan's current (not projected) month-to-date surplus —
+// income minus expense minus MonthlyTargetAmount. It deliberately omits
+// the pace checker's forward-looking fields (see PlanDetail) since
+// listing every plan shouldn't pay for N cashflow scans just to render a
+// summary row.
+type PlanSummary struct {
+	Plan          *dto.PlanDTO
+	Progress      int64
+	TargetReached bool
+}
+
+type ListPlansUseCase interface {
+	Execute(ctx context.Context, userID string, at time.Time) ([]PlanSummary, error)
+}
+
+// PlanDetail is GET /plans/{id}'s full response: PlanSummary plus the
+// pace checker. OnTrack: for a stress-test plan, whether the *projected*
+// month-end surplus (month-to-date expense extrapolated linearly to
+// month-end, income never extrapolated — it's lumpy, see the ticket's
+// own v1 heuristic note) stays non-negative; for a savings plan, whether
+// this month's contributions-to-date are at or ahead of linear pace.
+// ProjectedShortfall is savings-only (month's MonthlyTargetAmount minus
+// the projected end-of-month contribution total at the current rate) —
+// nil for a stress-test plan.
+type PlanDetail struct {
+	PlanSummary
+	OnTrack            bool
+	ProjectedShortfall *int64
+}
+
+type GetPlanUseCase interface {
+	Execute(ctx context.Context, userID, id string, at time.Time) (PlanDetail, error)
+}
+
+// UpdatePlanInput carries a PATCH /plans/{id} body — nil means "leave
+// unchanged", same convention as UpdateMovementInput. Type, Currency, and
+// AccountID are not editable after creation (changing them would silently
+// invalidate every movement already tagged with this plan's id).
+type UpdatePlanInput struct {
+	Name                *string
+	TargetAmount        *int64
+	MonthlyTargetAmount *int64
+	EndDate             *time.Time
+	Status              *string
+}
+
+type UpdatePlanUseCase interface {
+	Execute(ctx context.Context, userID, id string, input UpdatePlanInput) (*dto.PlanDTO, error)
+}
+
+// ProcessBillingWebhookInput carries what the payment provider's webhook
+// asserts about one subscription (BACK-19), already translated from
+// whatever the provider's own payload shape is (see
+// services.PaymentWebhookVerifier's doc comment) into this
+// provider-agnostic form.
+type ProcessBillingWebhookInput struct {
+	UserID                 string
+	Provider               string
+	ProviderSubscriptionID string
+	Status                 string // dto.SubscriptionStatus*
+	CurrentPeriodEnd       time.Time
+}
+
+// ProcessBillingWebhookUseCase upserts the subscription row and flips
+// cloud_storage_entitled to true immediately for active — gaining access
+// should never wait. Neither canceled nor past_due flips entitlement
+// here at all: BACK-19's acceptance criteria are explicit that even an
+// explicit cancellation "flips it back after the grace period, not
+// immediately." The grace-period sweep (internal/application/billing) is
+// what eventually flips either status to false once its grace period
+// elapses.
+type ProcessBillingWebhookUseCase interface {
+	Execute(ctx context.Context, input ProcessBillingWebhookInput) (*dto.SubscriptionDTO, error)
+}
+
+// BillingPlanView is what GET /billing/plan returns: Currency is the
+// currency Amount is actually expressed in — the caller's requested
+// currency when a BACK-11 rate exists for it, or the reference currency
+// ("usd") as a documented fallback otherwise. Never assume Currency ==
+// what was requested; a client must read it back.
+type BillingPlanView struct {
+	Currency string
+	Amount   int64 // Currency's smallest unit
+}
+
+// GetBillingPlanUseCase converts the fixed USD reference price to the
+// caller's requested currency using their own BACK-11 exchange rate,
+// falling back to the USD reference price when no rate is known for that
+// currency (never a hardcoded USD string presented as universal).
+type GetBillingPlanUseCase interface {
+	Execute(ctx context.Context, userID, currency string) (BillingPlanView, error)
 }

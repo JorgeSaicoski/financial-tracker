@@ -13,6 +13,18 @@ type AccountHandler interface {
 	CreateAccount(w http.ResponseWriter, r *http.Request)
 	ListAccounts(w http.ResponseWriter, r *http.Request)
 	ReportBalance(w http.ResponseWriter, r *http.Request)
+	ListSnapshots(w http.ResponseWriter, r *http.Request)
+}
+
+// CardHandler exposes the cards API (BACK-08): credit-card profiles
+// (closing/due day, optional limit/budget) plus each card's computed
+// amount-due picture.
+type CardHandler interface {
+	CreateCard(w http.ResponseWriter, r *http.Request)
+	ListCards(w http.ResponseWriter, r *http.Request)
+	GetCard(w http.ResponseWriter, r *http.Request)
+	UpdateCard(w http.ResponseWriter, r *http.Request)
+	DeleteCard(w http.ResponseWriter, r *http.Request)
 }
 
 // ConfigHandler exposes runtime flags the frontend needs before it can
@@ -47,6 +59,17 @@ type ExportHandler interface {
 	ExportMovements(w http.ResponseWriter, r *http.Request)
 }
 
+// CategoryHandler exposes the write side of BACK-14's (now-shared, see
+// the follow-up ticket) category registry (create/rename/set
+// avoidability/delete). The read side (GET /categories, combined with
+// the still-fixed payment-method list) stays on
+// MovementHandler.ListCategories — see that method's doc comment for why.
+type CategoryHandler interface {
+	CreateCategory(w http.ResponseWriter, r *http.Request)
+	UpdateCategory(w http.ResponseWriter, r *http.Request)
+	DeleteCategory(w http.ResponseWriter, r *http.Request)
+}
+
 // ExchangeRateHandler exposes user-managed, historical exchange rates
 // against USD (BACK-11) — reference data the user maintains themselves,
 // no external rate API involved.
@@ -79,6 +102,25 @@ type MovementHandler interface {
 	Cashflow(w http.ResponseWriter, r *http.Request)
 }
 
+// RecurringRuleHandler exposes recurring movement rules (BACK-07) — rent,
+// salary, subscriptions and the like, generated on schedule by
+// application/recurring rather than re-entered every month.
+type RecurringRuleHandler interface {
+	CreateRecurringRule(w http.ResponseWriter, r *http.Request)
+	ListRecurringRules(w http.ResponseWriter, r *http.Request)
+	UpdateRecurringRule(w http.ResponseWriter, r *http.Request)
+}
+
+// ArchiveHandler exposes BACK-15's "no cloud" local archive tier: the
+// per-user setting, the full-account export the frontend encrypts
+// client-side, and the import that restores a (already-decrypted) one.
+type ArchiveHandler interface {
+	GetLocalArchiveSetting(w http.ResponseWriter, r *http.Request)
+	SetLocalArchiveSetting(w http.ResponseWriter, r *http.Request)
+	ExportArchive(w http.ResponseWriter, r *http.Request)
+	ImportArchive(w http.ResponseWriter, r *http.Request)
+}
+
 // TransferHandler exposes account-to-account transfers: a linked
 // debit/credit pair of movements that nets to zero, so it never changes
 // the user's overall net worth.
@@ -92,4 +134,41 @@ type TransferHandler interface {
 // auth middleware's EnsureUser call (BACK-02), not by a client request.
 type UserHandler interface {
 	Me(w http.ResponseWriter, r *http.Request)
+}
+
+// PaymentMethodHandler exposes the user-extendable payment-method
+// registry (BACK-17), replacing the old fixed enum. ListPaymentMethods
+// itself isn't here — it's exposed through MovementHandler.ListCategories
+// (GET /categories), same as CategoryHandler leaves listing to that
+// endpoint too.
+type PaymentMethodHandler interface {
+	CreatePaymentMethod(w http.ResponseWriter, r *http.Request)
+	UpdatePaymentMethod(w http.ResponseWriter, r *http.Request)
+	DeletePaymentMethod(w http.ResponseWriter, r *http.Request)
+}
+
+// PlanHandler exposes BACK-10's plans: a monthly-figure goal, either a
+// pure simulation (stress_test) or funded by real movements toward a
+// real target (savings) — each with a pace checker computed on read.
+type PlanHandler interface {
+	CreatePlan(w http.ResponseWriter, r *http.Request)
+	ListPlans(w http.ResponseWriter, r *http.Request)
+	GetPlan(w http.ResponseWriter, r *http.Request)
+	UpdatePlan(w http.ResponseWriter, r *http.Request)
+}
+
+// BillingHandler exposes BACK-19's paid cloud-storage tier: the
+// provider-signed webhook that drives entitlement (unauthenticated by
+// user token, verified by signature instead — see router.go) and the
+// currency-aware plan price a caller can display before subscribing.
+type BillingHandler interface {
+	Webhook(w http.ResponseWriter, r *http.Request)
+	GetPlan(w http.ResponseWriter, r *http.Request)
+}
+
+// ReportHandler exposes computed-on-read reports: BACK-12's
+// purchasing-power report and BACK-18's avoidability follow-through score.
+type ReportHandler interface {
+	PurchasingPower(w http.ResponseWriter, r *http.Request)
+	AvoidabilityScore(w http.ResponseWriter, r *http.Request)
 }

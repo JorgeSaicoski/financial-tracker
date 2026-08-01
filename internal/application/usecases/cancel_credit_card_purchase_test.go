@@ -15,7 +15,7 @@ import (
 // shape: only due installments sync).
 func seedPurchase(t *testing.T, movements *fakeMovementRepo, purchases *fakePurchaseRepo) *dto.CreditCardPurchaseDTO {
 	t.Helper()
-	uc := NewCreateCreditCardPurchase(purchases, newFakeUserSettingsRepo())
+	uc := NewCreateCreditCardPurchase(purchases, newFakeCardRepo(), newFakeCategoryRepo(), newFakeUserSettingsRepo())
 	purchase, installments, err := uc.Execute(context.Background(), CreateCreditCardPurchaseInput{
 		UserID: "u1", TotalAmount: -900, Currency: "usd", Installments: 3,
 	})

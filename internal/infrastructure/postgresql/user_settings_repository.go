@@ -21,7 +21,7 @@ func NewUserSettingsRepository(db *sql.DB) repositories.UserSettingsRepository {
 	return &userSettingsRepository{db: db}
 }
 
-const userSettingsColumns = `user_id, ledger_sync_entitled, ledger_sync_enabled, cloud_storage_entitled, created_at, updated_at`
+const userSettingsColumns = `user_id, ledger_sync_entitled, ledger_sync_enabled, cloud_storage_entitled, default_category_id, created_at, updated_at`
 
 func (r *userSettingsRepository) Get(ctx context.Context, userID string) (*dto.UserSettingsDTO, error) {
 	row := r.db.QueryRowContext(ctx, `SELECT `+userSettingsColumns+` FROM user_settings WHERE user_id = $1`, userID)
@@ -46,13 +46,50 @@ func (r *userSettingsRepository) UpdateEnabled(ctx context.Context, userID strin
 	now := time.Now().UTC()
 	_, err := r.db.ExecContext(ctx,
 		`INSERT INTO user_settings (`+userSettingsColumns+`)
-		 VALUES ($1, $2, $3, $4, $5, $6)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)
 		 ON CONFLICT (user_id) DO UPDATE SET
 		   ledger_sync_enabled = excluded.ledger_sync_enabled,
 		   updated_at = excluded.updated_at`,
-		userID, true, ledgerSyncEnabled, true, now, now)
+		userID, true, ledgerSyncEnabled, true, nil, now, now)
 	if err != nil {
 		return nil, fmt.Errorf("postgresql: upsert user settings: %w", err)
+	}
+	return r.Get(ctx, userID)
+}
+
+// SetCloudStorageEntitled upserts cloud_storage_entitled, creating the
+// row lazily on first write with the true/true/entitled defaults if it
+// doesn't exist yet (mirrors UpdateEnabled's shape). On conflict, only
+// cloud_storage_entitled and updated_at change.
+func (r *userSettingsRepository) SetCloudStorageEntitled(ctx context.Context, userID string, entitled bool) (*dto.UserSettingsDTO, error) {
+	now := time.Now().UTC()
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO user_settings (`+userSettingsColumns+`)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)
+		 ON CONFLICT (user_id) DO UPDATE SET
+		   cloud_storage_entitled = excluded.cloud_storage_entitled,
+		   updated_at = excluded.updated_at`,
+		userID, true, true, entitled, nil, now, now)
+	if err != nil {
+		return nil, fmt.Errorf("postgresql: set cloud storage entitled: %w", err)
+	}
+	return r.Get(ctx, userID)
+}
+
+// SetDefaultCategory upserts default_category_id — same lazy-row pattern
+// as UpdateEnabled, but leaves ledger_sync_enabled untouched on conflict
+// instead of the other way around.
+func (r *userSettingsRepository) SetDefaultCategory(ctx context.Context, userID string, categoryID *string) (*dto.UserSettingsDTO, error) {
+	now := time.Now().UTC()
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO user_settings (`+userSettingsColumns+`)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)
+		 ON CONFLICT (user_id) DO UPDATE SET
+		   default_category_id = excluded.default_category_id,
+		   updated_at = excluded.updated_at`,
+		userID, true, true, true, strOrNil(categoryID), now, now)
+	if err != nil {
+		return nil, fmt.Errorf("postgresql: upsert user settings default category: %w", err)
 	}
 	return r.Get(ctx, userID)
 }
@@ -77,10 +114,14 @@ func (r *userSettingsRepository) ListSyncDisabledUserIDs(ctx context.Context) ([
 }
 
 func scanUserSettings(row scannable) (*dto.UserSettingsDTO, error) {
-	var s dto.UserSettingsDTO
-	err := row.Scan(&s.UserID, &s.LedgerSyncEntitled, &s.LedgerSyncEnabled, &s.CloudStorageEntitled, &s.CreatedAt, &s.UpdatedAt)
+	var (
+		s                 dto.UserSettingsDTO
+		defaultCategoryID sql.NullString
+	)
+	err := row.Scan(&s.UserID, &s.LedgerSyncEntitled, &s.LedgerSyncEnabled, &s.CloudStorageEntitled, &defaultCategoryID, &s.CreatedAt, &s.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
+	s.DefaultCategoryID = stringPtr(defaultCategoryID)
 	return &s, nil
 }
