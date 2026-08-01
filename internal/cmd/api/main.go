@@ -211,15 +211,6 @@ func main() {
 		subscriptionRepo = postgresql.NewSubscriptionRepository(db)
 		limitsRepo = postgresql.NewLimitsRepository(db)
 	case "sqlite":
-		// BACK-21: SQLite is meant to be genuinely local storage — the
-		// standalone binary's own file, or a single-user dev/self-host
-		// setup (AUTH_DISABLED=true) — never a shared backend for a real
-		// multi-tenant deployment with distinct authenticated users. A
-		// deployment that enables real auth must use DB_DRIVER=postgres.
-		if !authDisabled {
-			log.Error("DB_DRIVER=sqlite requires AUTH_DISABLED=true (or STANDALONE=true) — SQLite is single-user local storage, not a multi-tenant backend (BACK-21). Use DB_DRIVER=postgres for a deployment with auth enabled.")
-			os.Exit(1)
-		}
 		db, err = sqlite.Open(dbPath)
 		if err != nil {
 			log.Error("opening database failed: %v", err)
