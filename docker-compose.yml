@@ -48,12 +48,6 @@ services:
       DEFAULT_USER_ID: 00000000-0000-0000-0000-000000000001
       DEFAULT_CURRENCY: usd
       DB_PATH: /data/financial-tracker.db
-      # BACK-21: DB_DRIVER defaults to sqlite (see .env.example), and this
-      # stack is a single-user dev setup (fixed DEFAULT_USER_ID, no
-      # Authentik service here) — main.go now refuses to start with
-      # DB_DRIVER=sqlite unless AUTH_DISABLED=true, since sqlite must never
-      # be a real multi-tenant backend.
-      AUTH_DISABLED: "true"
     ports:
       - "8081:8081"
     volumes:
