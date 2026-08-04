@@ -71,7 +71,8 @@ CREATE TABLE movements_new (
     account_id                    TEXT    REFERENCES accounts(id),
     transfer_id                   TEXT,
     avoidability_override_percent INTEGER,
-    recurring_rule_id             TEXT    REFERENCES recurring_rules(id)
+    recurring_rule_id             TEXT    REFERENCES recurring_rules(id),
+    plan_id                       TEXT    REFERENCES plans(id)
 );
 
 INSERT INTO movements_new (
@@ -80,7 +81,7 @@ INSERT INTO movements_new (
     cancels_movement_id, reversed_by_movement_id, timestamp, sync_status,
     ledger_transaction_id, sync_attempts, last_sync_error,
     last_sync_attempt_at, synced_at, created_at, account_id, transfer_id,
-    avoidability_override_percent, recurring_rule_id
+    avoidability_override_percent, recurring_rule_id, plan_id
 )
 SELECT
     id, user_id, amount, currency, description, category, payment_method,
@@ -88,7 +89,7 @@ SELECT
     cancels_movement_id, reversed_by_movement_id, timestamp, sync_status,
     ledger_transaction_id, sync_attempts, last_sync_error,
     last_sync_attempt_at, synced_at, created_at, account_id, transfer_id,
-    avoidability_override_percent, recurring_rule_id
+    avoidability_override_percent, recurring_rule_id, plan_id
 FROM movements;
 
 DROP TABLE movements;
@@ -105,5 +106,7 @@ CREATE INDEX IF NOT EXISTS idx_movements_transfer
     ON movements (transfer_id) WHERE transfer_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_movements_account
     ON movements (account_id) WHERE account_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_movements_plan
+    ON movements (plan_id) WHERE plan_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_movements_recurring_rule
     ON movements (recurring_rule_id) WHERE recurring_rule_id IS NOT NULL;

@@ -16,13 +16,14 @@ import (
 type updateMovementUseCase struct {
 	repo       repositories.MovementRepository
 	accounts   repositories.AccountRepository
+	plans      repositories.PlanRepository
 	categories repositories.CategoryRepository
 	sync       services.SyncTrigger
 }
 
 // NewUpdateMovement returns interface type for dependency injection.
-func NewUpdateMovement(repo repositories.MovementRepository, accounts repositories.AccountRepository, categories repositories.CategoryRepository, sync services.SyncTrigger) UpdateMovementUseCase {
-	return &updateMovementUseCase{repo: repo, accounts: accounts, categories: categories, sync: sync}
+func NewUpdateMovement(repo repositories.MovementRepository, accounts repositories.AccountRepository, plans repositories.PlanRepository, categories repositories.CategoryRepository, sync services.SyncTrigger) UpdateMovementUseCase {
+	return &updateMovementUseCase{repo: repo, accounts: accounts, plans: plans, categories: categories, sync: sync}
 }
 
 func (uc *updateMovementUseCase) Execute(ctx context.Context, userID, id string, input UpdateMovementInput) (UpdateMovementResult, error) {
@@ -53,7 +54,7 @@ func (uc *updateMovementUseCase) Execute(ctx context.Context, userID, id string,
 
 	editsFinancial := input.Amount != nil || input.Currency != nil || input.Timestamp != nil
 	editsMetadata := input.Description != nil || input.CategoryID != nil || input.PaymentMethod != nil ||
-		input.AccountID != nil || input.AvoidabilityOverridePercent != nil
+		input.AccountID != nil || input.PlanID != nil || input.AvoidabilityOverridePercent != nil
 
 	if editsFinancial && movement.CreditCardPurchaseID != nil {
 		return UpdateMovementResult{}, fmt.Errorf(
@@ -101,11 +102,23 @@ func (uc *updateMovementUseCase) Execute(ctx context.Context, userID, id string,
 		}
 	}
 
+	planIDInput := ""
+	if movement.PlanID != nil {
+		planIDInput = *movement.PlanID
+	}
+	if input.PlanID != nil {
+		planIDInput = *input.PlanID
+	}
+
 	paymentMethod, err := normalizePaymentMethod(paymentMethodInput)
 	if err != nil {
 		return UpdateMovementResult{}, err
 	}
 	categoryID, err := resolveCategoryID(ctx, uc.categories, userID, categoryIDInput)
+	if err != nil {
+		return UpdateMovementResult{}, err
+	}
+	planID, err := resolvePlanForMovement(ctx, uc.plans, movement.UserID, planIDInput, currency)
 	if err != nil {
 		return UpdateMovementResult{}, err
 	}
@@ -131,7 +144,7 @@ func (uc *updateMovementUseCase) Execute(ctx context.Context, userID, id string,
 
 	if !editsFinancial {
 		if editsMetadata {
-			if err := uc.repo.UpdateMetadata(ctx, movement.ID, description, categoryID, string(paymentMethod), accountID); err != nil {
+			if err := uc.repo.UpdateMetadata(ctx, movement.ID, description, categoryID, string(paymentMethod), accountID, planID); err != nil {
 				return UpdateMovementResult{}, err
 			}
 			if input.AvoidabilityOverridePercent != nil {
@@ -139,8 +152,8 @@ func (uc *updateMovementUseCase) Execute(ctx context.Context, userID, id string,
 					return UpdateMovementResult{}, err
 				}
 			}
-			movementDTO.Description, movementDTO.CategoryID, movementDTO.PaymentMethod, movementDTO.AccountID =
-				description, categoryID, string(paymentMethod), accountID
+			movementDTO.Description, movementDTO.CategoryID, movementDTO.PaymentMethod, movementDTO.AccountID, movementDTO.PlanID =
+				description, categoryID, string(paymentMethod), accountID, planID
 			movementDTO.AvoidabilityOverridePercent = avoidabilityOverride
 		}
 		return UpdateMovementResult{Movement: movementDTO}, nil
@@ -154,7 +167,7 @@ func (uc *updateMovementUseCase) Execute(ctx context.Context, userID, id string,
 			return UpdateMovementResult{}, err
 		}
 		if editsMetadata {
-			if err := uc.repo.UpdateMetadata(ctx, movement.ID, description, categoryID, string(paymentMethod), accountID); err != nil {
+			if err := uc.repo.UpdateMetadata(ctx, movement.ID, description, categoryID, string(paymentMethod), accountID, planID); err != nil {
 				if rollbackErr := uc.repo.UpdateFinancial(ctx, movement.ID, originalAmount, originalCurrency, originalTimestamp); rollbackErr != nil {
 					return UpdateMovementResult{}, fmt.Errorf(
 						"metadata update failed after financial update and rollback also failed: metadata: %w; rollback: %v",
@@ -167,8 +180,8 @@ func (uc *updateMovementUseCase) Execute(ctx context.Context, userID, id string,
 					return UpdateMovementResult{}, err
 				}
 			}
-			movementDTO.Description, movementDTO.CategoryID, movementDTO.PaymentMethod, movementDTO.AccountID =
-				description, categoryID, string(paymentMethod), accountID
+			movementDTO.Description, movementDTO.CategoryID, movementDTO.PaymentMethod, movementDTO.AccountID, movementDTO.PlanID =
+				description, categoryID, string(paymentMethod), accountID, planID
 			movementDTO.AvoidabilityOverridePercent = avoidabilityOverride
 		}
 		movementDTO.Amount, movementDTO.Currency, movementDTO.Timestamp = amount, currency, timestamp
@@ -202,6 +215,7 @@ func (uc *updateMovementUseCase) Execute(ctx context.Context, userID, id string,
 			PaymentMethod:               paymentMethod,
 			AvoidabilityOverridePercent: avoidabilityOverride,
 			AccountID:                   accountID,
+			PlanID:                      planID,
 			Status:                      entities.MovementStatusActive,
 			SyncStatus:                  entities.SyncStatusPending,
 			Timestamp:                   timestamp,

@@ -22,6 +22,7 @@ func NewRouter(
 	exchangeRateHandler handlers.ExchangeRateHandler,
 	recurringRuleHandler handlers.RecurringRuleHandler,
 	archiveHandler handlers.ArchiveHandler,
+	planHandler handlers.PlanHandler,
 	settingsHandler handlers.SettingsHandler,
 	userHandler handlers.UserHandler,
 	configHandler handlers.ConfigHandler,
@@ -77,6 +78,11 @@ func NewRouter(
 	protected.HandleFunc("PUT /settings/local-archive", archiveHandler.SetLocalArchiveSetting)
 	protected.HandleFunc("GET /export/archive", archiveHandler.ExportArchive)
 	protected.HandleFunc("POST /import/archive", archiveHandler.ImportArchive)
+
+	protected.HandleFunc("POST /plans", planHandler.CreatePlan)
+	protected.HandleFunc("GET /plans", planHandler.ListPlans)
+	protected.HandleFunc("GET /plans/{id}", planHandler.GetPlan)
+	protected.HandleFunc("PATCH /plans/{id}", planHandler.UpdatePlan)
 
 	protected.HandleFunc("GET /me", userHandler.Me)
 

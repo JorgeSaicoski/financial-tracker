@@ -44,6 +44,14 @@ type Movement struct {
 	// to zero in ledger-service, which never learns they're linked.
 	TransferID *string
 
+	// PlanID links a movement to a savings Plan it funds (BACK-10) — nil
+	// for an untagged movement or one funding nothing. Local-only, like
+	// AccountID/TransferID: ledger-service never learns about plans.
+	// Never set on a stress-test plan's movements, because a stress-test
+	// plan never has any — it's a pure simulation over real cashflow
+	// numbers, nothing is ever posted for it.
+	PlanID *string
+
 	// Set only when the movement is one installment of a credit-card
 	// purchase that was split (installments > 1).
 	CreditCardPurchaseID *string

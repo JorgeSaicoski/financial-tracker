@@ -58,8 +58,13 @@ func TestGetUserSettingsSurfacesSubscriptionFields(t *testing.T) {
 func TestCreateMovementUsesLocalStatusWhenSyncDisabled(t *testing.T) {
 	settings := newFakeUserSettingsRepo()
 	movements := newFakeMovementRepo()
+<<<<<<< HEAD
 	createMovement := NewCreateMovement(movements, newFakeAccountRepo(), newFakeCategoryRepo(), settings)
 	updateSettings := NewUpdateUserSettings(settings, movements, newFakeCategoryRepo(), newFakeSubscriptionRepo())
+=======
+	createMovement := NewCreateMovement(movements, newFakeAccountRepo(), newFakePlanRepo(), newFakeCategoryRepo(), settings)
+	updateSettings := NewUpdateUserSettings(settings, movements, newFakeCategoryRepo())
+>>>>>>> origin/main
 
 	if _, err := updateSettings.Execute(context.Background(), "u1", UpdateUserSettingsInput{LedgerSyncEnabled: boolPtr(false)}); err != nil {
 		t.Fatal(err)
@@ -93,8 +98,13 @@ func TestCreateMovementUsesLocalStatusWhenSyncDisabled(t *testing.T) {
 func TestDisableCreateEnableCyclePushesExactlyTheBacklog(t *testing.T) {
 	settings := newFakeUserSettingsRepo()
 	movements := newFakeMovementRepo()
+<<<<<<< HEAD
 	createMovement := NewCreateMovement(movements, newFakeAccountRepo(), newFakeCategoryRepo(), settings)
 	updateSettings := NewUpdateUserSettings(settings, movements, newFakeCategoryRepo(), newFakeSubscriptionRepo())
+=======
+	createMovement := NewCreateMovement(movements, newFakeAccountRepo(), newFakePlanRepo(), newFakeCategoryRepo(), settings)
+	updateSettings := NewUpdateUserSettings(settings, movements, newFakeCategoryRepo())
+>>>>>>> origin/main
 	ctx := context.Background()
 
 	// Something synced before any of this happened — must never be
@@ -153,7 +163,7 @@ func TestEntitlementBlocksEffectiveSyncEvenWhenEnabled(t *testing.T) {
 	settings := newFakeUserSettingsRepo()
 	settings.setEntitled("u1", false)
 	movements := newFakeMovementRepo()
-	createMovement := NewCreateMovement(movements, newFakeAccountRepo(), newFakeCategoryRepo(), settings)
+	createMovement := NewCreateMovement(movements, newFakeAccountRepo(), newFakePlanRepo(), newFakeCategoryRepo(), settings)
 
 	m, err := createMovement.Execute(context.Background(), CreateMovementInput{
 		UserID: "u1", Currency: "usd", Amount: -100,
