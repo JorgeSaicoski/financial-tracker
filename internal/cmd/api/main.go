@@ -10,11 +10,13 @@ import (
 
 	recurringapp "github.com/JorgeSaicoski/financial-tracker/internal/application/recurring"
 	"github.com/JorgeSaicoski/financial-tracker/internal/application/repositories"
+	"github.com/JorgeSaicoski/financial-tracker/internal/application/services"
 	syncapp "github.com/JorgeSaicoski/financial-tracker/internal/application/sync"
 	"github.com/JorgeSaicoski/financial-tracker/internal/application/usecases"
 	"github.com/JorgeSaicoski/financial-tracker/internal/infrastructure/authentik"
 	"github.com/JorgeSaicoski/financial-tracker/internal/infrastructure/ledgerservice"
 	"github.com/JorgeSaicoski/financial-tracker/internal/infrastructure/postgresql"
+	"github.com/JorgeSaicoski/financial-tracker/internal/infrastructure/simpleauth"
 	"github.com/JorgeSaicoski/financial-tracker/internal/infrastructure/sqlite"
 	"github.com/JorgeSaicoski/financial-tracker/internal/interfaces/api"
 	"github.com/JorgeSaicoski/financial-tracker/internal/interfaces/api/handlers"
@@ -46,6 +48,13 @@ func main() {
 	// forgets to set OIDC_ISSUER_URL fails loudly at startup instead of
 	// silently running with no auth.
 	authDisabled := boolEnvOr(log, "AUTH_DISABLED", false)
+	// AUTH_PROVIDER (BACK-20) picks which services.IdentityVerifier
+	// cmd/api constructs — "authentik" (default, unchanged behavior) or
+	// "simple" (infrastructure/simpleauth: any other provider speaking
+	// the same OIDC-like iss/sub/exp/aud + JWKS contract). Mirrors
+	// DB_DRIVER's switch-on-a-string shape below. Irrelevant when
+	// AUTH_DISABLED=true.
+	authProvider := envOr("AUTH_PROVIDER", "authentik")
 	oidcIssuerURL := os.Getenv("OIDC_ISSUER_URL")
 	oidcJWKSURL := os.Getenv("OIDC_JWKS_URL") // optional override, skips discovery
 	// Defaults to PUBLIC_OIDC_CLIENT_ID (deploy/.env.example's existing
@@ -55,6 +64,12 @@ func main() {
 	// without a separate env var to keep in sync. Set OIDC_AUDIENCE
 	// explicitly to override.
 	oidcAudience := envOr("OIDC_AUDIENCE", envOr("PUBLIC_OIDC_CLIENT_ID", ""))
+	// AUTH_PROVIDER=simple's own, independent config namespace — never
+	// read unless authProvider is actually "simple", so it's safe to
+	// leave these unset in every other deployment.
+	simpleAuthIssuerURL := os.Getenv("SIMPLE_AUTH_ISSUER_URL")
+	simpleAuthJWKSURL := os.Getenv("SIMPLE_AUTH_JWKS_URL")
+	simpleAuthAudience := os.Getenv("SIMPLE_AUTH_AUDIENCE")
 
 	// FRONT-04's GET /config: tells the frontend whether to enforce its
 	// own login guard. Now that BACK-02's real server-side verification
@@ -226,23 +241,42 @@ func main() {
 	// Auth: AUTH_DISABLED is a dev-only escape hatch, off by default. A
 	// deployment that leaves OIDC_ISSUER_URL unset without explicitly
 	// opting into AUTH_DISABLED=true fails fast at startup rather than
-	// silently serving every request as the same fixed user.
+	// silently serving every request as the same fixed user. Which
+	// services.IdentityVerifier gets constructed below is a config
+	// decision (AUTH_PROVIDER), not a code change (BACK-20) — the
+	// application layer and interfaces/api know nothing about Authentik,
+	// JWT, or JWKS; only this switch does.
 	var authMiddleware api.AuthMiddleware
 	if authDisabled {
 		log.Info("AUTH_DISABLED=true: skipping Authentik token verification — every request is attributed to DEFAULT_USER_ID=%s. Do not use this in a real deployment.", defaultUserID)
 		authMiddleware = api.DevUserMiddleware(defaultUserID, ensureUser, log)
 	} else {
-		if oidcIssuerURL == "" {
-			log.Error("OIDC_ISSUER_URL is required unless AUTH_DISABLED=true")
-			os.Exit(1)
-		}
 		// A dedicated client with a timeout, not http.DefaultClient: a stalled
 		// OIDC discovery/JWKS fetch must not be able to hang request auth
 		// indefinitely.
 		oidcHTTPClient := &http.Client{Timeout: 10 * time.Second}
-		verifier := authentik.NewVerifier(oidcIssuerURL, oidcAudience, oidcJWKSURL, oidcHTTPClient, log)
+
+		var verifier services.IdentityVerifier
+		switch authProvider {
+		case "authentik":
+			if oidcIssuerURL == "" {
+				log.Error("OIDC_ISSUER_URL is required when AUTH_PROVIDER=authentik and AUTH_DISABLED is not true")
+				os.Exit(1)
+			}
+			verifier = authentik.NewVerifier(oidcIssuerURL, oidcAudience, oidcJWKSURL, oidcHTTPClient, log)
+			log.Info("auth: validating Authorization bearer tokens against OIDC issuer %s (audience %q)", oidcIssuerURL, oidcAudience)
+		case "simple":
+			if simpleAuthIssuerURL == "" {
+				log.Error("SIMPLE_AUTH_ISSUER_URL is required when AUTH_PROVIDER=simple")
+				os.Exit(1)
+			}
+			verifier = simpleauth.NewVerifier(simpleAuthIssuerURL, simpleAuthAudience, simpleAuthJWKSURL, oidcHTTPClient, log)
+			log.Info("auth: validating Authorization bearer tokens against issuer %s (audience %q) via AUTH_PROVIDER=simple", simpleAuthIssuerURL, simpleAuthAudience)
+		default:
+			log.Error("unknown AUTH_PROVIDER %q (want authentik or simple)", authProvider)
+			os.Exit(1)
+		}
 		authMiddleware = api.Middleware(verifier, ensureUser, log)
-		log.Info("auth: validating Authorization bearer tokens against OIDC issuer %s (audience %q)", oidcIssuerURL, oidcAudience)
 	}
 
 	router := api.NewRouter(movementHandler, accountHandler, currencyHandler, categoryHandler, transferHandler, exchangeRateHandler, recurringRuleHandler, archiveHandler, planHandler, settingsHandler, userHandler, configHandler, authMiddleware, corsAllowedOrigin)
