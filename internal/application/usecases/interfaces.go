@@ -459,7 +459,6 @@ type ToUSDUseCase interface {
 	Execute(ctx context.Context, userID string, amount int64, currency string, at time.Time) (int64, error)
 }
 
-<<<<<<< HEAD
 // ProcessBillingWebhookInput carries what the payment provider's webhook
 // asserts about one subscription (BACK-19), already translated from
 // whatever the provider's own payload shape is (see
@@ -501,7 +500,8 @@ type BillingPlanView struct {
 // currency (never a hardcoded USD string presented as universal).
 type GetBillingPlanUseCase interface {
 	Execute(ctx context.Context, userID, currency string) (BillingPlanView, error)
-=======
+}
+
 // CreatePlanInput carries a POST /plans body (BACK-10). TargetAmount and
 // AccountID are required for a savings plan, and must be absent for a
 // stress-test plan (a hypothetical cost has no real target or funding
@@ -572,7 +572,6 @@ type UpdatePlanInput struct {
 
 type UpdatePlanUseCase interface {
 	Execute(ctx context.Context, userID, id string, input UpdatePlanInput) (*dto.PlanDTO, error)
->>>>>>> origin/main
 }
 
 // CreateCategoryInput carries a POST /categories body. AvoidabilityPercent

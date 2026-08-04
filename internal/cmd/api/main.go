@@ -104,7 +104,6 @@ func main() {
 	// only reached by the background sync, so requests keep working while
 	// it's down.
 	var (
-<<<<<<< HEAD
 		db                  *sql.DB
 		err                 error
 		movementRepo        repositories.MovementRepository
@@ -115,27 +114,12 @@ func main() {
 		exchangeRateRepo    repositories.ExchangeRateRepository
 		recurringRuleRepo   repositories.RecurringRuleRepository
 		localArchiveRepo    repositories.LocalArchiveSettingsRepository
+		planRepo            repositories.PlanRepository
 		userRepo            repositories.UserRepository
 		settingsRepo        repositories.UserSettingsRepository
 		limitsRepo          repositories.LimitsRepository
 		ledgerPseudonymRepo repositories.LedgerPseudonymRepository
 		subscriptionRepo    repositories.SubscriptionRepository
-=======
-		db                *sql.DB
-		err               error
-		movementRepo      repositories.MovementRepository
-		purchaseRepo      repositories.CreditCardPurchaseRepository
-		accountRepo       repositories.AccountRepository
-		currencyRepo      repositories.CurrencyRepository
-		categoryRepo      repositories.CategoryRepository
-		exchangeRateRepo  repositories.ExchangeRateRepository
-		recurringRuleRepo repositories.RecurringRuleRepository
-		localArchiveRepo  repositories.LocalArchiveSettingsRepository
-		planRepo          repositories.PlanRepository
-		userRepo          repositories.UserRepository
-		settingsRepo      repositories.UserSettingsRepository
-		limitsRepo        repositories.LimitsRepository
->>>>>>> origin/main
 	)
 
 	switch dbDriver {
@@ -281,15 +265,11 @@ func main() {
 	setLocalArchiveSetting := usecases.NewSetLocalArchiveSetting(localArchiveRepo)
 	exportArchive := usecases.NewExportArchive(accountRepo, movementRepo, purchaseRepo)
 	importArchive := usecases.NewImportArchive(accountRepo, movementRepo, purchaseRepo, categoryRepo)
-<<<<<<< HEAD
-	ensureUser := usecases.NewEnsureUser(userRepo, settingsRepo)
-=======
 	createPlan := usecases.NewCreatePlan(planRepo, accountRepo)
 	listPlans := usecases.NewListPlans(planRepo, movementRepo)
 	getPlan := usecases.NewGetPlan(planRepo, movementRepo)
 	updatePlan := usecases.NewUpdatePlan(planRepo)
-	ensureUser := usecases.NewEnsureUser(userRepo)
->>>>>>> origin/main
+	ensureUser := usecases.NewEnsureUser(userRepo, settingsRepo)
 	getUser := usecases.NewGetUser(userRepo)
 	getSettings := usecases.NewGetUserSettings(settingsRepo, subscriptionRepo)
 	updateSettings := usecases.NewUpdateUserSettings(settingsRepo, movementRepo, categoryRepo, subscriptionRepo)
@@ -368,11 +348,7 @@ func main() {
 		authMiddleware = api.Middleware(verifier, ensureUser, log)
 	}
 
-<<<<<<< HEAD
-	router := api.NewRouter(movementHandler, accountHandler, currencyHandler, categoryHandler, transferHandler, exchangeRateHandler, recurringRuleHandler, archiveHandler, settingsHandler, userHandler, configHandler, billingHandler, authMiddleware, corsAllowedOrigin)
-=======
-	router := api.NewRouter(movementHandler, accountHandler, currencyHandler, categoryHandler, transferHandler, exchangeRateHandler, recurringRuleHandler, archiveHandler, planHandler, settingsHandler, userHandler, configHandler, authMiddleware, corsAllowedOrigin)
->>>>>>> origin/main
+	router := api.NewRouter(movementHandler, accountHandler, currencyHandler, categoryHandler, transferHandler, exchangeRateHandler, recurringRuleHandler, archiveHandler, planHandler, settingsHandler, userHandler, configHandler, billingHandler, authMiddleware, corsAllowedOrigin)
 
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
@@ -386,11 +362,7 @@ func main() {
 	}
 	addr := ":" + port
 	log.Info("financial-tracker API listening on %s (db driver %s at %s, syncing to ledger-service at %s every %s)", addr, dbDriver, dbDescription, ledgerServiceURL, syncInterval)
-<<<<<<< HEAD
-	log.Info("endpoints: GET /config | GET|PATCH /settings | POST /movements | GET /movements | PATCH /movements/{id} | POST /movements/{id}/cancel | POST /credit-card-purchases/{id}/cancel | POST /sync | GET /categories | POST /categories | PATCH /categories/{id} | DELETE /categories/{id} | GET /cashflow | GET|POST /accounts | POST /accounts/{id}/balance | GET|POST /currencies | POST /transfers | POST /transfers/{id}/cancel | GET|POST /exchange-rates | DELETE /exchange-rates/{id} | GET|POST /recurring-rules | PATCH /recurring-rules/{id} | GET|PUT /settings/local-archive | GET /export/archive | POST /import/archive | GET /me | POST /billing/webhook | GET /billing/plan")
-=======
-	log.Info("endpoints: GET /config | GET|PATCH /settings | POST /movements | GET /movements | PATCH /movements/{id} | POST /movements/{id}/cancel | POST /credit-card-purchases/{id}/cancel | POST /sync | GET /categories | POST /categories | PATCH /categories/{id} | DELETE /categories/{id} | GET /cashflow | GET|POST /accounts | POST /accounts/{id}/balance | GET|POST /currencies | POST /transfers | POST /transfers/{id}/cancel | GET|POST /exchange-rates | DELETE /exchange-rates/{id} | GET|POST /recurring-rules | PATCH /recurring-rules/{id} | GET|PUT /settings/local-archive | GET /export/archive | POST /import/archive | GET|POST /plans | GET|PATCH /plans/{id} | GET /me")
->>>>>>> origin/main
+	log.Info("endpoints: GET /config | GET|PATCH /settings | POST /movements | GET /movements | PATCH /movements/{id} | POST /movements/{id}/cancel | POST /credit-card-purchases/{id}/cancel | POST /sync | GET /categories | POST /categories | PATCH /categories/{id} | DELETE /categories/{id} | GET /cashflow | GET|POST /accounts | POST /accounts/{id}/balance | GET|POST /currencies | POST /transfers | POST /transfers/{id}/cancel | GET|POST /exchange-rates | DELETE /exchange-rates/{id} | GET|POST /recurring-rules | PATCH /recurring-rules/{id} | GET|PUT /settings/local-archive | GET /export/archive | POST /import/archive | GET|POST /plans | GET|PATCH /plans/{id} | GET /me | POST /billing/webhook | GET /billing/plan")
 
 	if err := http.ListenAndServe(addr, router); err != nil {
 		log.Error("server failed: %v", err)

@@ -118,7 +118,7 @@ func TestEncryptingMovementRepositoryUpdateMetadataEncrypts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := repo.UpdateMetadata(ctx, created.ID, "renamed description", nil, string(entities.PaymentMethodPix), nil); err != nil {
+	if err := repo.UpdateMetadata(ctx, created.ID, "renamed description", nil, string(entities.PaymentMethodPix), nil, nil); err != nil {
 		t.Fatal(err)
 	}
 

@@ -728,7 +728,6 @@ func (f *fakeUserSettingsRepo) setEntitled(userID string, ledgerSyncEntitled boo
 	s.LedgerSyncEntitled = ledgerSyncEntitled
 }
 
-<<<<<<< HEAD
 // fakeUserRepo is an in-memory UserRepository.
 type fakeUserRepo struct {
 	byID map[string]*dto.UserDTO
@@ -818,7 +817,6 @@ func (f *fakeSubscriptionRepo) ListLapsable(_ context.Context, asOf time.Time, g
 	return out, nil
 }
 
-=======
 // fakePlanRepo is an in-memory PlanRepository.
 type fakePlanRepo struct {
 	byID   map[string]*dto.PlanDTO
@@ -876,7 +874,6 @@ func (f *fakePlanRepo) Update(_ context.Context, userID, id, name string, target
 	return nil
 }
 
->>>>>>> origin/main
 // fakeCategoryRepo is an in-memory CategoryRepository, mirroring the
 // semantics the SQLite implementation guarantees: categories are global
 // (no user scoping on GetByID/ListAll/Update), ContributorIDs gates

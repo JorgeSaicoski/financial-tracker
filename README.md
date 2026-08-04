@@ -205,7 +205,6 @@ to sell.
   ```
   A real admin surface is icebox (see `financial-tracker-plan.md`).
 
-<<<<<<< HEAD
 ## At-rest encryption & pseudonymous ledger sync (BACK-16)
 
 The `cloud_storage_enabled`/`ledger_sync_enabled` toggles above are backed
@@ -321,7 +320,7 @@ does and doesn't protect against" above.
   into this same subscription, sold separately, or stays permanently free
   is not decided by this ticket — `ProcessBillingWebhookUseCase` only
   ever touches `cloud_storage_entitled` today.
-=======
+
 ## Financial plans (`plans` table, BACK-10)
 
 A plan is a monthly-figure goal with a pace checker computed on every read
@@ -355,7 +354,6 @@ month's figure) against actual progress. Moving a plan out of `active`
 (`completed`/`abandoned`) is always an explicit `PATCH /plans/{id}`, never
 implicit. Frontend is out of scope for this ticket — a plans screen is
 icebox.
->>>>>>> origin/main
 
 ## Categories & avoidability (`categories` table)
 
@@ -423,15 +421,12 @@ gets from cashflow totals).
 | `PUT` | `/settings/local-archive` | Set the toggle: `{local_archive_enabled, user_id?}`. Independent of any cloud-storage setting — never deletes or stops writing anything server-side by itself. |
 | `GET` | `/export/archive?user_id=` | The user's full restorable state — accounts, movements, credit-card purchases — as plaintext JSON. The frontend's "Local backup" panel encrypts this client-side (AES-256-GCM, PBKDF2-SHA256-derived key) before it's ever saved to a file; this endpoint itself has no encryption of its own. |
 | `POST` | `/import/archive` | Restore a (frontend-decrypted) archive in the same shape `GET /export/archive` returns. Idempotent by row ID — a row that already exists is skipped, never overwritten; safe to import the same archive more than once. `cancels_movement_id`/`reversed_by_movement_id` are not restored (see Known limitations). Returns counts restored/skipped per collection. |
-<<<<<<< HEAD
 | `POST` | `/billing/webhook` | Unauthenticated by user token — provider-signed instead (`X-Billing-Signature`, HMAC-SHA256 over the raw body, `BILLING_WEBHOOK_SECRET`). Body: `{user_id, provider, provider_subscription_id, status, current_period_end}`. Upserts the subscription row; `active` flips `cloud_storage_entitled` to `true` immediately, `past_due`/`canceled` don't flip it until the grace-period sweep. |
 | `GET` | `/billing/plan?currency=` | The annual price converted to `currency` using the caller's own exchange rate, falling back to the USD reference price if none is known. Response's own `currency` field says what `amount` is actually expressed in. |
-=======
 | `POST` | `/plans` | Create a plan (BACK-10). Body: `{name, plan_type, currency, monthly_target_amount, target_amount?, account_id?, start_date?, end_date?}`. `plan_type` is `stress_test` or `savings`. A savings plan requires `target_amount` and `account_id` (the account's currency must match `currency`); a stress-test plan rejects both. `start_date` defaults to now. |
 | `GET` | `/plans` | List every plan the caller owns, each with lightweight progress: a savings plan's all-time contribution total, or a stress-test plan's current (not projected) month-to-date surplus/deficit. |
 | `GET` | `/plans/{id}` | One plan's full progress plus the pace checker computed on read: `on_track` and, for a savings plan, `projected_shortfall` (linear month-end projection vs. `monthly_target_amount`). Never changes `status` as a side effect. |
 | `PATCH` | `/plans/{id}` | Edit a plan. Body: any subset of `{name, target_amount, monthly_target_amount, end_date, status}`. `target_amount` is only editable on a savings plan. `status` (`active`/`completed`/`abandoned`) is the only way a plan leaves `active` — a `GET` never does this itself. |
->>>>>>> origin/main
 
 `amount` is an integer in the smallest currency unit (cents), negative for
 expenses, positive for income, and cannot be zero. Splitting an amount too
