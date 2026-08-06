@@ -44,10 +44,11 @@ tag or point it at a fork if needed, e.g.
 ```bash
 cd deploy
 cp .env.example .env
-# edit .env: set FT_POSTGRES_PASSWORD, LEDGER_POSTGRES_PASSWORD, and
-# AUTHENTIK_POSTGRES_PASSWORD/AUTHENTIK_SECRET_KEY to real secrets (or
-# point them at your secrets manager of choice — anything that lands in
-# .env works, nothing is hardcoded in compose.yaml), and adjust
+# edit .env: set FT_POSTGRES_PASSWORD, LEDGER_POSTGRES_PASSWORD,
+# AUTHENTIK_POSTGRES_PASSWORD/AUTHENTIK_SECRET_KEY, and
+# ENCRYPTION_MASTER_KEY/LEDGER_HMAC_KEY to real secrets (or point them at
+# your secrets manager of choice — anything that lands in .env works,
+# nothing is hardcoded in compose.yaml), and adjust
 # DEFAULT_USER_ID/APP_HOSTNAME/PUBLIC_API_URL for your deployment.
 podman-compose --profile ledger up -d --build   # or drop --profile ledger — see above
 ```
@@ -256,6 +257,14 @@ failures — the job exits non-zero if a required target's dump fails).
 protects against database corruption/accidental deletion on the same
 host, not host loss. Mount it, `rsync` it, whatever fits your setup; not
 automated here.
+
+**These SQL dumps alone are not enough to restore encrypted data**
+(BACK-16): `financial_tracker_<...>.sql.gz` includes the wrapped per-user
+data keys (`user_data_keys`) but not the master key that wraps them —
+`ENCRYPTION_MASTER_KEY` and `LEDGER_HMAC_KEY` live only in `.env`/your
+secrets manager. Back those up with the same rigor as
+`FT_POSTGRES_PASSWORD`; losing them makes every encrypted
+description/name field permanently unrecoverable, dump or no dump.
 
 ### Running a backup on demand
 

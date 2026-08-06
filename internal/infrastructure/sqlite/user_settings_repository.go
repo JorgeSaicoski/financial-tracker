@@ -57,6 +57,25 @@ func (r *userSettingsRepository) UpdateEnabled(ctx context.Context, userID strin
 	return r.Get(ctx, userID)
 }
 
+// SetCloudStorageEntitled upserts cloud_storage_entitled, creating the
+// row lazily on first write with the true/true/entitled defaults if it
+// doesn't exist yet (mirrors UpdateEnabled's shape). On conflict, only
+// cloud_storage_entitled and updated_at change.
+func (r *userSettingsRepository) SetCloudStorageEntitled(ctx context.Context, userID string, entitled bool) (*dto.UserSettingsDTO, error) {
+	now := time.Now().UTC()
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO user_settings (`+userSettingsColumns+`)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(user_id) DO UPDATE SET
+		   cloud_storage_entitled = excluded.cloud_storage_entitled,
+		   updated_at = excluded.updated_at`,
+		userID, true, true, entitled, nil, formatTime(now), formatTime(now))
+	if err != nil {
+		return nil, fmt.Errorf("sqlite: set cloud storage entitled: %w", err)
+	}
+	return r.Get(ctx, userID)
+}
+
 // SetDefaultCategory upserts default_category_id — same lazy-row pattern
 // as UpdateEnabled, but leaves ledger_sync_enabled untouched on conflict
 // instead of the other way around.
