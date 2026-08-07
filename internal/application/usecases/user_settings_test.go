@@ -3,14 +3,16 @@ package usecases
 import (
 	"context"
 	"testing"
+	"time"
 
+	"github.com/JorgeSaicoski/financial-tracker/internal/application/dto"
 	"github.com/JorgeSaicoski/financial-tracker/internal/domain/entities"
 )
 
 func boolPtr(b bool) *bool { return &b }
 
 func TestGetUserSettingsDefaultsWhenUntouched(t *testing.T) {
-	uc := NewGetUserSettings(newFakeUserSettingsRepo())
+	uc := NewGetUserSettings(newFakeUserSettingsRepo(), newFakeSubscriptionRepo())
 
 	s, err := uc.Execute(context.Background(), "u1")
 	if err != nil {
@@ -18,6 +20,35 @@ func TestGetUserSettingsDefaultsWhenUntouched(t *testing.T) {
 	}
 	if !s.LedgerSyncEntitled || !s.LedgerSyncEnabled || !s.CloudStorageEntitled {
 		t.Errorf("untouched user should default all-true, got %+v", s)
+	}
+	if s.SubscriptionStatus != "" || s.SubscriptionCurrentPeriodEnd != nil {
+		t.Errorf("a user who never subscribed should have no subscription fields, got %+v", s)
+	}
+}
+
+// TestGetUserSettingsSurfacesSubscriptionFields is BACK-19's "GET
+// /settings gains subscription fields" requirement.
+func TestGetUserSettingsSurfacesSubscriptionFields(t *testing.T) {
+	settings := newFakeUserSettingsRepo()
+	subs := newFakeSubscriptionRepo()
+	periodEnd := time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
+	if _, err := subs.Upsert(context.Background(), &dto.SubscriptionDTO{
+		UserID: "u1", Provider: "stripe", ProviderSubscriptionID: "sub_1",
+		Status: dto.SubscriptionStatusActive, CurrentPeriodEnd: periodEnd,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	uc := NewGetUserSettings(settings, subs)
+	s, err := uc.Execute(context.Background(), "u1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.SubscriptionStatus != dto.SubscriptionStatusActive {
+		t.Errorf("SubscriptionStatus = %q, want active", s.SubscriptionStatus)
+	}
+	if s.SubscriptionCurrentPeriodEnd == nil || !s.SubscriptionCurrentPeriodEnd.Equal(periodEnd) {
+		t.Errorf("SubscriptionCurrentPeriodEnd = %v, want %v", s.SubscriptionCurrentPeriodEnd, periodEnd)
 	}
 }
 
@@ -27,7 +58,7 @@ func TestGetUserSettingsDefaultsWhenUntouched(t *testing.T) {
 func TestCreateMovementUsesLocalStatusWhenSyncDisabled(t *testing.T) {
 	settings := newFakeUserSettingsRepo()
 	movements := newFakeMovementRepo()
-	createMovement := NewCreateMovement(movements, newFakeAccountRepo(), newFakePaymentMethodRepo(), newFakeCategoryRepo(), settings)
+createMovement := NewCreateMovement(movements, newFakeAccountRepo(), newFakePaymentMethodRepo(), newFakePlanRepo(), newFakeCategoryRepo(), settings)
 	updateSettings := NewUpdateUserSettings(settings, movements, newFakeCategoryRepo())
 
 	if _, err := updateSettings.Execute(context.Background(), "u1", UpdateUserSettingsInput{LedgerSyncEnabled: boolPtr(false)}); err != nil {
@@ -62,7 +93,7 @@ func TestCreateMovementUsesLocalStatusWhenSyncDisabled(t *testing.T) {
 func TestDisableCreateEnableCyclePushesExactlyTheBacklog(t *testing.T) {
 	settings := newFakeUserSettingsRepo()
 	movements := newFakeMovementRepo()
-	createMovement := NewCreateMovement(movements, newFakeAccountRepo(), newFakePaymentMethodRepo(), newFakeCategoryRepo(), settings)
+createMovement := NewCreateMovement(movements, newFakeAccountRepo(), newFakePaymentMethodRepo(), newFakePlanRepo(), newFakeCategoryRepo(), settings)
 	updateSettings := NewUpdateUserSettings(settings, movements, newFakeCategoryRepo())
 	ctx := context.Background()
 
@@ -122,7 +153,7 @@ func TestEntitlementBlocksEffectiveSyncEvenWhenEnabled(t *testing.T) {
 	settings := newFakeUserSettingsRepo()
 	settings.setEntitled("u1", false)
 	movements := newFakeMovementRepo()
-	createMovement := NewCreateMovement(movements, newFakeAccountRepo(), newFakePaymentMethodRepo(), newFakeCategoryRepo(), settings)
+createMovement := NewCreateMovement(movements, newFakeAccountRepo(), newFakePaymentMethodRepo(), newFakePlanRepo(), newFakeCategoryRepo(), settings)
 
 	m, err := createMovement.Execute(context.Background(), CreateMovementInput{
 		UserID: "u1", Currency: "usd", Amount: -100,

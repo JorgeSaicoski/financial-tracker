@@ -145,6 +145,11 @@ services:
     environment:
       DB_DRIVER: postgres
       DATABASE_URL: postgres://${FT_POSTGRES_USER}:${FT_POSTGRES_PASSWORD}@ft-postgres:5432/${FT_POSTGRES_DB}?sslmode=disable
+      # BACK-16: at-rest field encryption (movements.description/
+      # accounts.name) and pseudonymous ledger sync — see root README's
+      # "What this tier does and doesn't protect against".
+      ENCRYPTION_MASTER_KEY: ${ENCRYPTION_MASTER_KEY}
+      LEDGER_HMAC_KEY: ${LEDGER_HMAC_KEY}
       # Defaults to this stack's own ledger-service (only reachable when
       # started with --profile ledger); point it at an external instance
       # instead, or leave ledger-service stopped entirely — sync just

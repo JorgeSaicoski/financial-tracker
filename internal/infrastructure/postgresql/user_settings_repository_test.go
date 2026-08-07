@@ -72,6 +72,37 @@ func TestUserSettingsListSyncDisabledUserIDs(t *testing.T) {
 	}
 }
 
+func TestUserSettingsSetCloudStorageEntitledUpsertsAndPreservesOtherFields(t *testing.T) {
+	repo := NewUserSettingsRepository(openTestDB(t))
+	ctx := context.Background()
+	userID := "00000000-0000-0000-0000-000000000002"
+
+	s, err := repo.SetCloudStorageEntitled(ctx, userID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.CloudStorageEntitled {
+		t.Error("cloud_storage_entitled should be false after SetCloudStorageEntitled(false)")
+	}
+	if !s.LedgerSyncEntitled || !s.LedgerSyncEnabled {
+		t.Errorf("other fields should default true on first touch, got %+v", s)
+	}
+
+	if _, err := repo.UpdateEnabled(ctx, userID, false); err != nil {
+		t.Fatal(err)
+	}
+	s, err = repo.SetCloudStorageEntitled(ctx, userID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s.CloudStorageEntitled {
+		t.Error("cloud_storage_entitled should be true after SetCloudStorageEntitled(true)")
+	}
+	if s.LedgerSyncEnabled {
+		t.Error("SetCloudStorageEntitled must not touch ledger_sync_enabled")
+	}
+}
+
 // TestListPendingSyncExcludesUsers mirrors the SQLite package's test of
 // the same name: BACK-13's acceptance criterion at the repository-query
 // level.

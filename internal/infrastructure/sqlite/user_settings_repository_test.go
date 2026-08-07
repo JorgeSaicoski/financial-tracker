@@ -53,6 +53,41 @@ func TestUserSettingsUpdateEnabledUpsertsAndPreservesEntitlements(t *testing.T) 
 	}
 }
 
+func TestUserSettingsSetCloudStorageEntitledUpsertsAndPreservesOtherFields(t *testing.T) {
+	repo := NewUserSettingsRepository(openTestDB(t))
+	ctx := context.Background()
+	userID := "00000000-0000-0000-0000-000000000002"
+
+	// First touch (BACK-19's new-signup default): creates the row lazily
+	// with cloud_storage_entitled=false, everything else at its default.
+	s, err := repo.SetCloudStorageEntitled(ctx, userID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.CloudStorageEntitled {
+		t.Error("cloud_storage_entitled should be false after SetCloudStorageEntitled(false)")
+	}
+	if !s.LedgerSyncEntitled || !s.LedgerSyncEnabled {
+		t.Errorf("other fields should default true on first touch, got %+v", s)
+	}
+
+	// A subsequent write (e.g. subscribing) flips it back without
+	// touching ledger_sync_enabled.
+	if _, err := repo.UpdateEnabled(ctx, userID, false); err != nil {
+		t.Fatal(err)
+	}
+	s, err = repo.SetCloudStorageEntitled(ctx, userID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s.CloudStorageEntitled {
+		t.Error("cloud_storage_entitled should be true after SetCloudStorageEntitled(true)")
+	}
+	if s.LedgerSyncEnabled {
+		t.Error("SetCloudStorageEntitled must not touch ledger_sync_enabled")
+	}
+}
+
 func TestUserSettingsListSyncDisabledUserIDs(t *testing.T) {
 	repo := NewUserSettingsRepository(openTestDB(t))
 	ctx := context.Background()

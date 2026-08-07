@@ -90,6 +90,10 @@ func (h *movementHandler) CreateMovement(w http.ResponseWriter, r *http.Request)
 	if req.AccountID != "" {
 		accountID = &req.AccountID
 	}
+	var planID *string
+	if req.PlanID != "" {
+		planID = &req.PlanID
+	}
 
 	if req.Installments > 1 {
 		if req.PaymentMethod != entities.PaymentMethodCreditCard {
@@ -127,6 +131,7 @@ func (h *movementHandler) CreateMovement(w http.ResponseWriter, r *http.Request)
 		CategoryID:                  req.CategoryID,
 		PaymentMethod:               req.PaymentMethod,
 		AccountID:                   accountID,
+		PlanID:                      planID,
 		AvoidabilityOverridePercent: req.AvoidabilityOverridePercent,
 	})
 	if err != nil {
@@ -235,6 +240,7 @@ func (h *movementHandler) UpdateMovement(w http.ResponseWriter, r *http.Request)
 		CategoryID:                  req.CategoryID,
 		PaymentMethod:               req.PaymentMethod,
 		AccountID:                   req.AccountID,
+		PlanID:                      req.PlanID,
 		Amount:                      req.Amount,
 		Currency:                    req.Currency,
 		Timestamp:                   req.Timestamp,
@@ -459,6 +465,9 @@ func toMovementResponse(m *dto.MovementDTO) interfacedto.MovementResponse {
 	}
 	if m.TransferID != nil {
 		resp.TransferID = *m.TransferID
+	}
+	if m.PlanID != nil {
+		resp.PlanID = *m.PlanID
 	}
 	if m.RecurringRuleID != nil {
 		resp.RecurringRuleID = *m.RecurringRuleID

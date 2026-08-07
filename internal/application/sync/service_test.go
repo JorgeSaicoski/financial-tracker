@@ -42,7 +42,7 @@ func (f *fakeRepo) ListByCreditCardPurchase(context.Context, string) ([]*dto.Mov
 	panic("not used")
 }
 func (f *fakeRepo) Void(context.Context, string) error { panic("not used") }
-func (f *fakeRepo) UpdateMetadata(context.Context, string, string, *string, string, *string) error {
+func (f *fakeRepo) UpdateMetadata(context.Context, string, string, *string, string, *string, *string) error {
 	panic("not used")
 }
 func (f *fakeRepo) UpdateAvoidabilityOverride(context.Context, string, *int) error {
@@ -52,6 +52,9 @@ func (f *fakeRepo) UpdateFinancial(context.Context, string, int64, string, time.
 	panic("not used")
 }
 func (f *fakeRepo) NetByAccount(context.Context, string, *time.Time, *time.Time) (int64, error) {
+	panic("not used")
+}
+func (f *fakeRepo) SumByPlan(context.Context, string, *time.Time, *time.Time) (int64, error) {
 	panic("not used")
 }
 func (f *fakeRepo) CreateReversal(context.Context, *dto.MovementDTO) (*dto.MovementDTO, error) {
@@ -137,6 +140,12 @@ func (f *fakeSettingsRepo) ListSyncDisabledUserIDs(_ context.Context) ([]string,
 		}
 	}
 	return out, nil
+}
+
+func (f *fakeSettingsRepo) SetCloudStorageEntitled(_ context.Context, userID string, entitled bool) (*dto.UserSettingsDTO, error) {
+	s := dto.DefaultUserSettings(userID, time.Now().UTC())
+	s.CloudStorageEntitled = entitled
+	return s, nil
 }
 
 func (f *fakeRepo) MarkSynced(_ context.Context, id, ledgerTransactionID string, at time.Time) error {

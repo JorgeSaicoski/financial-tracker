@@ -81,6 +81,10 @@ type CreateMovementInput struct {
 	CategoryID    *string
 	PaymentMethod string
 	AccountID     *string
+	// PlanID (BACK-10) tags this movement as funding a savings plan. Must
+	// belong to the user, be an active savings plan, and match the
+	// movement's currency — validated in the usecase.
+	PlanID *string
 	// AvoidabilityOverridePercent (0-100, BACK-14) is this movement's own
 	// ad-hoc avoidability, for a one-off spend that doesn't deserve its
 	// own category. Wins over the resolved category's avoidability_percent.
@@ -123,6 +127,7 @@ type UpdateMovementInput struct {
 	CategoryID    *string
 	PaymentMethod *string
 	AccountID     *string // a pointer to "" clears the account
+	PlanID        *string // a pointer to "" clears the plan link (BACK-10)
 	Amount        *int64
 	Currency      *string
 	Timestamp     *time.Time
@@ -212,6 +217,11 @@ type TransferBetweenAccountsInput struct {
 	Amount        int64
 	Description   string
 	Timestamp     time.Time
+	// PlanID (BACK-10), when set, tags the credit (destination) leg only
+	// — the recommended way to fund a savings plan without inflating
+	// income/expense cashflow. Must belong to the user, be an active
+	// savings plan, and match ToAccountID's currency.
+	PlanID *string
 }
 
 // TransferResult carries both legs of a transfer, linked by TransferID:
@@ -280,17 +290,24 @@ type AddCurrencyUseCase interface {
 // UserSettingsView is what GET/PATCH /settings return (BACK-13).
 // Entitled fields are operator/billing-controlled and read-only through
 // this API; Enabled fields are user preference. Effective capability is
-// Entitled AND Enabled.
+// Entitled AND Enabled. SubscriptionStatus/SubscriptionCurrentPeriodEnd
+// (BACK-19) are the zero value/nil when the caller has never had a
+// subscription row — a free-tier user is not an error case.
 type UserSettingsView struct {
 	UserID               string
 	LedgerSyncEntitled   bool
 	LedgerSyncEnabled    bool
 	CloudStorageEntitled bool
+
 	// DefaultCategoryID (BACK-14 follow-up): nil when the user has never
 	// set one, which resolves to the global "other" category.
 	DefaultCategoryID *string
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
+
+	SubscriptionStatus           string
+	SubscriptionCurrentPeriodEnd *time.Time
+
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // GetUserSettingsUseCase returns the caller's own settings, defaulting
@@ -480,6 +497,121 @@ type UpdatePaymentMethodUseCase interface {
 // label, not an FK, same as a deleted category.
 type DeletePaymentMethodUseCase interface {
 	Execute(ctx context.Context, userID, id string) error
+}
+
+// ProcessBillingWebhookInput carries what the payment provider's webhook
+// asserts about one subscription (BACK-19), already translated from
+// whatever the provider's own payload shape is (see
+// services.PaymentWebhookVerifier's doc comment) into this
+// provider-agnostic form.
+type ProcessBillingWebhookInput struct {
+	UserID                 string
+	Provider               string
+	ProviderSubscriptionID string
+	Status                 string // dto.SubscriptionStatus*
+	CurrentPeriodEnd       time.Time
+}
+
+// ProcessBillingWebhookUseCase upserts the subscription row and flips
+// cloud_storage_entitled to true immediately for active — gaining access
+// should never wait. Neither canceled nor past_due flips entitlement
+// here at all: BACK-19's acceptance criteria are explicit that even an
+// explicit cancellation "flips it back after the grace period, not
+// immediately." The grace-period sweep (internal/application/billing) is
+// what eventually flips either status to false once its grace period
+// elapses.
+type ProcessBillingWebhookUseCase interface {
+	Execute(ctx context.Context, input ProcessBillingWebhookInput) (*dto.SubscriptionDTO, error)
+}
+
+// BillingPlanView is what GET /billing/plan returns: Currency is the
+// currency Amount is actually expressed in — the caller's requested
+// currency when a BACK-11 rate exists for it, or the reference currency
+// ("usd") as a documented fallback otherwise. Never assume Currency ==
+// what was requested; a client must read it back.
+type BillingPlanView struct {
+	Currency string
+	Amount   int64 // Currency's smallest unit
+}
+
+// GetBillingPlanUseCase converts the fixed USD reference price to the
+// caller's requested currency using their own BACK-11 exchange rate,
+// falling back to the USD reference price when no rate is known for that
+// currency (never a hardcoded USD string presented as universal).
+type GetBillingPlanUseCase interface {
+	Execute(ctx context.Context, userID, currency string) (BillingPlanView, error)
+}
+
+// CreatePlanInput carries a POST /plans body (BACK-10). TargetAmount and
+// AccountID are required for a savings plan, and must be absent for a
+// stress-test plan (a hypothetical cost has no real target or funding
+// account). StartDate defaults to now when zero.
+type CreatePlanInput struct {
+	UserID              string
+	Name                string
+	Type                string
+	TargetAmount        *int64
+	Currency            string
+	MonthlyTargetAmount int64
+	AccountID           *string
+	StartDate           time.Time
+	EndDate             *time.Time
+}
+
+type CreatePlanUseCase interface {
+	Execute(ctx context.Context, input CreatePlanInput) (*dto.PlanDTO, error)
+}
+
+// PlanSummary is GET /plans' lightweight per-plan progress: Progress is
+// either a savings plan's all-time SUM(amount) toward TargetAmount, or a
+// stress-test plan's current (not projected) month-to-date surplus —
+// income minus expense minus MonthlyTargetAmount. It deliberately omits
+// the pace checker's forward-looking fields (see PlanDetail) since
+// listing every plan shouldn't pay for N cashflow scans just to render a
+// summary row.
+type PlanSummary struct {
+	Plan          *dto.PlanDTO
+	Progress      int64
+	TargetReached bool
+}
+
+type ListPlansUseCase interface {
+	Execute(ctx context.Context, userID string, at time.Time) ([]PlanSummary, error)
+}
+
+// PlanDetail is GET /plans/{id}'s full response: PlanSummary plus the
+// pace checker. OnTrack: for a stress-test plan, whether the *projected*
+// month-end surplus (month-to-date expense extrapolated linearly to
+// month-end, income never extrapolated — it's lumpy, see the ticket's
+// own v1 heuristic note) stays non-negative; for a savings plan, whether
+// this month's contributions-to-date are at or ahead of linear pace.
+// ProjectedShortfall is savings-only (month's MonthlyTargetAmount minus
+// the projected end-of-month contribution total at the current rate) —
+// nil for a stress-test plan.
+type PlanDetail struct {
+	PlanSummary
+	OnTrack            bool
+	ProjectedShortfall *int64
+}
+
+type GetPlanUseCase interface {
+	Execute(ctx context.Context, userID, id string, at time.Time) (PlanDetail, error)
+}
+
+// UpdatePlanInput carries a PATCH /plans/{id} body — nil means "leave
+// unchanged", same convention as UpdateMovementInput. Type, Currency, and
+// AccountID are not editable after creation (changing them would silently
+// invalidate every movement already tagged with this plan's id).
+type UpdatePlanInput struct {
+	Name                *string
+	TargetAmount        *int64
+	MonthlyTargetAmount *int64
+	EndDate             *time.Time
+	Status              *string
+}
+
+type UpdatePlanUseCase interface {
+	Execute(ctx context.Context, userID, id string, input UpdatePlanInput) (*dto.PlanDTO, error)
 }
 
 // CreateCategoryInput carries a POST /categories body. AvoidabilityPercent

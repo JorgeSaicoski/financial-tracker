@@ -8,13 +8,18 @@ import (
 	"strconv"
 	"time"
 
+	billingapp "github.com/JorgeSaicoski/financial-tracker/internal/application/billing"
 	recurringapp "github.com/JorgeSaicoski/financial-tracker/internal/application/recurring"
 	"github.com/JorgeSaicoski/financial-tracker/internal/application/repositories"
+	"github.com/JorgeSaicoski/financial-tracker/internal/application/services"
 	syncapp "github.com/JorgeSaicoski/financial-tracker/internal/application/sync"
 	"github.com/JorgeSaicoski/financial-tracker/internal/application/usecases"
 	"github.com/JorgeSaicoski/financial-tracker/internal/infrastructure/authentik"
+	billinginfra "github.com/JorgeSaicoski/financial-tracker/internal/infrastructure/billing"
+	cryptox "github.com/JorgeSaicoski/financial-tracker/internal/infrastructure/crypto"
 	"github.com/JorgeSaicoski/financial-tracker/internal/infrastructure/ledgerservice"
 	"github.com/JorgeSaicoski/financial-tracker/internal/infrastructure/postgresql"
+	"github.com/JorgeSaicoski/financial-tracker/internal/infrastructure/simpleauth"
 	"github.com/JorgeSaicoski/financial-tracker/internal/infrastructure/sqlite"
 	"github.com/JorgeSaicoski/financial-tracker/internal/interfaces/api"
 	"github.com/JorgeSaicoski/financial-tracker/internal/interfaces/api/handlers"
@@ -46,6 +51,13 @@ func main() {
 	// forgets to set OIDC_ISSUER_URL fails loudly at startup instead of
 	// silently running with no auth.
 	authDisabled := boolEnvOr(log, "AUTH_DISABLED", false)
+	// AUTH_PROVIDER (BACK-20) picks which services.IdentityVerifier
+	// cmd/api constructs — "authentik" (default, unchanged behavior) or
+	// "simple" (infrastructure/simpleauth: any other provider speaking
+	// the same OIDC-like iss/sub/exp/aud + JWKS contract). Mirrors
+	// DB_DRIVER's switch-on-a-string shape below. Irrelevant when
+	// AUTH_DISABLED=true.
+	authProvider := envOr("AUTH_PROVIDER", "authentik")
 	oidcIssuerURL := os.Getenv("OIDC_ISSUER_URL")
 	oidcJWKSURL := os.Getenv("OIDC_JWKS_URL") // optional override, skips discovery
 	// Defaults to PUBLIC_OIDC_CLIENT_ID (deploy/.env.example's existing
@@ -55,6 +67,12 @@ func main() {
 	// without a separate env var to keep in sync. Set OIDC_AUDIENCE
 	// explicitly to override.
 	oidcAudience := envOr("OIDC_AUDIENCE", envOr("PUBLIC_OIDC_CLIENT_ID", ""))
+	// AUTH_PROVIDER=simple's own, independent config namespace — never
+	// read unless authProvider is actually "simple", so it's safe to
+	// leave these unset in every other deployment.
+	simpleAuthIssuerURL := os.Getenv("SIMPLE_AUTH_ISSUER_URL")
+	simpleAuthJWKSURL := os.Getenv("SIMPLE_AUTH_JWKS_URL")
+	simpleAuthAudience := os.Getenv("SIMPLE_AUTH_AUDIENCE")
 
 	// FRONT-04's GET /config: tells the frontend whether to enforce its
 	// own login guard. Now that BACK-02's real server-side verification
@@ -71,25 +89,38 @@ func main() {
 	retryCooldown := durationEnvOr(log, "SYNC_RETRY_COOLDOWN", 60*time.Second)
 	recurringInterval := durationEnvOr(log, "RECURRING_INTERVAL", 1*time.Hour)
 
+	// BACK-19: paid cloud-storage subscription. Reference price is an
+	// annual USD figure in cents (1000 = $10.00/year, the ticket's
+	// anchor price — not final, see its "Open decisions"); grace period
+	// is how long a past_due subscription keeps its entitlement before
+	// the sweep lapses it ("a late card shouldn't cut off access
+	// instantly").
+	billingReferencePriceUSDCents := int64(intEnvOr(log, "BILLING_REFERENCE_PRICE_USD_CENTS", 1000))
+	billingGracePeriodDays := intEnvOr(log, "BILLING_GRACE_PERIOD_DAYS", 7)
+	billingSweepInterval := durationEnvOr(log, "BILLING_SWEEP_INTERVAL", time.Hour)
+
 	// Infrastructure: the local database (SQLite by default, or Postgres
 	// when DB_DRIVER=postgres) is the source of truth; ledger-service is
 	// only reached by the background sync, so requests keep working while
 	// it's down.
 	var (
-		db                *sql.DB
-		err               error
-		movementRepo      repositories.MovementRepository
-		purchaseRepo      repositories.CreditCardPurchaseRepository
-		accountRepo       repositories.AccountRepository
-		currencyRepo      repositories.CurrencyRepository
-		categoryRepo      repositories.CategoryRepository
-		exchangeRateRepo  repositories.ExchangeRateRepository
-		recurringRuleRepo repositories.RecurringRuleRepository
-		localArchiveRepo  repositories.LocalArchiveSettingsRepository
-		paymentMethodRepo repositories.PaymentMethodRepository
-		userRepo          repositories.UserRepository
-		settingsRepo      repositories.UserSettingsRepository
-		limitsRepo        repositories.LimitsRepository
+		db                  *sql.DB
+		err                 error
+		movementRepo        repositories.MovementRepository
+		purchaseRepo        repositories.CreditCardPurchaseRepository
+		accountRepo         repositories.AccountRepository
+		currencyRepo        repositories.CurrencyRepository
+		categoryRepo        repositories.CategoryRepository
+		exchangeRateRepo    repositories.ExchangeRateRepository
+		recurringRuleRepo   repositories.RecurringRuleRepository
+		localArchiveRepo    repositories.LocalArchiveSettingsRepository
+		paymentMethodRepo   repositories.PaymentMethodRepository
+		planRepo            repositories.PlanRepository
+		userRepo            repositories.UserRepository
+		settingsRepo        repositories.UserSettingsRepository
+		limitsRepo          repositories.LimitsRepository
+		ledgerPseudonymRepo repositories.LedgerPseudonymRepository
+		subscriptionRepo    repositories.SubscriptionRepository
 	)
 
 	switch dbDriver {
@@ -114,17 +145,38 @@ func main() {
 			log.Error("migrating database failed: %v", err)
 			os.Exit(1)
 		}
-		movementRepo = postgresql.NewMovementRepository(db)
+
+		// BACK-16: field-level envelope encryption for
+		// movements.description/accounts.name — Postgres ("cloud
+		// storage") only, since it's the only backend a stolen disk/DB
+		// dump threat model applies to. Required at startup, not
+		// optional, so a deployment can't silently run without it.
+		masterKeyB64 := os.Getenv("ENCRYPTION_MASTER_KEY")
+		if masterKeyB64 == "" {
+			log.Error("ENCRYPTION_MASTER_KEY is required when DB_DRIVER=postgres (BACK-16: encrypts movements.description/accounts.name at rest). Generate with: openssl rand -base64 32")
+			os.Exit(1)
+		}
+		masterKey, err := cryptox.ParseMasterKey(masterKeyB64)
+		if err != nil {
+			log.Error("ENCRYPTION_MASTER_KEY: %v", err)
+			os.Exit(1)
+		}
+		fieldCryptor := cryptox.NewFieldCryptor(masterKey, postgresql.NewUserDataKeyRepository(db))
+
+		movementRepo = cryptox.NewEncryptingMovementRepository(postgresql.NewMovementRepository(db), fieldCryptor)
 		purchaseRepo = postgresql.NewCreditCardPurchaseRepository(db)
-		accountRepo = postgresql.NewAccountRepository(db)
+		accountRepo = cryptox.NewEncryptingAccountRepository(postgresql.NewAccountRepository(db), fieldCryptor)
 		currencyRepo = postgresql.NewCurrencyRepository(db)
 		categoryRepo = postgresql.NewCategoryRepository(db)
 		exchangeRateRepo = postgresql.NewExchangeRateRepository(db)
 		recurringRuleRepo = postgresql.NewRecurringRuleRepository(db)
 		localArchiveRepo = postgresql.NewLocalArchiveSettingsRepository(db)
 		paymentMethodRepo = postgresql.NewPaymentMethodRepository(db)
+		planRepo = postgresql.NewPlanRepository(db)
 		userRepo = postgresql.NewUserRepository(db)
 		settingsRepo = postgresql.NewUserSettingsRepository(db)
+		ledgerPseudonymRepo = postgresql.NewLedgerPseudonymRepository(db)
+		subscriptionRepo = postgresql.NewSubscriptionRepository(db)
 		limitsRepo = postgresql.NewLimitsRepository(db)
 	case "sqlite":
 		db, err = sqlite.Open(dbPath)
@@ -145,8 +197,11 @@ func main() {
 		recurringRuleRepo = sqlite.NewRecurringRuleRepository(db)
 		localArchiveRepo = sqlite.NewLocalArchiveSettingsRepository(db)
 		paymentMethodRepo = sqlite.NewPaymentMethodRepository(db)
+		planRepo = sqlite.NewPlanRepository(db)
 		userRepo = sqlite.NewUserRepository(db)
 		settingsRepo = sqlite.NewUserSettingsRepository(db)
+		ledgerPseudonymRepo = sqlite.NewLedgerPseudonymRepository(db)
+		subscriptionRepo = sqlite.NewSubscriptionRepository(db)
 		limitsRepo = sqlite.NewLimitsRepository(db)
 	default:
 		log.Error("unknown DB_DRIVER %q (want sqlite or postgres)", dbDriver)
@@ -154,16 +209,45 @@ func main() {
 	}
 	defer db.Close()
 
+	// BACK-16: pseudonymous ledger sync — required for both drivers,
+	// since ledger sync itself is available regardless of DB_DRIVER.
+	ledgerHMACKeyB64 := os.Getenv("LEDGER_HMAC_KEY")
+	if ledgerHMACKeyB64 == "" {
+		log.Error("LEDGER_HMAC_KEY is required (BACK-16: pseudonymizes ledger-service sync). Generate with: openssl rand -base64 32")
+		os.Exit(1)
+	}
+	ledgerHMACKey, err := cryptox.ParseHMACKey(ledgerHMACKeyB64)
+	if err != nil {
+		log.Error("LEDGER_HMAC_KEY: %v", err)
+		os.Exit(1)
+	}
+	ledgerPseudonymizer := cryptox.NewLedgerPseudonymizer(ledgerHMACKey, ledgerPseudonymRepo)
+
+	// BACK-19: POST /billing/webhook authenticity — required at startup
+	// like LEDGER_HMAC_KEY above, so a deployment can't silently accept
+	// unsigned billing events.
+	billingWebhookSecretB64 := os.Getenv("BILLING_WEBHOOK_SECRET")
+	if billingWebhookSecretB64 == "" {
+		log.Error("BILLING_WEBHOOK_SECRET is required (BACK-19: authenticates POST /billing/webhook). Generate with: openssl rand -base64 32")
+		os.Exit(1)
+	}
+	billingWebhookSecret, err := cryptox.ParseHMACKey(billingWebhookSecretB64)
+	if err != nil {
+		log.Error("BILLING_WEBHOOK_SECRET: %v", err)
+		os.Exit(1)
+	}
+	billingWebhookVerifier := billinginfra.NewHMACWebhookVerifier(billingWebhookSecret)
+
 	ledgerClient := ledgerservice.NewClient(ledgerServiceURL)
-	ledgerGateway := ledgerservice.NewLedgerGateway(ledgerClient)
+	ledgerGateway := ledgerservice.NewLedgerGateway(ledgerClient, ledgerPseudonymizer)
 	syncService := syncapp.NewService(movementRepo, settingsRepo, ledgerGateway, log, retryCooldown)
 	recurringService := recurringapp.NewService(recurringRuleRepo, log)
 
-	createMovement := usecases.NewCreateMovement(movementRepo, accountRepo, paymentMethodRepo, categoryRepo, settingsRepo)
+	createMovement := usecases.NewCreateMovement(movementRepo, accountRepo, paymentMethodRepo, planRepo, categoryRepo, settingsRepo)
 	createPurchase := usecases.NewCreateCreditCardPurchase(purchaseRepo, categoryRepo, settingsRepo)
 	getMovement := usecases.NewGetMovement(movementRepo)
 	listMovements := usecases.NewListMovements(movementRepo)
-	updateMovement := usecases.NewUpdateMovement(movementRepo, accountRepo, paymentMethodRepo, categoryRepo, syncService)
+	updateMovement := usecases.NewUpdateMovement(movementRepo, accountRepo, paymentMethodRepo, planRepo, categoryRepo, syncService)
 	cancelMovement := usecases.NewCancelMovement(movementRepo, syncService)
 	cancelPurchase := usecases.NewCancelCreditCardPurchase(purchaseRepo, movementRepo, syncService)
 	getCashflow := usecases.NewGetCashflow(movementRepo, accountRepo)
@@ -172,7 +256,7 @@ func main() {
 	reportBalance := usecases.NewReportAccountBalance(accountRepo, movementRepo)
 	listCurrencies := usecases.NewListCurrencies(currencyRepo)
 	addCurrency := usecases.NewAddCurrency(currencyRepo)
-	transferBetweenAccounts := usecases.NewTransferBetweenAccounts(movementRepo, accountRepo, settingsRepo)
+	transferBetweenAccounts := usecases.NewTransferBetweenAccounts(movementRepo, accountRepo, planRepo, settingsRepo)
 	cancelTransfer := usecases.NewCancelTransfer(movementRepo, syncService)
 	setExchangeRate := usecases.NewSetExchangeRate(exchangeRateRepo, currencyRepo)
 	listExchangeRates := usecases.NewListExchangeRates(exchangeRateRepo)
@@ -188,10 +272,16 @@ func main() {
 	listPaymentMethods := usecases.NewListPaymentMethods(paymentMethodRepo)
 	updatePaymentMethod := usecases.NewUpdatePaymentMethod(paymentMethodRepo)
 	deletePaymentMethod := usecases.NewDeletePaymentMethod(paymentMethodRepo)
-	ensureUser := usecases.NewEnsureUser(userRepo)
+	createPlan := usecases.NewCreatePlan(planRepo, accountRepo)
+	listPlans := usecases.NewListPlans(planRepo, movementRepo)
+	getPlan := usecases.NewGetPlan(planRepo, movementRepo)
+	updatePlan := usecases.NewUpdatePlan(planRepo)
+	ensureUser := usecases.NewEnsureUser(userRepo, settingsRepo)
 	getUser := usecases.NewGetUser(userRepo)
-	getSettings := usecases.NewGetUserSettings(settingsRepo)
-	updateSettings := usecases.NewUpdateUserSettings(settingsRepo, movementRepo, categoryRepo)
+	getSettings := usecases.NewGetUserSettings(settingsRepo, subscriptionRepo)
+	updateSettings := usecases.NewUpdateUserSettings(settingsRepo, movementRepo, categoryRepo, subscriptionRepo)
+	processBillingWebhook := usecases.NewProcessBillingWebhook(subscriptionRepo, settingsRepo)
+	getBillingPlan := usecases.NewGetBillingPlan(exchangeRateRepo, currencyRepo, billingReferencePriceUSDCents)
 	createCategory := usecases.NewCreateCategory(categoryRepo, limitsRepo)
 	listCategories := usecases.NewListCategories(categoryRepo)
 	updateCategory := usecases.NewUpdateCategory(categoryRepo)
@@ -220,38 +310,60 @@ func main() {
 	recurringRuleHandler := handlers.NewRecurringRuleHandler(createRecurringRule, listRecurringRules, updateRecurringRule, defaultCurrency, log)
 	archiveHandler := handlers.NewArchiveHandler(getLocalArchiveSetting, setLocalArchiveSetting, exportArchive, importArchive, log)
 	paymentMethodHandler := handlers.NewPaymentMethodHandler(createPaymentMethod, updatePaymentMethod, deletePaymentMethod, log)
+	planHandler := handlers.NewPlanHandler(createPlan, listPlans, getPlan, updatePlan, log)
 	settingsHandler := handlers.NewSettingsHandler(getSettings, updateSettings, log)
 	userHandler := handlers.NewUserHandler(getUser, log)
 	configHandler := handlers.NewConfigHandler(standalone, authEnabled, log)
+	billingHandler := handlers.NewBillingHandler(processBillingWebhook, getBillingPlan, billingWebhookVerifier, log)
 
 	// Auth: AUTH_DISABLED is a dev-only escape hatch, off by default. A
 	// deployment that leaves OIDC_ISSUER_URL unset without explicitly
 	// opting into AUTH_DISABLED=true fails fast at startup rather than
-	// silently serving every request as the same fixed user.
+	// silently serving every request as the same fixed user. Which
+	// services.IdentityVerifier gets constructed below is a config
+	// decision (AUTH_PROVIDER), not a code change (BACK-20) — the
+	// application layer and interfaces/api know nothing about Authentik,
+	// JWT, or JWKS; only this switch does.
 	var authMiddleware api.AuthMiddleware
 	if authDisabled {
 		log.Info("AUTH_DISABLED=true: skipping Authentik token verification — every request is attributed to DEFAULT_USER_ID=%s. Do not use this in a real deployment.", defaultUserID)
 		authMiddleware = api.DevUserMiddleware(defaultUserID, ensureUser, log)
 	} else {
-		if oidcIssuerURL == "" {
-			log.Error("OIDC_ISSUER_URL is required unless AUTH_DISABLED=true")
-			os.Exit(1)
-		}
 		// A dedicated client with a timeout, not http.DefaultClient: a stalled
 		// OIDC discovery/JWKS fetch must not be able to hang request auth
 		// indefinitely.
 		oidcHTTPClient := &http.Client{Timeout: 10 * time.Second}
-		verifier := authentik.NewVerifier(oidcIssuerURL, oidcAudience, oidcJWKSURL, oidcHTTPClient, log)
+
+		var verifier services.IdentityVerifier
+		switch authProvider {
+		case "authentik":
+			if oidcIssuerURL == "" {
+				log.Error("OIDC_ISSUER_URL is required when AUTH_PROVIDER=authentik and AUTH_DISABLED is not true")
+				os.Exit(1)
+			}
+			verifier = authentik.NewVerifier(oidcIssuerURL, oidcAudience, oidcJWKSURL, oidcHTTPClient, log)
+			log.Info("auth: validating Authorization bearer tokens against OIDC issuer %s (audience %q)", oidcIssuerURL, oidcAudience)
+		case "simple":
+			if simpleAuthIssuerURL == "" {
+				log.Error("SIMPLE_AUTH_ISSUER_URL is required when AUTH_PROVIDER=simple")
+				os.Exit(1)
+			}
+			verifier = simpleauth.NewVerifier(simpleAuthIssuerURL, simpleAuthAudience, simpleAuthJWKSURL, oidcHTTPClient, log)
+			log.Info("auth: validating Authorization bearer tokens against issuer %s (audience %q) via AUTH_PROVIDER=simple", simpleAuthIssuerURL, simpleAuthAudience)
+		default:
+			log.Error("unknown AUTH_PROVIDER %q (want authentik or simple)", authProvider)
+			os.Exit(1)
+		}
 		authMiddleware = api.Middleware(verifier, ensureUser, log)
-		log.Info("auth: validating Authorization bearer tokens against OIDC issuer %s (audience %q)", oidcIssuerURL, oidcAudience)
 	}
 
-	router := api.NewRouter(movementHandler, accountHandler, currencyHandler, categoryHandler, transferHandler, exchangeRateHandler, recurringRuleHandler, archiveHandler, paymentMethodHandler, settingsHandler, userHandler, configHandler, authMiddleware, corsAllowedOrigin)
+	router := api.NewRouter(movementHandler, accountHandler, currencyHandler, categoryHandler, transferHandler, exchangeRateHandler, recurringRuleHandler, archiveHandler, paymentMethodHandler, planHandler, settingsHandler, userHandler, configHandler, billingHandler, authMiddleware, corsAllowedOrigin)
 
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
 	syncService.Start(ctx, syncInterval)
 	recurringService.Start(ctx, recurringInterval)
+	billingapp.NewService(subscriptionRepo, settingsRepo, billingGracePeriodDays, log).Start(ctx, billingSweepInterval)
 
 	dbDescription := dbPath
 	if dbDriver == "postgres" {
@@ -259,7 +371,7 @@ func main() {
 	}
 	addr := ":" + port
 	log.Info("financial-tracker API listening on %s (db driver %s at %s, syncing to ledger-service at %s every %s)", addr, dbDriver, dbDescription, ledgerServiceURL, syncInterval)
-	log.Info("endpoints: GET /config | GET|PATCH /settings | POST /movements | GET /movements | PATCH /movements/{id} | POST /movements/{id}/cancel | POST /credit-card-purchases/{id}/cancel | POST /sync | GET /categories | POST /categories | PATCH /categories/{id} | DELETE /categories/{id} | GET /cashflow | GET|POST /accounts | POST /accounts/{id}/balance | GET|POST /currencies | POST /transfers | POST /transfers/{id}/cancel | GET|POST /exchange-rates | DELETE /exchange-rates/{id} | GET|POST /recurring-rules | PATCH /recurring-rules/{id} | GET|PUT /settings/local-archive | GET /export/archive | POST /import/archive | POST /payment-methods | PATCH /payment-methods/{id} | DELETE /payment-methods/{id} | GET /me")
+	log.Info("endpoints: GET /config | GET|PATCH /settings | POST /movements | GET /movements | PATCH /movements/{id} | POST /movements/{id}/cancel | POST /credit-card-purchases/{id}/cancel | POST /sync | GET /categories | POST /categories | PATCH /categories/{id} | DELETE /categories/{id} | GET /cashflow | GET|POST /accounts | POST /accounts/{id}/balance | GET|POST /currencies | POST /transfers | POST /transfers/{id}/cancel | GET|POST /exchange-rates | DELETE /exchange-rates/{id} | GET|POST /recurring-rules | PATCH /recurring-rules/{id} | GET|PUT /settings/local-archive | GET /export/archive | POST /import/archive | POST /payment-methods | PATCH /payment-methods/{id} | DELETE /payment-methods/{id} | GET|POST /plans | GET|PATCH /plans/{id} | GET /me | POST /billing/webhook | GET /billing/plan")
 
 	if err := http.ListenAndServe(addr, router); err != nil {
 		log.Error("server failed: %v", err)

@@ -11,7 +11,7 @@ import (
 )
 
 func TestCreateMovementValidation(t *testing.T) {
-	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), newFakePaymentMethodRepo(), newFakeCategoryRepo(), newFakeUserSettingsRepo())
+uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), newFakePaymentMethodRepo(), newFakePlanRepo(), newFakeCategoryRepo(), newFakeUserSettingsRepo())
 
 	cases := []struct {
 		name  string
@@ -90,7 +90,7 @@ func TestCreateMovementNormalizesPaymentMethodCasing(t *testing.T) {
 
 func TestCreateMovementDefaultsAndState(t *testing.T) {
 	repo := newFakeMovementRepo()
-	uc := NewCreateMovement(repo, newFakeAccountRepo(), newFakePaymentMethodRepo(), newFakeCategoryRepo(), newFakeUserSettingsRepo())
+uc := NewCreateMovement(repo, newFakeAccountRepo(), newFakePaymentMethodRepo(), newFakePlanRepo(), newFakeCategoryRepo(), newFakeUserSettingsRepo())
 
 	m, err := uc.Execute(context.Background(), CreateMovementInput{
 		UserID: "u1", Amount: -500, Currency: "usd",
@@ -121,7 +121,7 @@ func TestCreateMovementDefaultsAndState(t *testing.T) {
 }
 
 func TestCreateMovementKeepsExplicitFields(t *testing.T) {
-	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), newFakePaymentMethodRepo(), newFakeCategoryRepo(), newFakeUserSettingsRepo())
+uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), newFakePaymentMethodRepo(), newFakePlanRepo(), newFakeCategoryRepo(), newFakeUserSettingsRepo())
 
 	m, err := uc.Execute(context.Background(), CreateMovementInput{
 		UserID: "u1", Amount: -500, Currency: "usd",
@@ -147,7 +147,7 @@ func TestCreateMovementRequiresExistingCategoryID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), newFakePaymentMethodRepo(), categories, newFakeUserSettingsRepo())
+uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), newFakePaymentMethodRepo(), newFakePlanRepo(), categories, newFakeUserSettingsRepo())
 
 	m, err := uc.Execute(context.Background(), CreateMovementInput{
 		UserID: "u1", Amount: -500, Currency: "usd", CategoryID: &food.ID,
@@ -174,7 +174,7 @@ func TestCreateMovementRejectsCategoryUserDoesNotHave(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), newFakePaymentMethodRepo(), categories, newFakeUserSettingsRepo())
+uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), newFakePaymentMethodRepo(), newFakePlanRepo(), categories, newFakeUserSettingsRepo())
 
 	_, err = uc.Execute(context.Background(), CreateMovementInput{
 		UserID: "u1", Amount: -500, Currency: "usd", CategoryID: &food.ID,
@@ -196,7 +196,7 @@ func TestCreateMovementRejectsCategoryRemovedFromCallersList(t *testing.T) {
 	if err := categories.Remove(context.Background(), "u1", restaurant.ID); err != nil {
 		t.Fatal(err)
 	}
-	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), newFakePaymentMethodRepo(), categories, newFakeUserSettingsRepo())
+uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), newFakePaymentMethodRepo(), newFakePlanRepo(), categories, newFakeUserSettingsRepo())
 
 	_, err = uc.Execute(context.Background(), CreateMovementInput{
 		UserID: "u1", Amount: -500, Currency: "usd", CategoryID: &restaurant.ID,
@@ -215,7 +215,7 @@ func TestCreateMovementAllowsSystemCategoryRegardlessOfHasList(t *testing.T) {
 	if _, err := categories.Create(context.Background(), &dto.CategoryDTO{ID: entities.CategoryOtherID, Name: entities.CategoryOther}); err != nil {
 		t.Fatal(err)
 	}
-	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), newFakePaymentMethodRepo(), categories, newFakeUserSettingsRepo())
+uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), newFakePaymentMethodRepo(), newFakePlanRepo(), categories, newFakeUserSettingsRepo())
 
 	otherID := entities.CategoryOtherID
 	m, err := uc.Execute(context.Background(), CreateMovementInput{

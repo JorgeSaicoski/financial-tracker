@@ -23,9 +23,11 @@ func NewRouter(
 	recurringRuleHandler handlers.RecurringRuleHandler,
 	archiveHandler handlers.ArchiveHandler,
 	paymentMethodHandler handlers.PaymentMethodHandler,
+	planHandler handlers.PlanHandler,
 	settingsHandler handlers.SettingsHandler,
 	userHandler handlers.UserHandler,
 	configHandler handlers.ConfigHandler,
+	billingHandler handlers.BillingHandler,
 	authMiddleware AuthMiddleware,
 	allowedOrigin string,
 ) http.Handler {
@@ -82,7 +84,14 @@ func NewRouter(
 	protected.HandleFunc("PATCH /payment-methods/{id}", paymentMethodHandler.UpdatePaymentMethod)
 	protected.HandleFunc("DELETE /payment-methods/{id}", paymentMethodHandler.DeletePaymentMethod)
 
+	protected.HandleFunc("POST /plans", planHandler.CreatePlan)
+	protected.HandleFunc("GET /plans", planHandler.ListPlans)
+	protected.HandleFunc("GET /plans/{id}", planHandler.GetPlan)
+	protected.HandleFunc("PATCH /plans/{id}", planHandler.UpdatePlan)
+
 	protected.HandleFunc("GET /me", userHandler.Me)
+
+	protected.HandleFunc("GET /billing/plan", billingHandler.GetPlan)
 
 	mux := http.NewServeMux()
 	// Unauthenticated by design (see config_handler.go): the frontend
@@ -90,6 +99,12 @@ func NewRouter(
 	// it must not go through authMiddleware like everything else does —
 	// mounted on the outer mux instead of protected.
 	mux.HandleFunc("GET /config", configHandler.GetConfig)
+	// Unauthenticated by user token like /config, but for a different
+	// reason (BACK-19): the payment provider calling this has no
+	// financial-tracker session to present a bearer token for.
+	// billingHandler.Webhook checks the request's own signature header
+	// instead — see its doc comment.
+	mux.HandleFunc("POST /billing/webhook", billingHandler.Webhook)
 	// user_id always comes from the verified token (or the AUTH_DISABLED
 	// dev stand-in), never from a request body or query string — see
 	// BACK-02.

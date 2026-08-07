@@ -165,6 +165,23 @@ func (f *fakeMovementRepo) NetByAccount(_ context.Context, accountID string, aft
 	return net, nil
 }
 
+func (f *fakeMovementRepo) SumByPlan(_ context.Context, planID string, from, to *time.Time) (int64, error) {
+	var sum int64
+	for _, m := range f.byID {
+		if m.PlanID == nil || *m.PlanID != planID || m.Status != string(entities.MovementStatusActive) {
+			continue
+		}
+		if from != nil && m.Timestamp.Before(*from) {
+			continue
+		}
+		if to != nil && m.Timestamp.After(*to) {
+			continue
+		}
+		sum += m.Amount
+	}
+	return sum, nil
+}
+
 func (f *fakeMovementRepo) ListByCreditCardPurchase(_ context.Context, purchaseID string) ([]*dto.MovementDTO, error) {
 	var out []*dto.MovementDTO
 	for _, m := range f.byID {
@@ -236,7 +253,7 @@ func (f *fakeMovementRepo) MarkSyncFailed(_ context.Context, id, syncErr string,
 	return nil
 }
 
-func (f *fakeMovementRepo) UpdateMetadata(_ context.Context, id, description string, categoryID *string, paymentMethod string, accountID *string) error {
+func (f *fakeMovementRepo) UpdateMetadata(_ context.Context, id, description string, categoryID *string, paymentMethod string, accountID, planID *string) error {
 	if f.updateMetadataErr != nil {
 		return f.updateMetadataErr
 	}
@@ -248,6 +265,7 @@ func (f *fakeMovementRepo) UpdateMetadata(_ context.Context, id, description str
 	m.CategoryID = categoryID
 	m.PaymentMethod = paymentMethod
 	m.AccountID = accountID
+	m.PlanID = planID
 	return nil
 }
 
@@ -662,6 +680,19 @@ func (f *fakeUserSettingsRepo) UpdateEnabled(_ context.Context, userID string, l
 	return &cp, nil
 }
 
+func (f *fakeUserSettingsRepo) SetCloudStorageEntitled(_ context.Context, userID string, entitled bool) (*dto.UserSettingsDTO, error) {
+	s, ok := f.byUserID[userID]
+	if !ok {
+		now := time.Now().UTC()
+		s = dto.DefaultUserSettings(userID, now)
+	}
+	s.CloudStorageEntitled = entitled
+	s.UpdatedAt = time.Now().UTC()
+	f.byUserID[userID] = s
+	cp := *s
+	return &cp, nil
+}
+
 func (f *fakeUserSettingsRepo) SetDefaultCategory(_ context.Context, userID string, categoryID *string) (*dto.UserSettingsDTO, error) {
 	s, ok := f.byUserID[userID]
 	if !ok {
@@ -773,10 +804,151 @@ func (f *fakePaymentMethodRepo) Delete(_ context.Context, userID, id string) err
 		return apperrors.ErrNotFound
 	}
 	delete(f.byID, id)
-	return nil
+// fakeUserRepo is an in-memory UserRepository.
+type fakeUserRepo struct {
+	byID map[string]*dto.UserDTO
 }
 
-// fakeCategoryRepo is an in-memory CategoryRepository, mirroring the
+func newFakeUserRepo() *fakeUserRepo {
+	return &fakeUserRepo{byID: map[string]*dto.UserDTO{}}
+}
+
+func (f *fakeUserRepo) Upsert(_ context.Context, user *dto.UserDTO) (*dto.UserDTO, error) {
+	now := time.Now().UTC()
+	existing, ok := f.byID[user.ID]
+	createdAt := now
+	if ok {
+		createdAt = existing.CreatedAt
+	}
+	stored := &dto.UserDTO{
+		ID: user.ID, Provider: user.Provider, ExternalID: user.ExternalID,
+		Email: user.Email, DisplayName: user.DisplayName,
+		CreatedAt: createdAt, UpdatedAt: now,
+	}
+	f.byID[user.ID] = stored
+	cp := *stored
+	return &cp, nil
+}
+
+func (f *fakeUserRepo) GetByID(_ context.Context, id string) (*dto.UserDTO, error) {
+	u, ok := f.byID[id]
+	if !ok {
+		return nil, apperrors.ErrNotFound
+	}
+	cp := *u
+	return &cp, nil
+}
+
+func (f *fakeUserRepo) Exists(_ context.Context, id string) (bool, error) {
+	_, ok := f.byID[id]
+	return ok, nil
+}
+
+// fakeSubscriptionRepo is an in-memory SubscriptionRepository.
+type fakeSubscriptionRepo struct {
+	byUserID map[string]*dto.SubscriptionDTO
+}
+
+func newFakeSubscriptionRepo() *fakeSubscriptionRepo {
+	return &fakeSubscriptionRepo{byUserID: map[string]*dto.SubscriptionDTO{}}
+}
+
+func (f *fakeSubscriptionRepo) Upsert(_ context.Context, sub *dto.SubscriptionDTO) (*dto.SubscriptionDTO, error) {
+	now := time.Now().UTC()
+	createdAt := now
+	if existing, ok := f.byUserID[sub.UserID]; ok {
+		createdAt = existing.CreatedAt
+	}
+	stored := &dto.SubscriptionDTO{
+		UserID: sub.UserID, Provider: sub.Provider, ProviderSubscriptionID: sub.ProviderSubscriptionID,
+		Status: sub.Status, CurrentPeriodEnd: sub.CurrentPeriodEnd,
+		CreatedAt: createdAt, UpdatedAt: now,
+	}
+	f.byUserID[sub.UserID] = stored
+	cp := *stored
+	return &cp, nil
+}
+
+func (f *fakeSubscriptionRepo) GetByUserID(_ context.Context, userID string) (*dto.SubscriptionDTO, error) {
+	s, ok := f.byUserID[userID]
+	if !ok {
+		return nil, apperrors.ErrNotFound
+	}
+	cp := *s
+	return &cp, nil
+}
+
+func (f *fakeSubscriptionRepo) ListLapsable(_ context.Context, asOf time.Time, graceDays int) ([]*dto.SubscriptionDTO, error) {
+	var out []*dto.SubscriptionDTO
+	for _, s := range f.byUserID {
+		if s.Status != dto.SubscriptionStatusPastDue && s.Status != dto.SubscriptionStatusCanceled {
+			continue
+		}
+		if !s.CurrentPeriodEnd.AddDate(0, 0, graceDays).After(asOf) {
+			cp := *s
+			out = append(out, &cp)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].UserID < out[j].UserID })
+	return out, nil
+}
+
+// fakePlanRepo is an in-memory PlanRepository.
+type fakePlanRepo struct {
+	byID   map[string]*dto.PlanDTO
+	nextID int
+}
+
+func newFakePlanRepo() *fakePlanRepo {
+	return &fakePlanRepo{byID: map[string]*dto.PlanDTO{}}
+}
+
+func (f *fakePlanRepo) Create(_ context.Context, p *dto.PlanDTO) (*dto.PlanDTO, error) {
+	if p.ID == "" {
+		f.nextID++
+		p.ID = fmt.Sprintf("plan-%d", f.nextID)
+	}
+	if p.CreatedAt.IsZero() {
+		p.CreatedAt = time.Now().UTC()
+	}
+	cp := *p
+	f.byID[p.ID] = &cp
+	return p, nil
+}
+
+func (f *fakePlanRepo) GetByID(_ context.Context, userID, id string) (*dto.PlanDTO, error) {
+	p, ok := f.byID[id]
+	if !ok || p.UserID != userID {
+		return nil, apperrors.ErrNotFound
+	}
+	cp := *p
+	return &cp, nil
+}
+
+func (f *fakePlanRepo) ListByUser(_ context.Context, userID string) ([]*dto.PlanDTO, error) {
+	var out []*dto.PlanDTO
+	for _, p := range f.byID {
+		if p.UserID == userID {
+			cp := *p
+			out = append(out, &cp)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	return out, nil
+}
+
+func (f *fakePlanRepo) Update(_ context.Context, userID, id, name string, targetAmount *int64, monthlyTargetAmount int64, endDate *time.Time, status string) error {
+	p, ok := f.byID[id]
+	if !ok || p.UserID != userID {
+		return apperrors.ErrNotFound
+	}
+	p.Name = name
+	p.TargetAmount = targetAmount
+	p.MonthlyTargetAmount = monthlyTargetAmount
+	p.EndDate = endDate
+	p.Status = status
+>>>>>>> origin/main
+ is an in-memory CategoryRepository, mirroring the
 // semantics the SQLite implementation guarantees: categories are global
 // (no user scoping on GetByID/ListAll/Update), ContributorIDs gates
 // edits, has is a plain positive "who currently has this category" fact
