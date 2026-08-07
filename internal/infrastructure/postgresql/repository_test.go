@@ -376,7 +376,7 @@ func TestMovementUpdateMetadataAndFinancial(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := repo.UpdateMetadata(ctx, created.ID, "renamed", &transport.ID, string(entities.PaymentMethodPix), &account.ID, nil); err != nil {
+	if err := repo.UpdateMetadata(ctx, created.ID, "renamed", &transport.ID, "pix", &account.ID, nil); err != nil {
 		t.Fatalf("update metadata: %v", err)
 	}
 	got, err := repo.GetByID(ctx, created.ID)
@@ -406,7 +406,7 @@ func TestMovementUpdateMetadataAndFinancial(t *testing.T) {
 		t.Errorf("metadata must be untouched by UpdateFinancial: %+v", got)
 	}
 
-	if err := repo.UpdateMetadata(ctx, "missing", "x", nil, string(entities.PaymentMethodOther), nil, nil); !errors.Is(err, apperrors.ErrNotFound) {
+	if err := repo.UpdateMetadata(ctx, "missing", "x", nil, "other", nil, nil); !errors.Is(err, apperrors.ErrNotFound) {
 		t.Errorf("update metadata on missing id: want ErrNotFound, got %v", err)
 	}
 	if err := repo.UpdateFinancial(ctx, "missing", -1, "usd", time.Now()); !errors.Is(err, apperrors.ErrNotFound) {

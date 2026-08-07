@@ -59,7 +59,7 @@ func TestCreateMovementUsesLocalStatusWhenSyncDisabled(t *testing.T) {
 	settings := newFakeUserSettingsRepo()
 	movements := newFakeMovementRepo()
 createMovement := NewCreateMovement(movements, newFakeAccountRepo(), newFakePaymentMethodRepo(), newFakePlanRepo(), newFakeCategoryRepo(), settings)
-	updateSettings := NewUpdateUserSettings(settings, movements, newFakeCategoryRepo())
+	updateSettings := NewUpdateUserSettings(settings, movements, newFakeCategoryRepo(), newFakeSubscriptionRepo())
 
 	if _, err := updateSettings.Execute(context.Background(), "u1", UpdateUserSettingsInput{LedgerSyncEnabled: boolPtr(false)}); err != nil {
 		t.Fatal(err)
@@ -94,7 +94,7 @@ func TestDisableCreateEnableCyclePushesExactlyTheBacklog(t *testing.T) {
 	settings := newFakeUserSettingsRepo()
 	movements := newFakeMovementRepo()
 createMovement := NewCreateMovement(movements, newFakeAccountRepo(), newFakePaymentMethodRepo(), newFakePlanRepo(), newFakeCategoryRepo(), settings)
-	updateSettings := NewUpdateUserSettings(settings, movements, newFakeCategoryRepo())
+	updateSettings := NewUpdateUserSettings(settings, movements, newFakeCategoryRepo(), newFakeSubscriptionRepo())
 	ctx := context.Background()
 
 	// Something synced before any of this happened — must never be

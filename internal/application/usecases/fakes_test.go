@@ -804,6 +804,9 @@ func (f *fakePaymentMethodRepo) Delete(_ context.Context, userID, id string) err
 		return apperrors.ErrNotFound
 	}
 	delete(f.byID, id)
+	return nil
+}
+
 // fakeUserRepo is an in-memory UserRepository.
 type fakeUserRepo struct {
 	byID map[string]*dto.UserDTO
@@ -947,8 +950,10 @@ func (f *fakePlanRepo) Update(_ context.Context, userID, id, name string, target
 	p.MonthlyTargetAmount = monthlyTargetAmount
 	p.EndDate = endDate
 	p.Status = status
->>>>>>> origin/main
- is an in-memory CategoryRepository, mirroring the
+	return nil
+}
+
+// fakeCategoryRepo is an in-memory CategoryRepository, mirroring the
 // semantics the SQLite implementation guarantees: categories are global
 // (no user scoping on GetByID/ListAll/Update), ContributorIDs gates
 // edits, has is a plain positive "who currently has this category" fact

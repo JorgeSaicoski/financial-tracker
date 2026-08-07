@@ -43,7 +43,7 @@ uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), newFakePaym
 // category or currency.
 func TestCreateMovementImplicitlyRegistersPaymentMethod(t *testing.T) {
 	methods := newFakePaymentMethodRepo()
-	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), methods, newFakeCategoryRepo(), newFakeUserSettingsRepo())
+	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), methods, newFakePlanRepo(), newFakeCategoryRepo(), newFakeUserSettingsRepo())
 
 	m, err := uc.Execute(context.Background(), CreateMovementInput{
 		UserID: "u1", Amount: 100, Currency: "usd", PaymentMethod: "iou",
@@ -75,7 +75,7 @@ func TestCreateMovementNormalizesPaymentMethodCasing(t *testing.T) {
 	if _, err := methods.EnsureByName(context.Background(), "u1", "credit_card"); err != nil {
 		t.Fatal(err)
 	}
-	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), methods, newFakeCategoryRepo(), newFakeUserSettingsRepo())
+	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), methods, newFakePlanRepo(), newFakeCategoryRepo(), newFakeUserSettingsRepo())
 
 	m, err := uc.Execute(context.Background(), CreateMovementInput{
 		UserID: "u1", Amount: 100, Currency: "usd", PaymentMethod: "Credit_Card",
