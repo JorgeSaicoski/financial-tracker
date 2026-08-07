@@ -9,7 +9,6 @@ import "time"
 // show provenance and the generator can be idempotent.
 type RecurringRule struct {
 	ID            string
-	UserID        string
 	Amount        int64
 	Currency      string
 	Description   string

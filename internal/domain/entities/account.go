@@ -11,7 +11,6 @@ import (
 // optionally reference an account so its balance can be tracked.
 type Account struct {
 	ID        string
-	UserID    string
 	Name      string
 	Type      AccountType
 	Currency  string
@@ -66,7 +65,6 @@ func (a *Account) validateTransfer(other *Account, amount int64) error {
 func (a *Account) transferLeg(amount int64, description string, timestamp time.Time) *Movement {
 	transferCategoryID := CategoryTransferID
 	return &Movement{
-		UserID:        a.UserID,
 		Amount:        amount,
 		Currency:      a.Currency,
 		Description:   description,

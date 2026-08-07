@@ -36,15 +36,20 @@ func (s PlanStatus) IsValid() bool {
 // funding account).
 type Plan struct {
 	ID                  string
-	UserID              string
 	Name                string
 	Type                PlanType
-	TargetAmount        *int64
 	Currency            string
-	MonthlyTargetAmount int64
-	AccountID           *string
+	MonthlyTargetAmount []MonthlyTargetAmount
 	StartDate           time.Time
 	EndDate             *time.Time
 	Status              PlanStatus
 	CreatedAt           time.Time
+}
+
+type MonthlyTargetAmount struct {
+	CostTarget   int64
+	IncomeTarget int64
+	CostActual   int64
+	IncomeActual int64
+	Date         time.Time
 }
