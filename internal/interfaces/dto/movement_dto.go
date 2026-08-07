@@ -126,6 +126,13 @@ type SyncSummaryResponse struct {
 	Failed int `json:"failed"`
 }
 
+// PaymentMethodResponse is one row of the caller's payment-method
+// registry (BACK-17).
+type PaymentMethodResponse struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
 // CategoryResponse is one row of the global category registry (BACK-14
 // follow-up: categories are shared, not per-user — every caller sees the
 // same list from GET /categories). AvoidabilityPercent is nil only for
@@ -145,8 +152,8 @@ type CategoryResponse struct {
 }
 
 type CategoriesResponse struct {
-	Categories     []CategoryResponse `json:"categories"`
-	PaymentMethods []string           `json:"payment_methods"`
+	Categories     []CategoryResponse      `json:"categories"`
+	PaymentMethods []PaymentMethodResponse `json:"payment_methods"`
 }
 
 type ErrorResponse struct {

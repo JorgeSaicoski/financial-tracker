@@ -14,14 +14,15 @@ import (
 type createMovementUseCase struct {
 	repo       repositories.MovementRepository
 	accounts   repositories.AccountRepository
+	methods    repositories.PaymentMethodRepository
 	plans      repositories.PlanRepository
 	categories repositories.CategoryRepository
 	settings   repositories.UserSettingsRepository
 }
 
 // NewCreateMovement returns interface type for dependency injection.
-func NewCreateMovement(repo repositories.MovementRepository, accounts repositories.AccountRepository, plans repositories.PlanRepository, categories repositories.CategoryRepository, settings repositories.UserSettingsRepository) CreateMovementUseCase {
-	return &createMovementUseCase{repo: repo, accounts: accounts, plans: plans, categories: categories, settings: settings}
+func NewCreateMovement(repo repositories.MovementRepository, accounts repositories.AccountRepository, methods repositories.PaymentMethodRepository, plans repositories.PlanRepository, categories repositories.CategoryRepository, settings repositories.UserSettingsRepository) CreateMovementUseCase {
+	return &createMovementUseCase{repo: repo, accounts: accounts, methods: methods, plans: plans, categories: categories, settings: settings}
 }
 
 func (uc *createMovementUseCase) Execute(ctx context.Context, input CreateMovementInput) (*dto.MovementDTO, error) {
@@ -32,7 +33,7 @@ func (uc *createMovementUseCase) Execute(ctx context.Context, input CreateMoveme
 		return nil, err
 	}
 
-	paymentMethod, err := normalizePaymentMethod(input.PaymentMethod)
+	paymentMethod, err := resolvePaymentMethod(ctx, uc.methods, input.UserID, input.PaymentMethod)
 	if err != nil {
 		return nil, err
 	}
@@ -95,19 +96,4 @@ func (uc *createMovementUseCase) Execute(ctx context.Context, input CreateMoveme
 	}
 
 	return uc.repo.Create(ctx, dto.MovementFromEntity(movement))
-}
-
-// normalizePaymentMethod applies the empty-means-other default and
-// rejects values outside the domain's fixed payment-method list. Category
-// doesn't go through here — it's a real foreign key now, validated via
-// resolveCategoryID in categories.go.
-func normalizePaymentMethod(method string) (entities.PaymentMethod, error) {
-	m := entities.PaymentMethod(method)
-	if m == "" {
-		m = entities.PaymentMethodOther
-	}
-	if !m.IsValid() {
-		return "", apperrors.ErrInvalidInput
-	}
-	return m, nil
 }

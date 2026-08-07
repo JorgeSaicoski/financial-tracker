@@ -11,7 +11,7 @@ import (
 )
 
 func TestCreateMovementValidation(t *testing.T) {
-	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), newFakePlanRepo(), newFakeCategoryRepo(), newFakeUserSettingsRepo())
+uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), newFakePaymentMethodRepo(), newFakePlanRepo(), newFakeCategoryRepo(), newFakeUserSettingsRepo())
 
 	cases := []struct {
 		name  string
@@ -20,7 +20,10 @@ func TestCreateMovementValidation(t *testing.T) {
 		{"missing user", CreateMovementInput{Amount: 100, Currency: "usd"}},
 		{"missing currency", CreateMovementInput{UserID: "u1", Amount: 100}},
 		{"zero amount", CreateMovementInput{UserID: "u1", Currency: "usd"}},
-		{"unknown payment method", CreateMovementInput{UserID: "u1", Amount: 100, Currency: "usd", PaymentMethod: "iou"}},
+		// "unknown payment method" is intentionally absent (BACK-17): an
+		// unrecognized payment method is no longer rejected, it's
+		// implicitly registered — see
+		// TestCreateMovementImplicitlyRegistersPaymentMethod below.
 		{"avoidability_percent out of range", CreateMovementInput{UserID: "u1", Amount: 100, Currency: "usd", AvoidabilityOverridePercent: intPtrAv(101)}},
 		{"unknown category_id", CreateMovementInput{UserID: "u1", Amount: 100, Currency: "usd", CategoryID: strPtrAv("nope")}},
 	}
@@ -33,9 +36,61 @@ func TestCreateMovementValidation(t *testing.T) {
 	}
 }
 
+// TestCreateMovementImplicitlyRegistersPaymentMethod covers BACK-17's
+// replacement for the old fixed-enum rejection: a payment method the
+// caller has never used before ("iou") is no longer invalid — it's
+// implicitly registered, same idempotent-Add shape as a brand-new
+// category or currency.
+func TestCreateMovementImplicitlyRegistersPaymentMethod(t *testing.T) {
+	methods := newFakePaymentMethodRepo()
+	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), methods, newFakePlanRepo(), newFakeCategoryRepo(), newFakeUserSettingsRepo())
+
+	m, err := uc.Execute(context.Background(), CreateMovementInput{
+		UserID: "u1", Amount: 100, Currency: "usd", PaymentMethod: "iou",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if m.PaymentMethod != "iou" {
+		t.Errorf("payment method = %q, want iou", m.PaymentMethod)
+	}
+	rows, err := methods.ListByUser(context.Background(), "u1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Name != "iou" {
+		t.Errorf("want exactly one implicitly-registered payment method %q, got %+v", "iou", rows)
+	}
+}
+
+// TestCreateMovementNormalizesPaymentMethodCasing guards against exactly
+// the drift the review flagged: resolvePaymentMethod used to echo back
+// the caller's raw-cased input after EnsureByName instead of the
+// registry's canonical stored name. Left unfixed, a case-variant of a
+// reserved system name ("Credit_Card") would get stored verbatim on the
+// movement, breaking exact-string comparisons against
+// entities.PaymentMethodCreditCard elsewhere.
+func TestCreateMovementNormalizesPaymentMethodCasing(t *testing.T) {
+	methods := newFakePaymentMethodRepo()
+	if _, err := methods.EnsureByName(context.Background(), "u1", "credit_card"); err != nil {
+		t.Fatal(err)
+	}
+	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), methods, newFakePlanRepo(), newFakeCategoryRepo(), newFakeUserSettingsRepo())
+
+	m, err := uc.Execute(context.Background(), CreateMovementInput{
+		UserID: "u1", Amount: 100, Currency: "usd", PaymentMethod: "Credit_Card",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if m.PaymentMethod != string(entities.PaymentMethodCreditCard) {
+		t.Errorf("payment method = %q, want canonical %q", m.PaymentMethod, entities.PaymentMethodCreditCard)
+	}
+}
+
 func TestCreateMovementDefaultsAndState(t *testing.T) {
 	repo := newFakeMovementRepo()
-	uc := NewCreateMovement(repo, newFakeAccountRepo(), newFakePlanRepo(), newFakeCategoryRepo(), newFakeUserSettingsRepo())
+uc := NewCreateMovement(repo, newFakeAccountRepo(), newFakePaymentMethodRepo(), newFakePlanRepo(), newFakeCategoryRepo(), newFakeUserSettingsRepo())
 
 	m, err := uc.Execute(context.Background(), CreateMovementInput{
 		UserID: "u1", Amount: -500, Currency: "usd",
@@ -51,7 +106,7 @@ func TestCreateMovementDefaultsAndState(t *testing.T) {
 	if m.CategoryID != nil {
 		t.Errorf("category_id = %v, want nil (uncategorized)", m.CategoryID)
 	}
-	if m.PaymentMethod != string(entities.PaymentMethodOther) {
+	if m.PaymentMethod != "other" {
 		t.Errorf("payment method = %q, want other", m.PaymentMethod)
 	}
 	if m.Status != string(entities.MovementStatusActive) {
@@ -66,17 +121,17 @@ func TestCreateMovementDefaultsAndState(t *testing.T) {
 }
 
 func TestCreateMovementKeepsExplicitFields(t *testing.T) {
-	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), newFakePlanRepo(), newFakeCategoryRepo(), newFakeUserSettingsRepo())
+uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), newFakePaymentMethodRepo(), newFakePlanRepo(), newFakeCategoryRepo(), newFakeUserSettingsRepo())
 
 	m, err := uc.Execute(context.Background(), CreateMovementInput{
 		UserID: "u1", Amount: -500, Currency: "usd",
 		Description:   "groceries",
-		PaymentMethod: string(entities.PaymentMethodPix),
+		PaymentMethod: "pix",
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if m.Description != "groceries" || m.PaymentMethod != string(entities.PaymentMethodPix) {
+	if m.Description != "groceries" || m.PaymentMethod != "pix" {
 		t.Errorf("fields not preserved: %+v", m)
 	}
 }
@@ -92,7 +147,7 @@ func TestCreateMovementRequiresExistingCategoryID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), newFakePlanRepo(), categories, newFakeUserSettingsRepo())
+uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), newFakePaymentMethodRepo(), newFakePlanRepo(), categories, newFakeUserSettingsRepo())
 
 	m, err := uc.Execute(context.Background(), CreateMovementInput{
 		UserID: "u1", Amount: -500, Currency: "usd", CategoryID: &food.ID,
@@ -119,7 +174,7 @@ func TestCreateMovementRejectsCategoryUserDoesNotHave(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), newFakePlanRepo(), categories, newFakeUserSettingsRepo())
+uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), newFakePaymentMethodRepo(), newFakePlanRepo(), categories, newFakeUserSettingsRepo())
 
 	_, err = uc.Execute(context.Background(), CreateMovementInput{
 		UserID: "u1", Amount: -500, Currency: "usd", CategoryID: &food.ID,
@@ -141,7 +196,7 @@ func TestCreateMovementRejectsCategoryRemovedFromCallersList(t *testing.T) {
 	if err := categories.Remove(context.Background(), "u1", restaurant.ID); err != nil {
 		t.Fatal(err)
 	}
-	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), newFakePlanRepo(), categories, newFakeUserSettingsRepo())
+uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), newFakePaymentMethodRepo(), newFakePlanRepo(), categories, newFakeUserSettingsRepo())
 
 	_, err = uc.Execute(context.Background(), CreateMovementInput{
 		UserID: "u1", Amount: -500, Currency: "usd", CategoryID: &restaurant.ID,
@@ -160,7 +215,7 @@ func TestCreateMovementAllowsSystemCategoryRegardlessOfHasList(t *testing.T) {
 	if _, err := categories.Create(context.Background(), &dto.CategoryDTO{ID: entities.CategoryOtherID, Name: entities.CategoryOther}); err != nil {
 		t.Fatal(err)
 	}
-	uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), newFakePlanRepo(), categories, newFakeUserSettingsRepo())
+uc := NewCreateMovement(newFakeMovementRepo(), newFakeAccountRepo(), newFakePaymentMethodRepo(), newFakePlanRepo(), categories, newFakeUserSettingsRepo())
 
 	otherID := entities.CategoryOtherID
 	m, err := uc.Execute(context.Background(), CreateMovementInput{

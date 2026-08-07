@@ -125,7 +125,7 @@ func (m *MovementDTO) ToEntity() *entities.Movement {
 		Currency:                    m.Currency,
 		Description:                 m.Description,
 		CategoryID:                  m.CategoryID,
-		PaymentMethod:               entities.PaymentMethod(m.PaymentMethod),
+		PaymentMethod:               m.PaymentMethod,
 		AvoidabilityOverridePercent: m.AvoidabilityOverridePercent,
 		AccountID:                   m.AccountID,
 		TransferID:                  m.TransferID,

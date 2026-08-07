@@ -40,7 +40,7 @@ func testMovement(amount int64) *dto.MovementDTO {
 		Amount:        amount,
 		Currency:      "usd",
 		Description:   "coffee",
-		PaymentMethod: string(entities.PaymentMethodCash),
+		PaymentMethod: "cash",
 		Status:        string(entities.MovementStatusActive),
 		SyncStatus:    string(entities.SyncStatusPending),
 		Timestamp:     now,
@@ -72,7 +72,7 @@ func TestMovementCreateGetRoundtrip(t *testing.T) {
 		t.Fatalf("get: %v", err)
 	}
 	if got.Amount != -450 || got.Description != "coffee" ||
-		got.Category != "food" || got.PaymentMethod != string(entities.PaymentMethodCash) ||
+		got.Category != "food" || got.PaymentMethod != "cash" ||
 		got.Status != string(entities.MovementStatusActive) || got.SyncStatus != string(entities.SyncStatusPending) {
 		t.Errorf("roundtrip mismatch: %+v", got)
 	}
@@ -338,7 +338,7 @@ func TestMovementUpdateMetadataAndFinancial(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := repo.UpdateMetadata(ctx, created.ID, "renamed", &transport.ID, string(entities.PaymentMethodPix), &account.ID, nil); err != nil {
+	if err := repo.UpdateMetadata(ctx, created.ID, "renamed", &transport.ID, "pix", &account.ID, nil); err != nil {
 		t.Fatalf("update metadata: %v", err)
 	}
 	got, err := repo.GetByID(ctx, created.ID)
@@ -346,7 +346,7 @@ func TestMovementUpdateMetadataAndFinancial(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got.Description != "renamed" || got.Category != "transport" ||
-		got.PaymentMethod != string(entities.PaymentMethodPix) || got.AccountID == nil || *got.AccountID != account.ID {
+		got.PaymentMethod != "pix" || got.AccountID == nil || *got.AccountID != account.ID {
 		t.Errorf("metadata not persisted: %+v", got)
 	}
 	if got.Amount != -450 {
@@ -368,7 +368,7 @@ func TestMovementUpdateMetadataAndFinancial(t *testing.T) {
 		t.Errorf("metadata must be untouched by UpdateFinancial: %+v", got)
 	}
 
-	if err := repo.UpdateMetadata(ctx, "missing", "x", nil, string(entities.PaymentMethodOther), nil, nil); !errors.Is(err, apperrors.ErrNotFound) {
+	if err := repo.UpdateMetadata(ctx, "missing", "x", nil, "other", nil, nil); !errors.Is(err, apperrors.ErrNotFound) {
 		t.Errorf("update metadata on missing id: want ErrNotFound, got %v", err)
 	}
 	if err := repo.UpdateFinancial(ctx, "missing", -1, "usd", time.Now()); !errors.Is(err, apperrors.ErrNotFound) {
@@ -638,7 +638,7 @@ func TestRecurringRuleUpdatesAndSetActive(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := repo.UpdateMetadata(ctx, rule.ID, "new desc", &food.ID, string(entities.PaymentMethodCash), nil); err != nil {
+	if err := repo.UpdateMetadata(ctx, rule.ID, "new desc", &food.ID, "cash", nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := repo.UpdateFinancial(ctx, rule.ID, -9999, "brl"); err != nil {

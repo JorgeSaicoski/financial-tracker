@@ -16,16 +16,17 @@ import (
 )
 
 type movementHandler struct {
-	createMovement usecases.CreateMovementUseCase
-	createPurchase usecases.CreateCreditCardPurchaseUseCase
-	getMovement    usecases.GetMovementUseCase
-	listMovements  usecases.ListMovementsUseCase
-	updateMovement usecases.UpdateMovementUseCase
-	cancelMovement usecases.CancelMovementUseCase
-	cancelPurchase usecases.CancelCreditCardPurchaseUseCase
-	getCashflow    usecases.GetCashflowUseCase
-	listCategories usecases.ListCategoriesUseCase
-	syncRunner     services.SyncRunner
+	createMovement     usecases.CreateMovementUseCase
+	createPurchase     usecases.CreateCreditCardPurchaseUseCase
+	getMovement        usecases.GetMovementUseCase
+	listMovements      usecases.ListMovementsUseCase
+	updateMovement     usecases.UpdateMovementUseCase
+	cancelMovement     usecases.CancelMovementUseCase
+	cancelPurchase     usecases.CancelCreditCardPurchaseUseCase
+	getCashflow        usecases.GetCashflowUseCase
+	listPaymentMethods usecases.ListPaymentMethodsUseCase
+	listCategories     usecases.ListCategoriesUseCase
+	syncRunner         services.SyncRunner
 
 	defaultCurrency string
 	log             logger.Logger
@@ -41,24 +42,26 @@ func NewMovementHandler(
 	cancelMovement usecases.CancelMovementUseCase,
 	cancelPurchase usecases.CancelCreditCardPurchaseUseCase,
 	getCashflow usecases.GetCashflowUseCase,
+	listPaymentMethods usecases.ListPaymentMethodsUseCase,
 	listCategories usecases.ListCategoriesUseCase,
 	syncRunner services.SyncRunner,
 	defaultCurrency string,
 	log logger.Logger,
 ) MovementHandler {
 	return &movementHandler{
-		createMovement:  createMovement,
-		createPurchase:  createPurchase,
-		getMovement:     getMovement,
-		listMovements:   listMovements,
-		updateMovement:  updateMovement,
-		cancelMovement:  cancelMovement,
-		cancelPurchase:  cancelPurchase,
-		getCashflow:     getCashflow,
-		listCategories:  listCategories,
-		syncRunner:      syncRunner,
-		defaultCurrency: defaultCurrency,
-		log:             log,
+		createMovement:     createMovement,
+		createPurchase:     createPurchase,
+		getMovement:        getMovement,
+		listMovements:      listMovements,
+		updateMovement:     updateMovement,
+		cancelMovement:     cancelMovement,
+		cancelPurchase:     cancelPurchase,
+		getCashflow:        getCashflow,
+		listPaymentMethods: listPaymentMethods,
+		listCategories:     listCategories,
+		syncRunner:         syncRunner,
+		defaultCurrency:    defaultCurrency,
+		log:                log,
 	}
 }
 
@@ -93,7 +96,7 @@ func (h *movementHandler) CreateMovement(w http.ResponseWriter, r *http.Request)
 	}
 
 	if req.Installments > 1 {
-		if entities.PaymentMethod(req.PaymentMethod) != entities.PaymentMethodCreditCard {
+		if req.PaymentMethod != entities.PaymentMethodCreditCard {
 			h.writeError(w, http.StatusBadRequest, "installments require payment_method \"credit_card\"")
 			return
 		}
@@ -367,8 +370,10 @@ func (h *movementHandler) Cashflow(w http.ResponseWriter, r *http.Request) {
 
 // ListCategories handles GET /categories: the full global category
 // registry (BACK-14 follow-up — id, name, avoidability_percent,
-// is_contributor relative to the caller) plus the still-fixed
-// payment-method list (BACK-17's job to turn into its own registry).
+// is_contributor relative to the caller) plus the caller's own
+// payment-method registry (BACK-17 — id, name; system rows
+// "credit_card"/"bank_transfer" and the ordinary first-run defaults
+// lazily ensured first).
 func (h *movementHandler) ListCategories(w http.ResponseWriter, r *http.Request) {
 	userID, ok := reqctx.UserID(r.Context())
 	if !ok {
@@ -386,14 +391,27 @@ func (h *movementHandler) ListCategories(w http.ResponseWriter, r *http.Request)
 		categories = append(categories, toCategoryResponse(c, userID))
 	}
 
-	methods := make([]string, 0)
-	for _, m := range entities.PaymentMethods() {
-		methods = append(methods, string(m))
+	methodRows, err := h.listPaymentMethods.Execute(r.Context(), userID)
+	if err != nil {
+		h.writeUsecaseError(w, "list payment methods", err)
+		return
 	}
+	methods := make([]interfacedto.PaymentMethodResponse, 0, len(methodRows))
+	for _, m := range methodRows {
+		methods = append(methods, toPaymentMethodResponse(m))
+	}
+
 	h.writeJSON(w, http.StatusOK, interfacedto.CategoriesResponse{
 		Categories:     categories,
 		PaymentMethods: methods,
 	})
+}
+
+func toPaymentMethodResponse(m *dto.PaymentMethodDTO) interfacedto.PaymentMethodResponse {
+	return interfacedto.PaymentMethodResponse{
+		ID:   m.ID,
+		Name: m.Name,
+	}
 }
 
 func parseNonNegativeIntParam(r *http.Request, name string) (int, error) {

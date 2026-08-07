@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/JorgeSaicoski/financial-tracker/internal/application/dto"
@@ -726,6 +727,84 @@ func (f *fakeUserSettingsRepo) setEntitled(userID string, ledgerSyncEntitled boo
 		f.byUserID[userID] = s
 	}
 	s.LedgerSyncEntitled = ledgerSyncEntitled
+}
+
+// fakePaymentMethodRepo is an in-memory PaymentMethodRepository, mirroring
+// the semantics the SQLite implementation guarantees: EnsureByName is a
+// case-insensitive check-then-insert, Update/Delete/GetByID are scoped
+// to (userID, id) and return apperrors.ErrNotFound otherwise.
+type fakePaymentMethodRepo struct {
+	byID   map[string]*dto.PaymentMethodDTO
+	nextID int
+}
+
+func newFakePaymentMethodRepo() *fakePaymentMethodRepo {
+	return &fakePaymentMethodRepo{byID: map[string]*dto.PaymentMethodDTO{}}
+}
+
+func (f *fakePaymentMethodRepo) EnsureByName(_ context.Context, userID, name string) (*dto.PaymentMethodDTO, error) {
+	for _, m := range f.byID {
+		if m.UserID == userID && strings.EqualFold(m.Name, name) {
+			cp := *m
+			return &cp, nil
+		}
+	}
+	return f.Create(context.Background(), &dto.PaymentMethodDTO{
+		UserID: userID,
+		Name:   name,
+	})
+}
+
+func (f *fakePaymentMethodRepo) GetByID(_ context.Context, userID, id string) (*dto.PaymentMethodDTO, error) {
+	m, ok := f.byID[id]
+	if !ok || m.UserID != userID {
+		return nil, apperrors.ErrNotFound
+	}
+	cp := *m
+	return &cp, nil
+}
+
+func (f *fakePaymentMethodRepo) ListByUser(_ context.Context, userID string) ([]*dto.PaymentMethodDTO, error) {
+	var out []*dto.PaymentMethodDTO
+	for _, m := range f.byID {
+		if m.UserID == userID {
+			cp := *m
+			out = append(out, &cp)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+func (f *fakePaymentMethodRepo) Create(_ context.Context, m *dto.PaymentMethodDTO) (*dto.PaymentMethodDTO, error) {
+	if m.ID == "" {
+		f.nextID++
+		m.ID = fmt.Sprintf("pm-%d", f.nextID)
+	}
+	if m.CreatedAt.IsZero() {
+		m.CreatedAt = time.Now().UTC()
+	}
+	cp := *m
+	f.byID[m.ID] = &cp
+	return m, nil
+}
+
+func (f *fakePaymentMethodRepo) Update(_ context.Context, userID, id, name string) error {
+	m, ok := f.byID[id]
+	if !ok || m.UserID != userID {
+		return apperrors.ErrNotFound
+	}
+	m.Name = name
+	return nil
+}
+
+func (f *fakePaymentMethodRepo) Delete(_ context.Context, userID, id string) error {
+	m, ok := f.byID[id]
+	if !ok || m.UserID != userID {
+		return apperrors.ErrNotFound
+	}
+	delete(f.byID, id)
+	return nil
 }
 
 // fakeUserRepo is an in-memory UserRepository.

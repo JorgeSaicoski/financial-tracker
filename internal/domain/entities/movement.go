@@ -10,10 +10,11 @@ import "time"
 // tracks whether the movement has also been recorded in ledger-service.
 type Movement struct {
 	ID            string
+	UserID        string
 	Amount        int64
 	Currency      string
 	Description   string
-	PaymentMethod PaymentMethod
+	PaymentMethod string
 
 	// CategoryID references the shared categories registry (BACK-14
 	// follow-up) — nil means genuinely uncategorized. Unlike most other

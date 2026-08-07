@@ -21,7 +21,7 @@ func activeMovement(id string, amount int64, syncStatus entities.SyncStatus) *dt
 		UserID:        "u1",
 		Amount:        amount,
 		Currency:      "usd",
-		PaymentMethod: string(entities.PaymentMethodPix),
+		PaymentMethod: "pix",
 		Status:        string(entities.MovementStatusActive),
 		SyncStatus:    string(syncStatus),
 		Timestamp:     time.Now().UTC(),

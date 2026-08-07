@@ -58,7 +58,7 @@ func TestGetUserSettingsSurfacesSubscriptionFields(t *testing.T) {
 func TestCreateMovementUsesLocalStatusWhenSyncDisabled(t *testing.T) {
 	settings := newFakeUserSettingsRepo()
 	movements := newFakeMovementRepo()
-	createMovement := NewCreateMovement(movements, newFakeAccountRepo(), newFakePlanRepo(), newFakeCategoryRepo(), settings)
+createMovement := NewCreateMovement(movements, newFakeAccountRepo(), newFakePaymentMethodRepo(), newFakePlanRepo(), newFakeCategoryRepo(), settings)
 	updateSettings := NewUpdateUserSettings(settings, movements, newFakeCategoryRepo(), newFakeSubscriptionRepo())
 
 	if _, err := updateSettings.Execute(context.Background(), "u1", UpdateUserSettingsInput{LedgerSyncEnabled: boolPtr(false)}); err != nil {
@@ -93,7 +93,7 @@ func TestCreateMovementUsesLocalStatusWhenSyncDisabled(t *testing.T) {
 func TestDisableCreateEnableCyclePushesExactlyTheBacklog(t *testing.T) {
 	settings := newFakeUserSettingsRepo()
 	movements := newFakeMovementRepo()
-	createMovement := NewCreateMovement(movements, newFakeAccountRepo(), newFakePlanRepo(), newFakeCategoryRepo(), settings)
+createMovement := NewCreateMovement(movements, newFakeAccountRepo(), newFakePaymentMethodRepo(), newFakePlanRepo(), newFakeCategoryRepo(), settings)
 	updateSettings := NewUpdateUserSettings(settings, movements, newFakeCategoryRepo(), newFakeSubscriptionRepo())
 	ctx := context.Background()
 
@@ -153,7 +153,7 @@ func TestEntitlementBlocksEffectiveSyncEvenWhenEnabled(t *testing.T) {
 	settings := newFakeUserSettingsRepo()
 	settings.setEntitled("u1", false)
 	movements := newFakeMovementRepo()
-	createMovement := NewCreateMovement(movements, newFakeAccountRepo(), newFakePlanRepo(), newFakeCategoryRepo(), settings)
+createMovement := NewCreateMovement(movements, newFakeAccountRepo(), newFakePaymentMethodRepo(), newFakePlanRepo(), newFakeCategoryRepo(), settings)
 
 	m, err := createMovement.Execute(context.Background(), CreateMovementInput{
 		UserID: "u1", Currency: "usd", Amount: -100,

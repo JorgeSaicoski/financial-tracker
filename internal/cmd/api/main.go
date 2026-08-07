@@ -114,6 +114,7 @@ func main() {
 		exchangeRateRepo    repositories.ExchangeRateRepository
 		recurringRuleRepo   repositories.RecurringRuleRepository
 		localArchiveRepo    repositories.LocalArchiveSettingsRepository
+		paymentMethodRepo   repositories.PaymentMethodRepository
 		planRepo            repositories.PlanRepository
 		userRepo            repositories.UserRepository
 		settingsRepo        repositories.UserSettingsRepository
@@ -170,6 +171,7 @@ func main() {
 		exchangeRateRepo = postgresql.NewExchangeRateRepository(db)
 		recurringRuleRepo = postgresql.NewRecurringRuleRepository(db)
 		localArchiveRepo = postgresql.NewLocalArchiveSettingsRepository(db)
+		paymentMethodRepo = postgresql.NewPaymentMethodRepository(db)
 		planRepo = postgresql.NewPlanRepository(db)
 		userRepo = postgresql.NewUserRepository(db)
 		settingsRepo = postgresql.NewUserSettingsRepository(db)
@@ -194,6 +196,7 @@ func main() {
 		exchangeRateRepo = sqlite.NewExchangeRateRepository(db)
 		recurringRuleRepo = sqlite.NewRecurringRuleRepository(db)
 		localArchiveRepo = sqlite.NewLocalArchiveSettingsRepository(db)
+		paymentMethodRepo = sqlite.NewPaymentMethodRepository(db)
 		planRepo = sqlite.NewPlanRepository(db)
 		userRepo = sqlite.NewUserRepository(db)
 		settingsRepo = sqlite.NewUserSettingsRepository(db)
@@ -240,11 +243,11 @@ func main() {
 	syncService := syncapp.NewService(movementRepo, settingsRepo, ledgerGateway, log, retryCooldown)
 	recurringService := recurringapp.NewService(recurringRuleRepo, log)
 
-	createMovement := usecases.NewCreateMovement(movementRepo, accountRepo, planRepo, categoryRepo, settingsRepo)
+	createMovement := usecases.NewCreateMovement(movementRepo, accountRepo, paymentMethodRepo, planRepo, categoryRepo, settingsRepo)
 	createPurchase := usecases.NewCreateCreditCardPurchase(purchaseRepo, categoryRepo, settingsRepo)
 	getMovement := usecases.NewGetMovement(movementRepo)
 	listMovements := usecases.NewListMovements(movementRepo)
-	updateMovement := usecases.NewUpdateMovement(movementRepo, accountRepo, planRepo, categoryRepo, syncService)
+	updateMovement := usecases.NewUpdateMovement(movementRepo, accountRepo, paymentMethodRepo, planRepo, categoryRepo, syncService)
 	cancelMovement := usecases.NewCancelMovement(movementRepo, syncService)
 	cancelPurchase := usecases.NewCancelCreditCardPurchase(purchaseRepo, movementRepo, syncService)
 	getCashflow := usecases.NewGetCashflow(movementRepo, accountRepo)
@@ -258,13 +261,17 @@ func main() {
 	setExchangeRate := usecases.NewSetExchangeRate(exchangeRateRepo, currencyRepo)
 	listExchangeRates := usecases.NewListExchangeRates(exchangeRateRepo)
 	deleteExchangeRate := usecases.NewDeleteExchangeRate(exchangeRateRepo)
-	createRecurringRule := usecases.NewCreateRecurringRule(recurringRuleRepo, accountRepo, categoryRepo)
+	createRecurringRule := usecases.NewCreateRecurringRule(recurringRuleRepo, accountRepo, paymentMethodRepo, categoryRepo)
 	listRecurringRules := usecases.NewListRecurringRules(recurringRuleRepo)
-	updateRecurringRule := usecases.NewUpdateRecurringRule(recurringRuleRepo, accountRepo, categoryRepo)
+	updateRecurringRule := usecases.NewUpdateRecurringRule(recurringRuleRepo, accountRepo, paymentMethodRepo, categoryRepo)
 	getLocalArchiveSetting := usecases.NewGetLocalArchiveSetting(localArchiveRepo)
 	setLocalArchiveSetting := usecases.NewSetLocalArchiveSetting(localArchiveRepo)
 	exportArchive := usecases.NewExportArchive(accountRepo, movementRepo, purchaseRepo)
 	importArchive := usecases.NewImportArchive(accountRepo, movementRepo, purchaseRepo, categoryRepo)
+	createPaymentMethod := usecases.NewCreatePaymentMethod(paymentMethodRepo)
+	listPaymentMethods := usecases.NewListPaymentMethods(paymentMethodRepo)
+	updatePaymentMethod := usecases.NewUpdatePaymentMethod(paymentMethodRepo)
+	deletePaymentMethod := usecases.NewDeletePaymentMethod(paymentMethodRepo)
 	createPlan := usecases.NewCreatePlan(planRepo, accountRepo)
 	listPlans := usecases.NewListPlans(planRepo, movementRepo)
 	getPlan := usecases.NewGetPlan(planRepo, movementRepo)
@@ -289,6 +296,7 @@ func main() {
 		cancelMovement,
 		cancelPurchase,
 		getCashflow,
+		listPaymentMethods,
 		listCategories,
 		syncService,
 		defaultCurrency,
@@ -301,6 +309,7 @@ func main() {
 	exchangeRateHandler := handlers.NewExchangeRateHandler(setExchangeRate, listExchangeRates, deleteExchangeRate, log)
 	recurringRuleHandler := handlers.NewRecurringRuleHandler(createRecurringRule, listRecurringRules, updateRecurringRule, defaultCurrency, log)
 	archiveHandler := handlers.NewArchiveHandler(getLocalArchiveSetting, setLocalArchiveSetting, exportArchive, importArchive, log)
+	paymentMethodHandler := handlers.NewPaymentMethodHandler(createPaymentMethod, updatePaymentMethod, deletePaymentMethod, log)
 	planHandler := handlers.NewPlanHandler(createPlan, listPlans, getPlan, updatePlan, log)
 	settingsHandler := handlers.NewSettingsHandler(getSettings, updateSettings, log)
 	userHandler := handlers.NewUserHandler(getUser, log)
@@ -348,7 +357,7 @@ func main() {
 		authMiddleware = api.Middleware(verifier, ensureUser, log)
 	}
 
-	router := api.NewRouter(movementHandler, accountHandler, currencyHandler, categoryHandler, transferHandler, exchangeRateHandler, recurringRuleHandler, archiveHandler, planHandler, settingsHandler, userHandler, configHandler, billingHandler, authMiddleware, corsAllowedOrigin)
+	router := api.NewRouter(movementHandler, accountHandler, currencyHandler, categoryHandler, transferHandler, exchangeRateHandler, recurringRuleHandler, archiveHandler, paymentMethodHandler, planHandler, settingsHandler, userHandler, configHandler, billingHandler, authMiddleware, corsAllowedOrigin)
 
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
@@ -362,7 +371,7 @@ func main() {
 	}
 	addr := ":" + port
 	log.Info("financial-tracker API listening on %s (db driver %s at %s, syncing to ledger-service at %s every %s)", addr, dbDriver, dbDescription, ledgerServiceURL, syncInterval)
-	log.Info("endpoints: GET /config | GET|PATCH /settings | POST /movements | GET /movements | PATCH /movements/{id} | POST /movements/{id}/cancel | POST /credit-card-purchases/{id}/cancel | POST /sync | GET /categories | POST /categories | PATCH /categories/{id} | DELETE /categories/{id} | GET /cashflow | GET|POST /accounts | POST /accounts/{id}/balance | GET|POST /currencies | POST /transfers | POST /transfers/{id}/cancel | GET|POST /exchange-rates | DELETE /exchange-rates/{id} | GET|POST /recurring-rules | PATCH /recurring-rules/{id} | GET|PUT /settings/local-archive | GET /export/archive | POST /import/archive | GET|POST /plans | GET|PATCH /plans/{id} | GET /me | POST /billing/webhook | GET /billing/plan")
+	log.Info("endpoints: GET /config | GET|PATCH /settings | POST /movements | GET /movements | PATCH /movements/{id} | POST /movements/{id}/cancel | POST /credit-card-purchases/{id}/cancel | POST /sync | GET /categories | POST /categories | PATCH /categories/{id} | DELETE /categories/{id} | GET /cashflow | GET|POST /accounts | POST /accounts/{id}/balance | GET|POST /currencies | POST /transfers | POST /transfers/{id}/cancel | GET|POST /exchange-rates | DELETE /exchange-rates/{id} | GET|POST /recurring-rules | PATCH /recurring-rules/{id} | GET|PUT /settings/local-archive | GET /export/archive | POST /import/archive | POST /payment-methods | PATCH /payment-methods/{id} | DELETE /payment-methods/{id} | GET|POST /plans | GET|PATCH /plans/{id} | GET /me | POST /billing/webhook | GET /billing/plan")
 
 	if err := http.ListenAndServe(addr, router); err != nil {
 		log.Error("server failed: %v", err)
